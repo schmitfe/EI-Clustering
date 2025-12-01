@@ -4,12 +4,10 @@ import numpy as np
 import sympy
 from sympy import Matrix
 import connectivit
-import halley
-import newton
-import run
 from matplotlib import pyplot as plt
 from scipy.interpolate import interp1d
 from scipy import linalg
+from rate_system import RateSystem
 
 tol = 1e-4
 steps = 20000
@@ -75,6 +73,7 @@ def calc_fixpoints(file, clustering_type):
     v_in_old, v_out_old, solves, parameter = file
     #interpolation
     v_in, v_out = function(v_in_old,v_out_old)
+    v_out_old = np.asarray(v_out_old, dtype=float)
 
     Q = parameter['Q']
     tau_e = parameter["tau_e"]
@@ -84,35 +83,49 @@ def calc_fixpoints(file, clustering_type):
     tau[int(len(tau) / 2):] *= tau_i
     R_Eplus = parameter["R_Eplus"]
 
-    crossings = {}
+    def find_crossings():
+        diff = v_in - v_out
+        crossings = []
+        prev_diff = diff[0]
+        for i in range(1, len(diff)):
+            curr_diff = diff[i]
+            cross_val = None
+            if np.abs(curr_diff) <= tol:
+                cross_val = v_out[i]
+            elif np.abs(prev_diff) <= tol:
+                cross_val = v_out[i - 1]
+            elif prev_diff * curr_diff < 0:
+                weight = prev_diff / (prev_diff - curr_diff)
+                cross_val = v_out[i - 1] + weight * (v_out[i] - v_out[i - 1])
+            if cross_val is not None:
+                if crossings and np.abs(cross_val - crossings[-1][0]) <= tol:
+                    crossings[-1] = (float(cross_val), i)
+                else:
+                    crossings.append((float(cross_val), i))
+            prev_diff = curr_diff
+        return crossings
+
+    crossings = find_crossings()
     fixpoints = {}
 
     #find crossings and safe crosspoint in "crossings"
-    for i, v in enumerate(v_in):
-        if np.abs(v - v_out[i]) <= tol:
-            crossings[v_out[i]] = (i,v - v_out[i])
-
-
-                #find exact solution for each cross-point
     print("R_E+: " + str(R_Eplus))
-    for cross_point in crossings:
+    for cross_point, idx in crossings:
         print("Cross-Point:" + str(cross_point))
 
-        i = crossings[cross_point][0]
-        slope = (v_out[i] - v_out[i-1]) / (v_in[i] - v_in[i-1])
-        if slope > 1:
+        if idx <= 0:
+            slope = np.inf
+        else:
+            slope = (v_out[idx] - v_out[idx - 1]) / (v_in[idx] - v_in[idx - 1])
+        if not np.isfinite(slope) or slope > 1:
             fixpoints[cross_point] = 'unstable'
         #check if point is global stable
         else:
 
             # search for solve near to the cross point: new start value
-            i = 0
-
-            while cross_point < v_out_old[i] and i < len(solves)-1:
-                i += 1
-
-
-            initial = solves[i]
+            closest_idx = int(np.argmin(np.abs(v_out_old - cross_point)))
+            closest_idx = min(max(closest_idx, 0), len(solves) - 1)
+            initial = solves[closest_idx]
             if clustering_type == "probability":
                 cluster_bool = True
                 mean, variance, vector = connectivit.mean_var(cross_point, **parameter)
@@ -124,36 +137,29 @@ def calc_fixpoints(file, clustering_type):
                 cluster_bool = True
                 mean, variance, vector = connectivit.mean_var(cross_point, **parameter)
 
-            phi_minus = []
-            variables = []
-            for i in range(len(vector)):
-                phi_minus.append((0.5 * (1 - sympy.erf(-mean[i] / sympy.sqrt(2 * (variance[i])))) - vector[i]) / tau[i])
-                variables.append("v" + str(i + 1))
-
-            J = sympy.lambdify(variables[1:], Matrix(halley.jacobi_matrix(phi_minus[1:], variables[1:])))
-            H = sympy.lambdify(variables[1:], Matrix(halley.hessian_matrix(phi_minus[1:], variables[1:])))
-            # functions to be solved, stored in a 2*Q-dim vector
-            F = sympy.lambdify(variables[1:], Matrix(np.array(phi_minus[1:])))
-
-            # find good start value by halley-method
-            print("Optimize start value")
-            start = halley.solver(phi_minus[1:], variables[1:], variance, initial, F, J, H)
-            print(start)
-            # solving system by newton-method
             print("Solving...")
-            solve, value, success = newton.solver(phi_minus[1:], variables[1:], variance,
-                                                  start.reshape((len(variance) - 1,)), F, J)
+            rate_system = RateSystem(parameter, cross_point, clustering_type=clustering_type)
+            initial_guess = np.asarray(initial, dtype=float).reshape((len(vector) - 1,))
+            solve, value, success = rate_system.solve(initial_guess)
             if not success:
                 print('warning! convergence problems')
             else:
                 print('Converged!')
 
-            variables = []
-            for i in range(len(solve)+1):
-                variables.append("v" + str(i + 1))
             #check stability of each cross pont by  calc eigenvalues of jacobi matrix
             jacobi =  calc_jacobi(parameter, cross_point, solve, vector, mean, variance, cluster_bool)
-            eigval = np.linalg.eigvals(jacobi)
+            if not np.isfinite(jacobi).all():
+                print("Skipping stability check for cross point "
+                      f"{cross_point}: Jacobian contains non-finite values")
+                fixpoints[cross_point] = "unstable"
+                continue
+            try:
+                eigval = np.linalg.eigvals(jacobi)
+            except np.linalg.LinAlgError as exc:
+                print("Skipping stability check for cross point "
+                      f"{cross_point}: {exc}")
+                fixpoints[cross_point] = "unstable"
+                continue
             if (eigval < 0).all():  #if all eigenvalues > 0: crosspoint is stable
                 fixpoints[cross_point] = "stable"
             else:
@@ -190,10 +196,4 @@ def calc_fixpoints(file, clustering_type):
 
     #return crossings
     #return f_points_return
-
-
-
-
-
-
 

@@ -11,6 +11,7 @@ import fixpoints as fx
 import multiprocessing as mp
 from functools import partial
 import sys
+import glob
 n_cores=int(os.getenv('n_cores', mp.cpu_count()))
 
 #choose clustering_type in "probability" or "weight"
@@ -23,16 +24,23 @@ def search_file(folder):
     :return: name of the data-file that insert all solo-datas
     (stored as a Dictionary wit form: {P_Eplus: {v_in:v_out,...},...}
     """
-    os.chdir(str(folder))
-    list_dir = os.listdir()
+    list_dir = sorted(
+        f for f in glob.glob(f"{folder}/*.pkl")
+        if os.path.basename(f) != "all_data_P_Eplus.pkl"
+    )
+    if not list_dir:
+        raise FileNotFoundError(f"No .pkl files found in {folder}")
+    #os.chdir(str(folder))
+    #list_dir = os.listdir()
     all_files = pd.read_pickle(list_dir[0])
     for name in list_dir[1:]:
         data = pd.read_pickle(name)
         all_files.update(data)
     name = "all_data_P_Eplus.pkl"
-    with open(name, 'wb') as file:
+    path_sum = str(folder) + "/" + str(name)
+    with open(path_sum, 'wb') as file:
         pickle.dump(all_files, file)
-    return str(folder)+"/"+str(name)
+    return path_sum
 
 
 def plot_fixpoints(folder):
@@ -42,9 +50,9 @@ def plot_fixpoints(folder):
     """
 
 
-    file_name = search_file(folder)
+    #file_name = search_file(folder)
     file_name = "all_data_P_Eplus.pkl"
-    data = pd.read_pickle(file_name)
+    data = pd.read_pickle(folder+"/"+file_name)
     _, _, _, parameter = list(data.values())[0]
     clustering_type = parameter['clustering_type']
     R_j=parameter['R_j']
@@ -74,7 +82,11 @@ def plot_fixpoints(folder):
         all_fixpoints = {d:fixpoint[i] for i,d in enumerate(data)}
         pool.close()
         return all_fixpoints
-    all_fix = calc_all_fixpoints_MP(data)#calc_all_fixpoints(data)
+    try:
+        all_fix = calc_all_fixpoints_MP(data)#calc_all_fixpoints(data)
+    except (PermissionError, OSError) as exc:
+        print(f"Falling back to single process due to: {exc}")
+        all_fix = calc_all_fixpoints(data)
 
     x_stable = []
     y_stable = []
@@ -91,6 +103,7 @@ def plot_fixpoints(folder):
             else:
                 x_unstable.append(float(r))
                 y_unstable.append(point)
+    plt.figure()
     plt.scatter(x_stable, y_stable, color='b', label="stable")
     plt.scatter(x_unstable, y_unstable, color='r', label="unstable")
     plt.xlabel("P_E+")
@@ -99,6 +112,7 @@ def plot_fixpoints(folder):
     plt.title("R_j = " + str(R_j))
     plt.legend()
     plt.savefig("fixpoints_"+str(clustering_type)+"Clustering_Rj"+str(R_j)+".png")
+    plt.close()
     with open("all_fixpoints_"+str(clustering_type)+"Clustering_Rj"+str(R_j)+".pkl", 'wb') as file:
         pickle.dump(all_fix, file)
 
@@ -115,14 +129,16 @@ def plot_rates(folder):
             data[file] = data[file][:4]
         x_data, y_data, solves, parameter = data[file]
         x_data, y_data = fx.function(x_data, y_data)
+        plt.figure()
         plt.plot(x_data,y_data,label=str(file))
         plt.xlabel("v_in")
         plt.ylabel("v_out")
         plt.title("R_j ="+str(parameter['R_j']))
         plt.legend()
         clustering_type = parameter['clustering_type']
-    plt.savefig("all_rates_"+str(clustering_type)+"Clustering_Rj"+str(parameter['R_j'])+".png")
+    plt.savefig(folder+"/all_rates_"+str(clustering_type)+"Clustering_Rj"+str(parameter['R_j'])+".png")
     #plt.show()
+    plt.close()
 
 
 if __name__ == '__main__':
@@ -133,5 +149,5 @@ if __name__ == '__main__':
         #folder under the data that will be analyzed is safed
         folder="Weight/R_j0.25"
 
-    #plot_rates(folder,0)
+    plot_rates(folder)
     plot_fixpoints(folder)
