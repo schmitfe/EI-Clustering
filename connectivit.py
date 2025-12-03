@@ -39,6 +39,12 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     j_EI = -g * j_EE * p0_ee * n_e / (p0_ei * n_i)
     j_II = -j_IE * p0_ie * n_e / (p0_ii * n_i)
 
+    if True:
+        j_EE *= 1/math.sqrt(N)
+        j_IE *= 1 / math.sqrt(N)
+        j_EI *= 1 / math.sqrt(N)
+        j_II *= 1 / math.sqrt(N)
+
     if clustering_type == "probability":
         P_EE = R_Eplus * p0_ee
         P_IE = R_Iplus * p0_ie
@@ -92,7 +98,7 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     II_IN = J_II * P_II * n_i * math.sqrt(N)
     II_OUT = j_ii * p_ii * n_i * math.sqrt(N)
 
-    if True:
+    if False:
         var_EE_IN = P_EE * J_EE ** 2 * n_e
         var_EE_OUT = p_ee * j_ee ** 2 * n_e
         var_IE_IN = P_IE * J_IE ** 2 * n_e

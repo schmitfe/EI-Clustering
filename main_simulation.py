@@ -18,7 +18,7 @@ parameter = dict(
     N_I=1000,       #Number of inhibitory Neurons
 
     # Number of Cluster
-    Q = 6,
+    Q = 20,
 
     # Treshold Voltage
     V_th = 1,
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     # instead of a range of P_Eplus values, a list of P_Eplus values can be used or single values can be used which
     # can be simulated in parallel processes -> better utilization if done in parallel by scheduler
     #R_Eplus=np.arange(0, parameter['Q']+0.25, 0.25)
-    R_Eplus = np.arange(1, 6.25, 0.25)
+    R_Eplus = np.arange(1, 20.25, 0.25)
     #R_Eplus = np.arange(4, 4.5, 0.25)
     Parameterlist = [parameter.copy() for x in R_Eplus]
     for i in range(len(R_Eplus)):

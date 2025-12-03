@@ -38,4 +38,7 @@ def simulation(parameter, v1_0, initial, clustering_type=None):
     else:
         print("Die Lösung des Lösungsverfahren liegt für v_in = " + str(v1_0) + " außerhalb der Toleranzgrenze. "
             "Deshalb wird alternativ die Berechnung für v_in = " + str(v1_0 + 0.005) + " wiederholt.")
-        return simulation(parameter, v1_0 + 0.005, solve, clustering_type=clustering_type)
+        if v1_0 < 0.995:
+            return simulation(parameter, v1_0 + 0.005, solve, clustering_type=clustering_type)
+        else:
+            raise

@@ -6,11 +6,60 @@ from sympy import Matrix
 import connectivit
 from matplotlib import pyplot as plt
 from scipy.interpolate import interp1d
-from scipy import linalg
 from rate_system import RateSystem
+from solver_utils import prepare_system_functions
 
 tol = 1e-4
 steps = 20000
+
+
+def _normalize_param_value(value):
+    if isinstance(value, np.generic):
+        return float(value)
+    return value
+
+
+_PHI_FUNCTION_CACHE = {}
+
+
+def _phi_cache_key(parameter, clustering):
+    items = []
+    for key in sorted(parameter):
+        if key == "clustering_type":
+            continue
+        items.append((key, _normalize_param_value(parameter[key])))
+    return clustering, tuple(items)
+
+
+def _build_phi_functions(parameter, clustering):
+    Q = parameter["Q"]
+    var_symbols = sympy.symbols(f"v1:{2 * Q + 1}")
+    vector = sympy.Matrix(len(var_symbols), 1, var_symbols)
+
+    conn_params = dict(parameter)
+    conn_params.pop("clustering_type", None)
+    matrices = connectivit.linear_connectivity(clustering_type=clustering, **conn_params)
+
+    mean_expr = Matrix(matrices.A) * vector + Matrix(matrices.bias)
+    var_expr = Matrix(matrices.B) * vector + Matrix([sympy.Float(1e-12)] * len(var_symbols))
+
+    phi_expr = []
+    for idx in range(len(var_symbols)):
+        mean = mean_expr[idx]
+        variance = var_expr[idx]
+        phi_expr.append(sympy.Rational(1, 2) * (1 - sympy.erf(-mean / sympy.sqrt(2 * variance))))
+
+    return prepare_system_functions(phi_expr, var_symbols, prefer_autodiff=True)
+
+
+def _get_phi_functions(parameter, clustering_type):
+    clustering = clustering_type or parameter.get("clustering_type", "probability")
+    key = _phi_cache_key(parameter, clustering)
+    if key not in _PHI_FUNCTION_CACHE:
+        _PHI_FUNCTION_CACHE[key] = _build_phi_functions(parameter, clustering)
+    return _PHI_FUNCTION_CACHE[key]
+
+
 def function(x,y):
     """
     Do Interpolation to get smaller data-grid
@@ -24,11 +73,7 @@ def function(x,y):
     return (x_new, y_new)
 
 
-
-def Derfc(x):
-    return -sympy.exp(-x ** 2 / 2) / sympy.sqrt(2 * np.pi)
-
-def calc_jacobi(parameter,v1_0, solve, vector, mean, variance, cluster_bool):
+def calc_jacobi(parameter, v1_0, solve, clustering_type):
     """
 
     :param parameter: dictionary with network parameter
@@ -40,9 +85,6 @@ def calc_jacobi(parameter,v1_0, solve, vector, mean, variance, cluster_bool):
     :param cluster_bool: describes kind of clustering. True if probability clustering else False.
     :return: Jacobi Matrix
     """
-    #calc mean of the weights and variance of the weights
-    mean_weights, weight_vars = connectivit.mean_var(v1_0, **parameter,probability_clustering=cluster_bool,only_matrix=True)
-    #get parameters
     Q = parameter['Q']
     tau_e = parameter["tau_e"]
     tau_i = parameter["tau_i"]
@@ -50,20 +92,12 @@ def calc_jacobi(parameter,v1_0, solve, vector, mean, variance, cluster_bool):
     tau[:int(len(tau) / 2)] *= tau_e
     tau[int(len(tau) / 2):] *= tau_i
 
-    #empty jacobi matrix
-    jac = np.zeros((len(vector),len(vector)))
-    variables = []
-    for i in range(len(vector)):
-        variables.append("v" + str(i + 1))
-
-    #fill jacobi matrix
-    for alpha in range(len(vector)):
-        for beta in range(len(vector)):
-            f = sympy.lambdify(variables, -Derfc(-mean[alpha]/variance[alpha])*(mean_weights[alpha][beta]*variance[alpha]
-            - mean[alpha] * weight_vars[alpha][beta]/(2*variance[alpha]))/variance[alpha]**2)
-
-            jac[alpha][beta] = f(v1_0, *solve)
-    jac -= np.eye(len(vector))
+    system_functions = _get_phi_functions(parameter, clustering_type)
+    full_rates = np.concatenate(([float(v1_0)], np.asarray(solve, dtype=float)))
+    jac_phi = system_functions.J(*full_rates)
+    dim = 2 * Q
+    jac = np.asarray(jac_phi, dtype=float).reshape((dim, dim))
+    jac -= np.eye(dim)
     jac /= tau[:, np.newaxis]
 
     return jac
@@ -76,11 +110,6 @@ def calc_fixpoints(file, clustering_type):
     v_out_old = np.asarray(v_out_old, dtype=float)
 
     Q = parameter['Q']
-    tau_e = parameter["tau_e"]
-    tau_i = parameter["tau_i"]
-    tau = np.ones((2 * Q))
-    tau[:int(len(tau) / 2)] *= tau_e
-    tau[int(len(tau) / 2):] *= tau_i
     R_Eplus = parameter["R_Eplus"]
 
     def find_crossings():
@@ -126,20 +155,10 @@ def calc_fixpoints(file, clustering_type):
             closest_idx = int(np.argmin(np.abs(v_out_old - cross_point)))
             closest_idx = min(max(closest_idx, 0), len(solves) - 1)
             initial = solves[closest_idx]
-            if clustering_type == "probability":
-                cluster_bool = True
-                mean, variance, vector = connectivit.mean_var(cross_point, **parameter)
-            elif clustering_type == "weight":
-                cluster_bool = False
-                mean, variance, vector = connectivit.mean_var(cross_point, **parameter, probability_clustering=False)
-            else:
-                print("No Clustering-Type is given. Therefore clustering by probabilities is chosen.")
-                cluster_bool = True
-                mean, variance, vector = connectivit.mean_var(cross_point, **parameter)
 
             print("Solving...")
             rate_system = RateSystem(parameter, cross_point, clustering_type=clustering_type)
-            initial_guess = np.asarray(initial, dtype=float).reshape((len(vector) - 1,))
+            initial_guess = np.asarray(initial, dtype=float).reshape((2 * Q - 1,))
             solve, value, success = rate_system.solve(initial_guess)
             if not success:
                 print('warning! convergence problems')
@@ -147,7 +166,7 @@ def calc_fixpoints(file, clustering_type):
                 print('Converged!')
 
             #check stability of each cross pont by  calc eigenvalues of jacobi matrix
-            jacobi =  calc_jacobi(parameter, cross_point, solve, vector, mean, variance, cluster_bool)
+            jacobi =  calc_jacobi(parameter, cross_point, solve, clustering_type)
             if not np.isfinite(jacobi).all():
                 print("Skipping stability check for cross point "
                       f"{cross_point}: Jacobian contains non-finite values")
@@ -196,4 +215,3 @@ def calc_fixpoints(file, clustering_type):
 
     #return crossings
     #return f_points_return
-
