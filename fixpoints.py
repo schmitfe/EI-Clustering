@@ -1,63 +1,11 @@
-import os
-
 import numpy as np
-import sympy
-from sympy import Matrix
-import connectivit
 from matplotlib import pyplot as plt
 from scipy.interpolate import interp1d
+
 from rate_system import RateSystem
-from solver_utils import prepare_system_functions
 
 tol = 1e-4
 steps = 20000
-
-
-def _normalize_param_value(value):
-    if isinstance(value, np.generic):
-        return float(value)
-    return value
-
-
-_PHI_FUNCTION_CACHE = {}
-
-
-def _phi_cache_key(parameter, clustering):
-    items = []
-    for key in sorted(parameter):
-        if key == "clustering_type":
-            continue
-        items.append((key, _normalize_param_value(parameter[key])))
-    return clustering, tuple(items)
-
-
-def _build_phi_functions(parameter, clustering):
-    Q = parameter["Q"]
-    var_symbols = sympy.symbols(f"v1:{2 * Q + 1}")
-    vector = sympy.Matrix(len(var_symbols), 1, var_symbols)
-
-    conn_params = dict(parameter)
-    conn_params.pop("clustering_type", None)
-    matrices = connectivit.linear_connectivity(clustering_type=clustering, **conn_params)
-
-    mean_expr = Matrix(matrices.A) * vector + Matrix(matrices.bias)
-    var_expr = Matrix(matrices.B) * vector + Matrix([sympy.Float(1e-12)] * len(var_symbols))
-
-    phi_expr = []
-    for idx in range(len(var_symbols)):
-        mean = mean_expr[idx]
-        variance = var_expr[idx]
-        phi_expr.append(sympy.Rational(1, 2) * (1 - sympy.erf(-mean / sympy.sqrt(2 * variance))))
-
-    return prepare_system_functions(phi_expr, var_symbols, prefer_autodiff=True)
-
-
-def _get_phi_functions(parameter, clustering_type):
-    clustering = clustering_type or parameter.get("clustering_type", "probability")
-    key = _phi_cache_key(parameter, clustering)
-    if key not in _PHI_FUNCTION_CACHE:
-        _PHI_FUNCTION_CACHE[key] = _build_phi_functions(parameter, clustering)
-    return _PHI_FUNCTION_CACHE[key]
 
 
 def function(x,y):
@@ -85,22 +33,9 @@ def calc_jacobi(parameter, v1_0, solve, clustering_type):
     :param cluster_bool: describes kind of clustering. True if probability clustering else False.
     :return: Jacobi Matrix
     """
-    Q = parameter['Q']
-    tau_e = parameter["tau_e"]
-    tau_i = parameter["tau_i"]
-    tau = np.ones((2*Q))
-    tau[:int(len(tau) / 2)] *= tau_e
-    tau[int(len(tau) / 2):] *= tau_i
-
-    system_functions = _get_phi_functions(parameter, clustering_type)
+    rate_system = RateSystem(parameter, v1_0, clustering_type=clustering_type)
     full_rates = np.concatenate(([float(v1_0)], np.asarray(solve, dtype=float)))
-    jac_phi = system_functions.J(*full_rates)
-    dim = 2 * Q
-    jac = np.asarray(jac_phi, dtype=float).reshape((dim, dim))
-    jac -= np.eye(dim)
-    jac /= tau[:, np.newaxis]
-
-    return jac
+    return rate_system.jacobian_numpy(full_rates)
 
 def calc_fixpoints(file, clustering_type):
 

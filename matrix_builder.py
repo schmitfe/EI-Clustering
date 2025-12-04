@@ -1,9 +1,5 @@
 import numpy as np
-from sympy import Symbol
-
-
-def builder(Q):
-    pass
+from itertools import product
 
 def connecter(Q):
     all = list(np.arange(0,2*Q))
@@ -37,7 +33,7 @@ def connections(Q):
         for j in all:
             kind_i = helper_lex[i]
             kind_j = helper_lex[j]
-            key = str(i) + str(j)
+            key = str(i).zfill(2) + str(j).zfill(2)
             dic[key] = str(kind_i) + str(kind_j)
             if cluster[i] == j or i == j:
                 dic[key] = dic[key] + "_IN"
@@ -46,23 +42,11 @@ def connections(Q):
     return dic
 
 def build(Q, values):
-    matrix = [[0 for i in range(2*Q)] for j in range(2*Q)]
+    matrix = np.zeros((2*Q, 2*Q))
     lexika = connections(Q)
-    for i in range(2*Q):
-        for j in range(2*Q):
-            matrix[i][j] = values[str(lexika[str(i)+str(j)])]
+    for i, j in product(range(2*Q), range(2*Q)):
+        matrix[i,j] = values[str(lexika[str(i).zfill(2)+str(j).zfill(2)])]
     return matrix
 
-def vector(Q):
-    clusters = np.arange(1,2*Q+1)
-    vektor = []
-    for c in clusters:
-        vektor.append(Symbol("v"+str(c)))
-    return vektor
-
-#v=dict(EE_IN="EE", EE_OUT="EE", IE_IN="IE", IE_OUT="IE", EI_IN="EI", EI_OUT="EI", II_IN="II",
-#                 II_OUT="II")
-
-#print(build(4,v))
 
 

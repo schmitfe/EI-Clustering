@@ -124,21 +124,24 @@ def plot_rates(folder):
 
     file_name = search_file(folder)
     data = pd.read_pickle(file_name)
+    fig, ax = plt.subplots()
+    clustering_type = None
+    parameter_ref = None
     for file in data:
         if len(data[file]) != 4:
             data[file] = data[file][:4]
         x_data, y_data, solves, parameter = data[file]
         x_data, y_data = fx.function(x_data, y_data)
-        plt.figure()
-        plt.plot(x_data,y_data,label=str(file))
-        plt.xlabel("v_in")
-        plt.ylabel("v_out")
-        plt.title("R_j ="+str(parameter['R_j']))
-        plt.legend()
+        ax.plot(x_data, y_data, label=str(file))
         clustering_type = parameter['clustering_type']
-    plt.savefig(folder+"/all_rates_"+str(clustering_type)+"Clustering_Rj"+str(parameter['R_j'])+".png")
-    #plt.show()
-    plt.close()
+        parameter_ref = parameter
+    ax.set_xlabel("v_in")
+    ax.set_ylabel("v_out")
+    if parameter_ref is not None:
+        ax.set_title(f"R_j ={parameter_ref['R_j']}")
+    ax.legend()
+    plt.savefig(folder+"/all_rates_"+str(clustering_type)+"Clustering_Rj"+str(parameter_ref['R_j'])+".png")
+    plt.close(fig)
 
 
 if __name__ == '__main__':

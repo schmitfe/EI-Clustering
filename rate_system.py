@@ -58,6 +58,15 @@ class RateSystem:
         var = np.maximum(self.B.dot(full_rates), 1e-12)
         return 0.5 * (1 - special.erf(-mean / np.sqrt(2.0 * var)))
 
+    def _phi_jacobian_numpy(self, full_rates: np.ndarray) -> np.ndarray:
+        mean = self.A.dot(full_rates) + self.bias
+        var = np.maximum(self.B.dot(full_rates), 1e-12)
+        inv_sqrt = 1.0 / np.sqrt(2.0 * var)
+        exp_term = np.exp(-(mean ** 2) / (2.0 * var))
+        coeff = (1.0 / np.sqrt(np.pi)) * exp_term * inv_sqrt
+        correction = mean / (2.0 * var)
+        return coeff[:, None] * (self.A - correction[:, None] * self.B)
+
     def residual_numpy(self, x: np.ndarray) -> np.ndarray:
         rates = self._full_rates_numpy(x)
         phi = self._phi_numpy(rates)
@@ -120,6 +129,12 @@ class RateSystem:
     def phi_numpy(self, x: np.ndarray) -> np.ndarray:
         rates = self._full_rates_numpy(np.asarray(x, dtype=float))
         return self._phi_numpy(rates)
+
+    def jacobian_numpy(self, x: np.ndarray) -> np.ndarray:
+        rates = np.asarray(x, dtype=float)
+        if rates.shape[0] == self.dim:
+            rates = self._full_rates_numpy(rates)
+        return (self._phi_jacobian_numpy(rates) - np.eye(2 * self.Q)) / self.tau[:, np.newaxis]
 
 
 __all__ = ["RateSystem"]

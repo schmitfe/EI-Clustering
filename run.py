@@ -42,3 +42,28 @@ def simulation(parameter, v1_0, initial, clustering_type=None):
             return simulation(parameter, v1_0 + 0.005, solve, clustering_type=clustering_type)
         else:
             raise
+
+if __name__ == "__main__":
+    v10 =0.5
+    parameter = {
+        "Q": 20,
+        "clustering_type": "probability",
+        "tau_e": 20.,
+        "tau_i": 10.,
+        "N": 5000,
+        "N_E": 4000,
+        "N_I": 1000,
+        "V_th": 1.,
+        "g": 1.2,
+        "p0_ee": 0.1,
+        "p0_ii": 0.2,
+        "p0_ie": 0.2,
+        "p0_ei": 0.2,
+        "m_X": 0.03,
+        "R_Eplus": 9.,
+        "R_j": 0.78,
+    }
+
+    initial = [0.2] *(2*parameter["Q"]-1)
+    Result = simulation(parameter, v10, initial=initial)
+    print(initial)
