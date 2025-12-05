@@ -82,7 +82,7 @@ def plot_curve(x_data: Sequence[float], y_data: Sequence[float], label: str) -> 
     plt.show()
 
 
-def main(filename, parameter, plot=False, start=0., end=1., step_number=20):
+def main(filename, parameter, plot=False, start=0., end=1., step_number=1000):
     """
     Solve the ERF for ``parameter`` and persist the results as ``filename``.
     """

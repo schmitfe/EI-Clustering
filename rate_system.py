@@ -8,6 +8,7 @@ from scipy import optimize, special
 import connectivit
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
+small = 1e-30
 
 try:  # pragma: no cover - optional dependency
     from jax import config as jax_config

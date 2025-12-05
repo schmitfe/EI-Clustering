@@ -111,6 +111,7 @@ def plot_fixpoints(folder):
     # plt.xticks(np.arange(0, 10, step=1))
     plt.title("R_j = " + str(R_j))
     plt.legend()
+    plt.ylim(0, 1)
     plt.savefig("fixpoints_"+str(clustering_type)+"Clustering_Rj"+str(R_j)+".png")
     plt.close()
     with open("all_fixpoints_"+str(clustering_type)+"Clustering_Rj"+str(R_j)+".pkl", 'wb') as file:

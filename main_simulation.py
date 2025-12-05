@@ -40,7 +40,7 @@ if __name__ == "__main__":
     print(base_parameter['clustering_type'])
 
     # example sweep; customize as needed or replace with a list of values
-    R_Eplus_values = np.arange(1, 20.25, 0.25)
+    R_Eplus_values = np.arange(1, 20.01, 0.2)
 
     parameter_list = []
     for value in R_Eplus_values:

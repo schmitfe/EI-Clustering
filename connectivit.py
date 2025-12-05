@@ -23,8 +23,10 @@ class ConnectivityMatrices:
 
 def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p0_ii,
                                  m_X, R_Eplus, R_j, clustering_type):
-    n_e = N_E / N
-    n_i = N_I / N
+    n_er = N_E / N
+    n_ir = N_I / N
+    n_e = N_E / Q
+    n_i = N_I / Q
 
     theta_E = V_th
     theta_I = V_th
@@ -34,16 +36,16 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     R_Iplus = 1 + R_j * (R_Eplus - 1)
     R_Iminus = (Q - R_Iplus) / (Q - 1)
 
-    j_EE = theta_E / (math.sqrt(p0_ee * n_e))
-    j_IE = theta_I / math.sqrt(p0_ie * n_e)
-    j_EI = -g * j_EE * p0_ee * n_e / (p0_ei * n_i)
-    j_II = -j_IE * p0_ie * n_e / (p0_ii * n_i)
+    j_EE = theta_E / (math.sqrt(p0_ee * n_er))
+    j_IE = theta_I / math.sqrt(p0_ie * n_er)
+    j_EI = -g * j_EE * p0_ee * n_er / (p0_ei * n_ir)
+    j_II = -j_IE * p0_ie * n_er / (p0_ii * n_ir)
 
-    if False:
-        j_EE *= 1/math.sqrt(N)
-        j_IE *= 1 / math.sqrt(N)
-        j_EI *= 1 / math.sqrt(N)
-        j_II *= 1 / math.sqrt(N)
+
+    j_EE *= 1/math.sqrt(N)
+    j_IE *= 1 / math.sqrt(N)
+    j_EI *= 1 / math.sqrt(N)
+    j_II *= 1 / math.sqrt(N)
 
     if clustering_type == "probability":
         P_EE = R_Eplus * p0_ee
@@ -86,19 +88,19 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
         j_ei = R_Iminus * j_EI
         j_ii = R_Iminus * j_II
 
-    EE_IN = J_EE * P_EE * n_e * math.sqrt(N)
-    EE_OUT = j_ee * p_ee * n_e * math.sqrt(N)
+    EE_IN = J_EE * P_EE * n_e
+    EE_OUT = j_ee * p_ee * n_e
 
-    IE_IN = J_IE * P_IE * n_e * math.sqrt(N)
-    IE_OUT = j_ie * p_ie * n_e * math.sqrt(N)
+    IE_IN = J_IE * P_IE * n_e
+    IE_OUT = j_ie * p_ie * n_e
 
-    EI_IN = J_EI * P_EI * n_i * math.sqrt(N)
-    EI_OUT = j_ei * p_ei * n_i * math.sqrt(N)
+    EI_IN = J_EI * P_EI * n_i
+    EI_OUT = j_ei * p_ei * n_i
 
-    II_IN = J_II * P_II * n_i * math.sqrt(N)
-    II_OUT = j_ii * p_ii * n_i * math.sqrt(N)
+    II_IN = J_II * P_II * n_i
+    II_OUT = j_ii * p_ii * n_i
 
-    if True:
+    if False:
         var_EE_IN = P_EE * J_EE ** 2 * n_e
         var_EE_OUT = p_ee * j_ee ** 2 * n_e
         var_IE_IN = P_IE * J_IE ** 2 * n_e
