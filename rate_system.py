@@ -29,15 +29,22 @@ class RateSystem:
     parameter: dict
     v1_fixed: float
     kappa: Optional[float] = None
+    connection_type: Optional[str] = None
     prefer_jax: bool = True
     max_steps: int = 256
 
     def __post_init__(self):
         param_copy = dict(self.parameter)
-        mix = self.kappa if self.kappa is not None else param_copy.pop("kappa", None)
-        if mix is None:
+        param_kappa = param_copy.pop("kappa", None)
+        if self.kappa is not None:
+            mix = float(self.kappa)
+        elif param_kappa is not None:
+            mix = param_kappa
+        else:
             mix = 0.0
-        matrices = connectivit.linear_connectivity(mix, **param_copy)
+        param_conn = param_copy.pop("connection_type", None)
+        conn_kind = self.connection_type if self.connection_type is not None else param_conn or "bernoulli"
+        matrices = connectivit.linear_connectivity(mixing_parameter=mix, connection_type=conn_kind, **param_copy)
         self.A = matrices.A
         self.B = matrices.B
         self.bias = matrices.bias

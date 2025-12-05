@@ -52,6 +52,7 @@ def plot_fixpoints(folder):
     data = pd.read_pickle(folder+"/"+file_name)
     _, _, _, parameter = list(data.values())[0]
     kappa = parameter.get('kappa', 0.0)
+    connection_type = parameter.get('connection_type', 'bernoulli')
     R_j=parameter['R_j']
 
     def calc_all_fixpoints(data):
@@ -110,9 +111,14 @@ def plot_fixpoints(folder):
     plt.legend()
     plt.ylim(0, 1)
     encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
-    plt.savefig(f"fixpoints_kappa{encoded_kappa}_Rj{R_j}.png")
+    conn_label = str(connection_type).lower().replace(" ", "_")
+    plots_dir = "plots"
+    os.makedirs(plots_dir, exist_ok=True)
+    plt.savefig(os.path.join(plots_dir, f"fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{R_j}.png"))
     plt.close()
-    with open(f"all_fixpoints_kappa{encoded_kappa}_Rj{R_j}.pkl", 'wb') as file:
+    data_dir = "data"
+    os.makedirs(data_dir, exist_ok=True)
+    with open(os.path.join(data_dir, f"all_fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{R_j}.pkl"), 'wb') as file:
         pickle.dump(all_fix, file)
 
 def plot_rates(folder):
@@ -125,6 +131,7 @@ def plot_rates(folder):
     data = pd.read_pickle(file_name)
     fig, ax = plt.subplots()
     kappa_val = None
+    connection_type = None
     parameter_ref = None
     for file in data:
         if len(data[file]) != 4:
@@ -134,6 +141,7 @@ def plot_rates(folder):
         ax.plot(x_data, y_data, label=str(file))
         kappa_val = parameter.get('kappa', 0.0)
         parameter_ref = parameter
+        connection_type = parameter.get('connection_type', 'bernoulli')
     ax.set_xlabel("v_in")
     ax.set_ylabel("v_out")
     if parameter_ref is not None:
@@ -141,7 +149,8 @@ def plot_rates(folder):
     ax.legend()
     if parameter_ref is not None:
         encoded_kappa = f"{float(kappa_val):.2f}".replace(".", "_")
-        plt.savefig(folder+f"/all_rates_kappa{encoded_kappa}_Rj{parameter_ref['R_j']}.png")
+        conn_label = str(connection_type).lower().replace(" ", "_")
+        plt.savefig(folder+f"/all_rates_{conn_label}_kappa{encoded_kappa}_Rj{parameter_ref['R_j']}.png")
     plt.close(fig)
 
 
@@ -151,7 +160,7 @@ if __name__ == '__main__':
         folder=sys.argv[1]
     else:
         #folder under the data that will be analyzed is safed
-        folder="Kappa_0_00/R_j0.25"
+        folder="bernoulli/Kappa_0_00/R_j0.25"
 
     plot_rates(folder)
     plot_fixpoints(folder)

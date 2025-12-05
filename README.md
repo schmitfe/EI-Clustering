@@ -11,6 +11,10 @@ There are two main parameters that determine the clustering:
 #### kappa: Mixing coefficient that interpolates between purely probability-based
         clustering (`kappa = 0`) and purely weight-based clustering (`kappa = 1`).
         Intermediate values implement the mixed rule described in the manuscript.
+#### connection_type: Selects how presynaptic variability is modeled.
+        Choose `"bernoulli"` (default) for pairwise sampling, `"poisson"` for
+        independent synapse counts tolerant to `p > 1`, or `"fixed-indegree"` to
+        assume deterministic in-degree (zero variance).
 
 ### safe_data.py
 Generates input rates from 0 to 1 (configurable) for a fixed cluster and hands
@@ -18,6 +22,8 @@ each configuration to `run.simulation`.  The new `generate_erf_curve` helper
 returns the computed ERF without touching the filesystem so scripts or notebooks
 can decide what to do with the data.  The legacy `main` function now just wraps
 that helper with pickle/plotting logic so `main_simulation.py` keeps working.
+Results are stored under `connection_type/Kappa_xx/R_jyy` so different mixing
+coefficients and connectivity schemes remain isolated.
 
 ### run.py / rate_system.py
 `run.simulation` instantiates ``RateSystem`` which combines the connectivity

@@ -23,14 +23,15 @@ handling plotting and pickle generation on top of that pure computation step.
 def ensure_output_folder(parameter: dict) -> str:
     """Return (and create) the folder that should contain the sweep result."""
     kappa = float(parameter.get("kappa", 0.0))
-    base = f"Kappa_{kappa:.2f}".replace(".", "_")
+    conn_kind = str(parameter.get("connection_type", "bernoulli")).lower().replace(" ", "_")
+    base = os.path.join(conn_kind, f"Kappa_{kappa:.2f}".replace(".", "_"))
     folder = os.path.join(base, f"R_j{parameter['R_j']}")
     os.makedirs(folder, exist_ok=True)
     return folder
 
 
 def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, step_number: int = 20,
-                       mixing_parameter: float | None = None) -> Tuple[List[float], List[float], List[np.ndarray]]:
+                       mixing_parameter: float | None = None, connection_type: str | None = None) -> Tuple[List[float], List[float], List[np.ndarray]]:
     """
     Compute the ERF for a given parameter dictionary without touching the filesystem.
 
@@ -38,6 +39,7 @@ def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, st
     the next iteration.
     """
     mixing = mixing_parameter if mixing_parameter is not None else parameter.get("kappa", 0.0)
+    conn_kind = str(connection_type or parameter.get("connection_type", "bernoulli"))
     Q = parameter['Q']
     initial = np.ones(2 * Q - 1) * 0.01
     v1_0 = start
@@ -50,7 +52,7 @@ def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, st
     while v1_0 <= end + 1e-12:
         print("-----------------------------")
         print(f"Set input rate v_in: {v1_0}")
-        x, y, solve = run.simulation(parameter, v1_0, initial, kappa=mixing)
+        x, y, solve = run.simulation(parameter, v1_0, initial, kappa=mixing, connection_type=conn_kind)
         x_data.append(x)
         y_data.append(y)
         solves.append(solve)
@@ -88,13 +90,14 @@ def main(filename, parameter, plot=False, start=0., end=1., step_number=1000):
     """
     R_Eplus = parameter['R_Eplus']
     mixing_parameter = parameter.get('kappa', 0.0)
+    connection_type = parameter.get('connection_type', 'bernoulli')
     print('##############################################################')
-    print(f"Simulate Network for R_Eplus = {R_Eplus}, kappa = {mixing_parameter}")
+    print(f"Simulate Network for R_Eplus = {R_Eplus}, kappa = {mixing_parameter}, connection_type = {connection_type}")
 
     foldername = ensure_output_folder(parameter)
 
     curve = generate_erf_curve(parameter, start=start, end=end, step_number=step_number,
-                               mixing_parameter=mixing_parameter)
+                               mixing_parameter=mixing_parameter, connection_type=connection_type)
     x_data, y_data, _ = curve
 
     if plot:

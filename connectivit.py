@@ -22,7 +22,7 @@ class ConnectivityMatrices:
 
 
 def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p0_ii,
-                                 m_X, R_Eplus, R_j, kappa):
+                                 m_X, R_Eplus, R_j, kappa, connection_type="bernoulli"):
     n_er = N_E / N
     n_ir = N_I / N
     n_e = N_E / Q
@@ -91,24 +91,27 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     II_IN = J_II * P_II * n_i
     II_OUT = j_ii * p_ii * n_i
 
-    if True:
-        var_EE_IN = P_EE * J_EE ** 2 * n_e
-        var_EE_OUT = p_ee * j_ee ** 2 * n_e
-        var_IE_IN = P_IE * J_IE ** 2 * n_e
-        var_IE_OUT = p_ie * j_ie ** 2 * n_e
-        var_EI_IN = P_EI * J_EI ** 2 * n_i
-        var_EI_OUT = p_ei * j_ei ** 2 * n_i
-        var_II_IN = P_II * J_II ** 2 * n_i
-        var_II_OUT = p_ii * j_ii ** 2 * n_i
-    else:
-        var_EE_IN = P_EE * (1-P_EE) * J_EE ** 2 * n_e
-        var_EE_OUT = p_ee * (1-p_ee) * j_ee ** 2 * n_e
-        var_IE_IN = P_IE * (1-P_IE) * J_IE ** 2 * n_e
-        var_IE_OUT = p_ie * (1-p_ie) * j_ie ** 2 * n_e
-        var_EI_IN = P_EI * (1-P_EI) * J_EI ** 2 * n_i
-        var_EI_OUT = p_ei * (1-p_ei) * j_ei ** 2 * n_i
-        var_II_IN = P_II * (1-P_II) * J_II ** 2 * n_i
-        var_II_OUT = p_ii * (1-p_ii) * j_ii ** 2 * n_i
+    conn_kind = (connection_type or "bernoulli").lower()
+    allowed_conn = {"bernoulli", "poisson", "fixed-indegree"}
+    if conn_kind not in allowed_conn:
+        raise ValueError(f"Unknown connection type '{connection_type}'. Expected one of {sorted(allowed_conn)}.")
+
+    def compute_variance(prob: float, weight: float, population: float) -> float:
+        if conn_kind == "poisson":
+            return prob * weight ** 2 * population
+        if conn_kind == "fixed-indegree":
+            return prob * (1-(1/population)) * weight ** 2 * population  # omitted * population*(1/population) First
+            # for prob*population -> indegree, second for multinominal distribution
+        return prob * (1 - prob) * weight ** 2 * population
+
+    var_EE_IN = compute_variance(P_EE, J_EE, n_e)
+    var_EE_OUT = compute_variance(p_ee, j_ee, n_e)
+    var_IE_IN = compute_variance(P_IE, J_IE, n_e)
+    var_IE_OUT = compute_variance(p_ie, j_ie, n_e)
+    var_EI_IN = compute_variance(P_EI, J_EI, n_i)
+    var_EI_OUT = compute_variance(p_ei, j_ei, n_i)
+    var_II_IN = compute_variance(P_II, J_II, n_i)
+    var_II_OUT = compute_variance(p_ii, j_ii, n_i)
 
     mean_values = dict(EE_IN=EE_IN, EE_OUT=EE_OUT, IE_IN=IE_IN, IE_OUT=IE_OUT, EI_IN=EI_IN, EI_OUT=EI_OUT,
                        II_IN=II_IN, II_OUT=II_OUT)
@@ -130,17 +133,19 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     return ConnectivityMatrices(A=A, B=B, V_th=V_th_vec, u_ext=u_ext, intra_probs=intra, inter_probs=inter)
 
 
-def linear_connectivity(mixing_parameter=None, **parameters) -> ConnectivityMatrices:
+def linear_connectivity(mixing_parameter=None, connection_type=None, **parameters) -> ConnectivityMatrices:
     params = dict(parameters)
     mix = mixing_parameter if mixing_parameter is not None else params.pop("kappa", 0.0)
+    conn_kind = connection_type or params.pop("connection_type", "bernoulli")
     params.pop("kappa", None)
+    params.pop("connection_type", None)
     params.pop("tau_e", None)
     params.pop("tau_i", None)
-    return _build_connectivity_matrices(kappa=mix, **params)
+    return _build_connectivity_matrices(kappa=mix, connection_type=conn_kind, **params)
 
 
 def mean_var(v1_0, N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p0_ii, m_X, tau_e, tau_i, R_Eplus, R_j,
-             kappa, only_matrix=False, **kwargs):
+             kappa, connection_type="bernoulli", only_matrix=False, **kwargs):
     """
     Calculates the mean-rates and variance for each cluster
 
@@ -161,7 +166,7 @@ def mean_var(v1_0, N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p0_ii, m_X, tau
     """
     matrices = _build_connectivity_matrices(N=N, N_E=N_E, N_I=N_I, Q=Q, V_th=V_th, g=g, p0_ee=p0_ee,
                                             p0_ie=p0_ie, p0_ei=p0_ei, p0_ii=p0_ii, m_X=m_X, R_Eplus=R_Eplus,
-                                            R_j=R_j, kappa=kappa)
+                                            R_j=R_j, kappa=kappa, connection_type=connection_type)
 
     # build vector with all variables v1, v2, ...
     vector = [v1_0]

@@ -28,6 +28,7 @@ DEFAULT_PARAMETER: Dict[str, float | int | None | str] = dict(
     R_Eplus=None,
     R_j=None,
     kappa=0.0,
+    connection_type="bernoulli",
     m_X=0.03,
 )
 
@@ -48,6 +49,9 @@ def parameter_from_env(overrides: Optional[Dict[str, float | int | None | str]] 
     kappa:
         Sets the mixing coefficient between probability (0) and weight (1)
         clustering.
+    connection_type:
+        Chooses how connection variance is computed:
+        ``"bernoulli"`` (default), ``"poisson"``, or ``"fixed-indegree"``.
     R_Eplus:
         Allows single-configuration runs without editing the source.
     """
@@ -62,6 +66,10 @@ def parameter_from_env(overrides: Optional[Dict[str, float | int | None | str]] 
     env_kappa = os.getenv("kappa")
     if env_kappa is not None:
         parameter["kappa"] = float(env_kappa)
+
+    env_connection = os.getenv("connection_type")
+    if env_connection:
+        parameter["connection_type"] = env_connection
 
     env_replus = os.getenv("R_Eplus")
     if env_replus is not None:

@@ -6,7 +6,7 @@ import numpy as np
 from rate_system import RateSystem
 
 
-def simulation(parameter, v1_0, initial, kappa=None):
+def simulation(parameter, v1_0, initial, kappa=None, connection_type=None):
     """
     Recursive function that calculates the output rate for a given input.
     If no solution can be found for the given input that is within the error tolerance,
@@ -22,7 +22,8 @@ def simulation(parameter, v1_0, initial, kappa=None):
     Q = parameter['Q']
     dim = 2 * Q - 1
     mixing = kappa if kappa is not None else parameter.get("kappa", 0.0)
-    rate_system = RateSystem(parameter, v1_0, kappa=mixing)
+    conn_kind = connection_type or parameter.get("connection_type", "bernoulli")
+    rate_system = RateSystem(parameter, v1_0, kappa=mixing, connection_type=conn_kind)
     initial_vec = np.asarray(initial, dtype=float).reshape((dim,))
 
     solve, value, success = rate_system.solve(initial_vec)
@@ -38,7 +39,7 @@ def simulation(parameter, v1_0, initial, kappa=None):
         print("Die Lösung des Lösungsverfahren liegt für v_in = " + str(v1_0) + " außerhalb der Toleranzgrenze. "
             "Deshalb wird alternativ die Berechnung für v_in = " + str(v1_0 + 0.005) + " wiederholt.")
         if v1_0 < 0.995:
-            return simulation(parameter, v1_0 + 0.005, solve, kappa=kappa)
+            return simulation(parameter, v1_0 + 0.005, solve, kappa=mixing, connection_type=conn_kind)
         else:
             raise
 
@@ -47,6 +48,7 @@ if __name__ == "__main__":
     parameter = {
         "Q": 20,
         "kappa": 0.0,
+        "connection_type": "bernoulli",
         "tau_e": 20.,
         "tau_i": 10.,
         "N": 5000,
