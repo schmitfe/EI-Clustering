@@ -6,7 +6,7 @@ import numpy as np
 from rate_system import RateSystem
 
 
-def simulation(parameter, v1_0, initial, clustering_type=None):
+def simulation(parameter, v1_0, initial, kappa=None):
     """
     Recursive function that calculates the output rate for a given input.
     If no solution can be found for the given input that is within the error tolerance,
@@ -21,9 +21,8 @@ def simulation(parameter, v1_0, initial, clustering_type=None):
     """
     Q = parameter['Q']
     dim = 2 * Q - 1
-    clustering = clustering_type or "probability"
-
-    rate_system = RateSystem(parameter, v1_0, clustering_type=clustering)
+    mixing = kappa if kappa is not None else parameter.get("kappa", 0.0)
+    rate_system = RateSystem(parameter, v1_0, kappa=mixing)
     initial_vec = np.asarray(initial, dtype=float).reshape((dim,))
 
     solve, value, success = rate_system.solve(initial_vec)
@@ -39,7 +38,7 @@ def simulation(parameter, v1_0, initial, clustering_type=None):
         print("Die Lösung des Lösungsverfahren liegt für v_in = " + str(v1_0) + " außerhalb der Toleranzgrenze. "
             "Deshalb wird alternativ die Berechnung für v_in = " + str(v1_0 + 0.005) + " wiederholt.")
         if v1_0 < 0.995:
-            return simulation(parameter, v1_0 + 0.005, solve, clustering_type=clustering_type)
+            return simulation(parameter, v1_0 + 0.005, solve, kappa=kappa)
         else:
             raise
 
@@ -47,7 +46,7 @@ if __name__ == "__main__":
     v10 =0.5
     parameter = {
         "Q": 20,
-        "clustering_type": "probability",
+        "kappa": 0.0,
         "tau_e": 20.,
         "tau_i": 10.,
         "N": 5000,

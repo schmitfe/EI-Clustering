@@ -27,7 +27,7 @@ DEFAULT_PARAMETER: Dict[str, float | int | None | str] = dict(
     tau_i=5,
     R_Eplus=None,
     R_j=None,
-    clustering_type="probability",
+    kappa=0.0,
     m_X=0.03,
 )
 
@@ -45,8 +45,9 @@ def parameter_from_env(overrides: Optional[Dict[str, float | int | None | str]] 
     --------------------------------
     Rj:
         Sets ``parameter["R_j"]`` and defaults to 0 when unset.
-    clustering_type:
-        Overrides the clustering type (``"weight"`` or ``"probability"``).
+    kappa:
+        Sets the mixing coefficient between probability (0) and weight (1)
+        clustering.
     R_Eplus:
         Allows single-configuration runs without editing the source.
     """
@@ -58,9 +59,9 @@ def parameter_from_env(overrides: Optional[Dict[str, float | int | None | str]] 
     if env_rj is not None:
         parameter["R_j"] = float(env_rj)
 
-    env_cluster = os.getenv("clustering_type")
-    if env_cluster:
-        parameter["clustering_type"] = env_cluster
+    env_kappa = os.getenv("kappa")
+    if env_kappa is not None:
+        parameter["kappa"] = float(env_kappa)
 
     env_replus = os.getenv("R_Eplus")
     if env_replus is not None:

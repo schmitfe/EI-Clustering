@@ -14,9 +14,6 @@ import sys
 import glob
 n_cores=int(os.getenv('n_cores', mp.cpu_count()))
 
-#choose clustering_type in "probability" or "weight"
-#clustering_type = "weight"#probability"
-
 def search_file(folder):
     """
     Creates a data-file "all_data_P_Eplus.pkl" that includes all solo-data that are stored in "folder"
@@ -54,7 +51,7 @@ def plot_fixpoints(folder):
     file_name = "all_data_P_Eplus.pkl"
     data = pd.read_pickle(folder+"/"+file_name)
     _, _, _, parameter = list(data.values())[0]
-    clustering_type = parameter['clustering_type']
+    kappa = parameter.get('kappa', 0.0)
     R_j=parameter['R_j']
 
     def calc_all_fixpoints(data):
@@ -65,7 +62,7 @@ def plot_fixpoints(folder):
         all_fixpoints = {}
         for d in data:
             print("P_Eplus: "+str(d))
-            fixpoint = fx.calc_fixpoints(data[d], clustering_type)
+            fixpoint = fx.calc_fixpoints(data[d], kappa)
             all_fixpoints[d] = fixpoint
 
         return all_fixpoints
@@ -77,8 +74,8 @@ def plot_fixpoints(folder):
         """
         pool = mp.Pool(n_cores)
         data_list = list(data.values())
-        fixpoint=pool.map(partial(fx.calc_fixpoints, clustering_type=clustering_type), data_list)
-        #fixpoint=pool.map(lambda x: fx.calc_fixpoints(x, clustering_type), data)
+        fixpoint=pool.map(partial(fx.calc_fixpoints, kappa=kappa), data_list)
+        #fixpoint=pool.map(lambda x: fx.calc_fixpoints(x, kappa), data)
         all_fixpoints = {d:fixpoint[i] for i,d in enumerate(data)}
         pool.close()
         return all_fixpoints
@@ -112,9 +109,10 @@ def plot_fixpoints(folder):
     plt.title("R_j = " + str(R_j))
     plt.legend()
     plt.ylim(0, 1)
-    plt.savefig("fixpoints_"+str(clustering_type)+"Clustering_Rj"+str(R_j)+".png")
+    encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
+    plt.savefig(f"fixpoints_kappa{encoded_kappa}_Rj{R_j}.png")
     plt.close()
-    with open("all_fixpoints_"+str(clustering_type)+"Clustering_Rj"+str(R_j)+".pkl", 'wb') as file:
+    with open(f"all_fixpoints_kappa{encoded_kappa}_Rj{R_j}.pkl", 'wb') as file:
         pickle.dump(all_fix, file)
 
 def plot_rates(folder):
@@ -126,7 +124,7 @@ def plot_rates(folder):
     file_name = search_file(folder)
     data = pd.read_pickle(file_name)
     fig, ax = plt.subplots()
-    clustering_type = None
+    kappa_val = None
     parameter_ref = None
     for file in data:
         if len(data[file]) != 4:
@@ -134,14 +132,16 @@ def plot_rates(folder):
         x_data, y_data, solves, parameter = data[file]
         x_data, y_data = fx.function(x_data, y_data)
         ax.plot(x_data, y_data, label=str(file))
-        clustering_type = parameter['clustering_type']
+        kappa_val = parameter.get('kappa', 0.0)
         parameter_ref = parameter
     ax.set_xlabel("v_in")
     ax.set_ylabel("v_out")
     if parameter_ref is not None:
         ax.set_title(f"R_j ={parameter_ref['R_j']}")
     ax.legend()
-    plt.savefig(folder+"/all_rates_"+str(clustering_type)+"Clustering_Rj"+str(parameter_ref['R_j'])+".png")
+    if parameter_ref is not None:
+        encoded_kappa = f"{float(kappa_val):.2f}".replace(".", "_")
+        plt.savefig(folder+f"/all_rates_kappa{encoded_kappa}_Rj{parameter_ref['R_j']}.png")
     plt.close(fig)
 
 
@@ -151,7 +151,7 @@ if __name__ == '__main__':
         folder=sys.argv[1]
     else:
         #folder under the data that will be analyzed is safed
-        folder="Weight/R_j0.25"
+        folder="Kappa_0_00/R_j0.25"
 
     plot_rates(folder)
     plot_fixpoints(folder)

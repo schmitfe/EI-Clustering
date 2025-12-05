@@ -8,8 +8,9 @@ There are two main parameters that determine the clustering:
          Can take values from 0 (unclustered network) to Q (fully clustered)
 #### R_j: indicates the cluster strength of the I-neurons within a cluster in relation to the E neurons.
         Takes values between 0 (no I-clustering) to 1 (same cluster strength as E-neurons).
-In addition, the type of clustering can be selected, whether the clusters are created by adjusting the weights (weight clustering)
-or by adjusting the connection probabilities (probability clustering).
+#### kappa: Mixing coefficient that interpolates between purely probability-based
+        clustering (`kappa = 0`) and purely weight-based clustering (`kappa = 1`).
+        Intermediate values implement the mixed rule described in the manuscript.
 
 ### safe_data.py
 Generates input rates from 0 to 1 (configurable) for a fixed cluster and hands

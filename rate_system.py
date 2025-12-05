@@ -8,7 +8,6 @@ from scipy import optimize, special
 import connectivit
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
-small = 1e-30
 
 try:  # pragma: no cover - optional dependency
     from jax import config as jax_config
@@ -29,15 +28,16 @@ except Exception:  # pragma: no cover - optional dependency
 class RateSystem:
     parameter: dict
     v1_fixed: float
-    clustering_type: Optional[str] = None
+    kappa: Optional[float] = None
     prefer_jax: bool = True
     max_steps: int = 256
 
     def __post_init__(self):
-        clustering = self.clustering_type or "probability"
         param_copy = dict(self.parameter)
-        param_copy.pop("clustering_type", None)
-        matrices = connectivit.linear_connectivity(clustering, **param_copy)
+        mix = self.kappa if self.kappa is not None else param_copy.pop("kappa", None)
+        if mix is None:
+            mix = 0.0
+        matrices = connectivit.linear_connectivity(mix, **param_copy)
         self.A = matrices.A
         self.B = matrices.B
         self.bias = matrices.bias

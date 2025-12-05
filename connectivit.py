@@ -22,7 +22,7 @@ class ConnectivityMatrices:
 
 
 def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p0_ii,
-                                 m_X, R_Eplus, R_j, clustering_type):
+                                 m_X, R_Eplus, R_j, kappa):
     n_er = N_E / N
     n_ir = N_I / N
     n_e = N_E / Q
@@ -32,9 +32,7 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     theta_I = V_th
     V_th_vec = np.array([theta_E] * Q + [theta_I] * Q, dtype=float)
 
-    R_Eminus = (Q - R_Eplus) / (Q - 1)
     R_Iplus = 1 + R_j * (R_Eplus - 1)
-    R_Iminus = (Q - R_Iplus) / (Q - 1)
 
     j_EE = theta_E / (math.sqrt(p0_ee * n_er))
     j_IE = theta_I / math.sqrt(p0_ie * n_er)
@@ -47,46 +45,39 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     j_EI *= 1 / math.sqrt(N)
     j_II *= 1 / math.sqrt(N)
 
-    if clustering_type == "probability":
-        P_EE = R_Eplus * p0_ee
-        P_IE = R_Iplus * p0_ie
-        P_EI = R_Iplus * p0_ei
-        P_II = R_Iplus * p0_ii
+    def mix_scales(R_plus: float) -> tuple[float, float, float, float]:
+        prob_in = R_plus ** (1.0 - kappa)
+        prob_out = (Q - prob_in) / (Q - 1)
+        weight_in = R_plus ** kappa
+        weight_out = (Q - weight_in) / (Q - 1)
+        return prob_in, prob_out, weight_in, weight_out
 
-        p_ee = R_Eminus * p0_ee
-        p_ie = R_Iminus * p0_ie
-        p_ei = R_Iminus * p0_ei
-        p_ii = R_Iminus * p0_ii
+    P_scale_in_E, P_scale_out_E, J_scale_in_E, J_scale_out_E = mix_scales(R_Eplus)
+    P_scale_in_I, P_scale_out_I, J_scale_in_I, J_scale_out_I = mix_scales(R_Iplus)
 
-        J_EE = j_EE
-        J_IE = j_IE
-        J_EI = j_EI
-        J_II = j_II
+    P_EE = p0_ee * P_scale_in_E
+    p_ee = p0_ee * P_scale_out_E
 
-        j_ee = j_EE
-        j_ie = j_IE
-        j_ei = j_EI
-        j_ii = j_II
-    else:
-        P_EE = p0_ee
-        P_IE = p0_ie
-        P_EI = p0_ei
-        P_II = p0_ii
+    P_IE = p0_ie * P_scale_in_I
+    p_ie = p0_ie * P_scale_out_I
 
-        p_ee = p0_ee
-        p_ie = p0_ie
-        p_ei = p0_ei
-        p_ii = p0_ii
+    P_EI = p0_ei * P_scale_in_I
+    p_ei = p0_ei * P_scale_out_I
 
-        J_EE = R_Eplus * j_EE
-        J_IE = R_Iplus * j_IE
-        J_EI = R_Iplus * j_EI
-        J_II = R_Iplus * j_II
+    P_II = p0_ii * P_scale_in_I
+    p_ii = p0_ii * P_scale_out_I
 
-        j_ee = R_Eminus * j_EE
-        j_ie = R_Iminus * j_IE
-        j_ei = R_Iminus * j_EI
-        j_ii = R_Iminus * j_II
+    J_EE = j_EE * J_scale_in_E
+    j_ee = j_EE * J_scale_out_E
+
+    J_IE = j_IE * J_scale_in_I
+    j_ie = j_IE * J_scale_out_I
+
+    J_EI = j_EI * J_scale_in_I
+    j_ei = j_EI * J_scale_out_I
+
+    J_II = j_II * J_scale_in_I
+    j_ii = j_II * J_scale_out_I
 
     EE_IN = J_EE * P_EE * n_e
     EE_OUT = j_ee * p_ee * n_e
@@ -100,7 +91,7 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     II_IN = J_II * P_II * n_i
     II_OUT = j_ii * p_ii * n_i
 
-    if False:
+    if True:
         var_EE_IN = P_EE * J_EE ** 2 * n_e
         var_EE_OUT = p_ee * j_ee ** 2 * n_e
         var_IE_IN = P_IE * J_IE ** 2 * n_e
@@ -139,16 +130,17 @@ def _build_connectivity_matrices(N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p
     return ConnectivityMatrices(A=A, B=B, V_th=V_th_vec, u_ext=u_ext, intra_probs=intra, inter_probs=inter)
 
 
-def linear_connectivity(clustering_type=None, **parameters) -> ConnectivityMatrices:
+def linear_connectivity(mixing_parameter=None, **parameters) -> ConnectivityMatrices:
     params = dict(parameters)
-    cluster = clustering_type or params.pop("clustering_type", "probability")
+    mix = mixing_parameter if mixing_parameter is not None else params.pop("kappa", 0.0)
+    params.pop("kappa", None)
     params.pop("tau_e", None)
     params.pop("tau_i", None)
-    return _build_connectivity_matrices(clustering_type=cluster, **params)
+    return _build_connectivity_matrices(kappa=mix, **params)
 
 
 def mean_var(v1_0, N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p0_ii, m_X, tau_e, tau_i, R_Eplus, R_j,
-             clustering_type, only_matrix=False, **kwargs):
+             kappa, only_matrix=False, **kwargs):
     """
     Calculates the mean-rates and variance for each cluster
 
@@ -169,7 +161,7 @@ def mean_var(v1_0, N, N_E, N_I, Q, V_th, g, p0_ee, p0_ie, p0_ei, p0_ii, m_X, tau
     """
     matrices = _build_connectivity_matrices(N=N, N_E=N_E, N_I=N_I, Q=Q, V_th=V_th, g=g, p0_ee=p0_ee,
                                             p0_ie=p0_ie, p0_ei=p0_ei, p0_ii=p0_ii, m_X=m_X, R_Eplus=R_Eplus,
-                                            R_j=R_j, clustering_type=clustering_type)
+                                            R_j=R_j, kappa=kappa)
 
     # build vector with all variables v1, v2, ...
     vector = [v1_0]

@@ -22,22 +22,22 @@ handling plotting and pickle generation on top of that pure computation step.
 
 def ensure_output_folder(parameter: dict) -> str:
     """Return (and create) the folder that should contain the sweep result."""
-    clustering = parameter.get("clustering_type", "probability")
-    base = "Weight" if clustering == "weight" else "Probability"
+    kappa = float(parameter.get("kappa", 0.0))
+    base = f"Kappa_{kappa:.2f}".replace(".", "_")
     folder = os.path.join(base, f"R_j{parameter['R_j']}")
     os.makedirs(folder, exist_ok=True)
     return folder
 
 
 def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, step_number: int = 20,
-                       clustering_type: str | None = None) -> Tuple[List[float], List[float], List[np.ndarray]]:
+                       mixing_parameter: float | None = None) -> Tuple[List[float], List[float], List[np.ndarray]]:
     """
     Compute the ERF for a given parameter dictionary without touching the filesystem.
 
     Returns the sampled ``v_in``, ``v_out`` pairs and the solver states that seed
     the next iteration.
     """
-    clustering = clustering_type or parameter.get("clustering_type", "probability")
+    mixing = mixing_parameter if mixing_parameter is not None else parameter.get("kappa", 0.0)
     Q = parameter['Q']
     initial = np.ones(2 * Q - 1) * 0.01
     v1_0 = start
@@ -50,7 +50,7 @@ def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, st
     while v1_0 <= end + 1e-12:
         print("-----------------------------")
         print(f"Set input rate v_in: {v1_0}")
-        x, y, solve = run.simulation(parameter, v1_0, initial, clustering_type=clustering)
+        x, y, solve = run.simulation(parameter, v1_0, initial, kappa=mixing)
         x_data.append(x)
         y_data.append(y)
         solves.append(solve)
@@ -87,14 +87,14 @@ def main(filename, parameter, plot=False, start=0., end=1., step_number=1000):
     Solve the ERF for ``parameter`` and persist the results as ``filename``.
     """
     R_Eplus = parameter['R_Eplus']
-    clustering_type = parameter['clustering_type']
+    mixing_parameter = parameter.get('kappa', 0.0)
     print('##############################################################')
-    print(f"Simulate Network for R_Eplus = {R_Eplus}")
+    print(f"Simulate Network for R_Eplus = {R_Eplus}, kappa = {mixing_parameter}")
 
     foldername = ensure_output_folder(parameter)
 
     curve = generate_erf_curve(parameter, start=start, end=end, step_number=step_number,
-                               clustering_type=clustering_type)
+                               mixing_parameter=mixing_parameter)
     x_data, y_data, _ = curve
 
     if plot:

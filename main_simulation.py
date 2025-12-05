@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
     base_parameter = parameter_from_env()
     print(base_parameter['R_j'])
-    print(base_parameter['clustering_type'])
+    print(base_parameter['kappa'])
 
     # example sweep; customize as needed or replace with a list of values
     R_Eplus_values = np.arange(1, 20.01, 0.2)

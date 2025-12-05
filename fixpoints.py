@@ -21,7 +21,7 @@ def function(x,y):
     return (x_new, y_new)
 
 
-def calc_jacobi(parameter, v1_0, solve, clustering_type):
+def calc_jacobi(parameter, v1_0, solve, kappa):
     """
 
     :param parameter: dictionary with network parameter
@@ -30,14 +30,14 @@ def calc_jacobi(parameter, v1_0, solve, clustering_type):
     :param vector: array with needed rate variables for v1, v2,... for each cluster
     :param mean: array with the mean rate for each cluster depending of v2, v3, ... (v1 fixed)
     :param variance: same as mean, but with variance
-    :param cluster_bool: describes kind of clustering. True if probability clustering else False.
+    :param kappa: mixing coefficient between probability and weight clustering
     :return: Jacobi Matrix
     """
-    rate_system = RateSystem(parameter, v1_0, clustering_type=clustering_type)
+    rate_system = RateSystem(parameter, v1_0, kappa=kappa)
     full_rates = np.concatenate(([float(v1_0)], np.asarray(solve, dtype=float)))
     return rate_system.jacobian_numpy(full_rates)
 
-def calc_fixpoints(file, clustering_type):
+def calc_fixpoints(file, kappa):
 
     v_in_old, v_out_old, solves, parameter = file
     #interpolation
@@ -92,7 +92,7 @@ def calc_fixpoints(file, clustering_type):
             initial = solves[closest_idx]
 
             print("Solving...")
-            rate_system = RateSystem(parameter, cross_point, clustering_type=clustering_type)
+            rate_system = RateSystem(parameter, cross_point, kappa=kappa)
             initial_guess = np.asarray(initial, dtype=float).reshape((2 * Q - 1,))
             solve, value, success = rate_system.solve(initial_guess)
             if not success:
@@ -101,7 +101,7 @@ def calc_fixpoints(file, clustering_type):
                 print('Converged!')
 
             #check stability of each cross pont by  calc eigenvalues of jacobi matrix
-            jacobi =  calc_jacobi(parameter, cross_point, solve, clustering_type)
+            jacobi =  calc_jacobi(parameter, cross_point, solve, kappa)
             if not np.isfinite(jacobi).all():
                 print("Skipping stability check for cross point "
                       f"{cross_point}: Jacobian contains non-finite values")
