@@ -255,7 +255,7 @@ class RateSystem:
         if self.dim == 0:
             return np.zeros((0,), dtype=float)
         if initial_guess is None:
-            return np.full((self.dim,), 0.01, dtype=float)
+            return np.full((self.dim,), 0.1, dtype=float)
         arr = np.asarray(initial_guess, dtype=float).ravel()
         if arr.size == self.dim:
             return arr
@@ -281,7 +281,7 @@ class RateSystem:
         cls,
         parameter: Dict,
         *,
-        start: float = 0.0,
+        start: float = 0.02,
         end: float = 1.0,
         step_number: int = 20,
         retry_step: Optional[float] = None,

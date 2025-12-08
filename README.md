@@ -8,7 +8,8 @@ point is `ei_pipeline.py`.
 
 ## ei_pipeline.py
 Run this script to sweep `R_Eplus`, generate ERFs, persist them under
-`data/<ConnectionType>/RjXX_XX/<config-tag>/`, and immediately analyze the
+`data/<ConnectionType>/RjXX_XX/<config-tag>/` (each folder contains a
+`params.yaml` snapshot of the configuration), and immediately analyze the
 stored curves.  Command-line options control the ERF range (`--v-start`,
 `--v-end`, `--v-steps`), select explicit `R_Eplus` values (`--r-eplus`,
 `--r-eplus-start`, `--r-eplus-end`, `--r-eplus-step`), pick the number of
@@ -24,8 +25,9 @@ values with repeated `-O path=value` arguments (e.g.,
 `-O connection_type=poisson -O kappa=0.0`). Environment variables such as
 `connection_type=...` are ignored; use CLI overrides instead so configuration
 changes remain explicit.  Each data directory receives a deterministic tag
-derived from the chosen parameters (excluding `R_Eplus`), so you can store
-multiple configurations without conflicts.  The default number of focus
+derived from the chosen parameters (excluding `R_Eplus`)—and each tagged folder
+contains a human-readable `params.yaml`—so you can store multiple configurations
+without conflicts.  The default number of focus
 populations is defined via `focus_count` in the YAML and can be overridden with
 `--focus-count`.  Use `--full-focus-system` when you want to fix only the first
 population and leave every other population unconstrained (classic 2Q − 1

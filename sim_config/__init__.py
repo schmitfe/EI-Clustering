@@ -68,6 +68,16 @@ def write_human_json(
     tmp.write_text(txt, encoding="utf-8")
     tmp.replace(path)
 
+def write_yaml_config(cfg: dict, path: str | Path) -> None:
+    if yaml is None:  # pragma: no cover - optional dependency
+        raise ModuleNotFoundError(
+            "PyYAML is required to write configuration files. Install it via 'pip install pyyaml'."
+        ) from _yaml_error
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(cfg, handle, sort_keys=True)
+
 
 def _normalize_for_tag(obj):
     if obj is None or isinstance(obj, bool):
@@ -228,6 +238,7 @@ def load_from_args(
 __all__ = [
     "_to_human",
     "write_human_json",
+    "write_yaml_config",
     "_normalize_for_tag",
     "sim_tag_from_cfg",
     "load_config",

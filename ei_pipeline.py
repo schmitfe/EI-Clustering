@@ -16,7 +16,7 @@ from rate_system import (
     ensure_output_folder,
     serialize_erf,
 )
-from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg
+from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg, write_yaml_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,6 +87,10 @@ def run_simulation(
     filtered.pop("R_Eplus", None)
     tag = sim_tag_from_cfg(filtered)
     folder = ensure_output_folder(parameter, tag=tag)
+    params_path = os.path.join(folder, "params.yaml")
+    if args.overwrite_simulation or not os.path.exists(params_path):
+        summary = dict(filtered)
+        write_yaml_config(summary, params_path)
     produced_any = False
     existing_detected = False
     sweep_kwargs = dict(
@@ -156,11 +160,20 @@ def run_analysis(folder: str, parameter: Dict) -> None:
         if x_stable:
             plt.scatter(x_stable, y_stable, color="k", label="stable")
         if x_unstable:
-            plt.scatter(x_unstable, y_unstable, facecolors="none", edgecolors="k", marker="o", label="unstable")
+            plt.scatter(
+                x_unstable,
+                y_unstable,
+                facecolors="none",
+                edgecolors="k",
+                marker="o",
+                label="unstable",
+            )
         plt.xlabel("P_E+")
         plt.ylabel("v_out")
         plt.ylim(-0.025, 1.025)
-        plt.xlim(0.995, max([max(x_stable), max(x_unstable)])+0.05)
+        x_values = x_stable + x_unstable
+        if x_values:
+            plt.xlim(0.995, max(x_values) + 0.05)
         plt.legend()
         plt.title(f"R_j = {parameter['R_j']}")
         conn_label = str(connection_type).lower().replace(" ", "_")
