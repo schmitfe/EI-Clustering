@@ -14,10 +14,11 @@ stored curves.  Command-line options control the ERF range (`--v-start`,
 `--r-eplus-start`, `--r-eplus-end`, `--r-eplus-step`), pick the number of
 parallel workers (`--jobs`), limit execution to the simulation or analysis
 stage (`--simulation-only`, `--analysis-only`), adjust how many focus
-populations remain fixed (`--focus-count`), and force regeneration via
-`--overwrite-simulation`.  Without a flag the script performs both stages: it
-writes `.pkl` files for each converged ERF and emits the fixpoint scatter plot
-plus a pickle summary inside `plots/` and `data/`.
+populations remain fixed (`--focus-count`), switch to the full 2Q-1 system
+(`--full-focus-system`), and force regeneration via `--overwrite-simulation`.
+Without a flag the script performs both stages: it writes `.pkl` files for each
+converged ERF and emits the fixpoint scatter plot plus a pickle summary inside
+`plots/` and `data/`.
 Select alternative parameter sets via `--config my_case` and override individual
 values with repeated `-O path=value` arguments (e.g.,
 `-O connection_type=poisson -O kappa=0.0`). Environment variables such as
@@ -26,7 +27,9 @@ changes remain explicit.  Each data directory receives a deterministic tag
 derived from the chosen parameters (excluding `R_Eplus`), so you can store
 multiple configurations without conflicts.  The default number of focus
 populations is defined via `focus_count` in the YAML and can be overridden with
-`--focus-count` for experiments that need multiple synchronized clusters.
+`--focus-count`.  Use `--full-focus-system` when you want to fix only the first
+population and leave every other population unconstrained (classic 2Q − 1
+unknowns).
 
 ## rate_system.py
 Defines the general `RateSystem` solver together with helper utilities for ERF
