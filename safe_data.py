@@ -31,7 +31,7 @@ def ensure_output_folder(parameter: dict) -> str:
 
 
 def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, step_number: int = 20,
-                       mixing_parameter: float | None = None, connection_type: str | None = None) -> Tuple[List[float], List[float], List[np.ndarray]]:
+                       mixing_parameter: float | None = None, connection_type: str | None = None) -> Tuple[Tuple[List[float], List[float], List[np.ndarray]], bool]:
     """
     Compute the ERF for a given parameter dictionary without touching the filesystem.
 
@@ -40,8 +40,7 @@ def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, st
     """
     mixing = mixing_parameter if mixing_parameter is not None else parameter.get("kappa", 0.0)
     conn_kind = str(connection_type or parameter.get("connection_type", "bernoulli"))
-    Q = parameter['Q']
-    initial = np.ones(2 * Q - 1) * 0.01
+    initial = None
     v1_0 = start
     step = (end - start) / max(step_number, 1)
 
@@ -49,10 +48,16 @@ def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, st
     y_data: List[float] = []
     solves: List[np.ndarray] = []
 
+    aborted = False
     while v1_0 <= end + 1e-12:
         print("-----------------------------")
         print(f"Set input rate v_in: {v1_0}")
-        x, y, solve = run.simulation(parameter, v1_0, initial, kappa=mixing, connection_type=conn_kind)
+        result = run.simulation(parameter, v1_0, initial, kappa=mixing, connection_type=conn_kind)
+        if result is None:
+            print("Solver did not converge for the remaining inputs. Stopping sweep early.")
+            aborted = True
+            break
+        x, y, solve = result
         x_data.append(x)
         y_data.append(y)
         solves.append(solve)
@@ -61,7 +66,8 @@ def generate_erf_curve(parameter: dict, start: float = 0.0, end: float = 1.0, st
             break
         v1_0 = x + step
 
-    return x_data, y_data, solves
+    completed = not aborted and (step == 0 or v1_0 > end + 1e-12)
+    return (x_data, y_data, solves), completed
 
 
 def serialize_erf(filename: str, folder: str, parameter: dict,
@@ -96,13 +102,17 @@ def main(filename, parameter, plot=False, start=0., end=1., step_number=1000):
 
     foldername = ensure_output_folder(parameter)
 
-    curve = generate_erf_curve(parameter, start=start, end=end, step_number=step_number,
-                               mixing_parameter=mixing_parameter, connection_type=connection_type)
+    curve, completed = generate_erf_curve(parameter, start=start, end=end, step_number=step_number,
+                                          mixing_parameter=mixing_parameter, connection_type=connection_type)
     x_data, y_data, _ = curve
 
     if plot:
         plot_curve(x_data, y_data, label=str(R_Eplus))
     else:
         print(f"R_Eplus = {R_Eplus} done")
+
+    if not completed:
+        print("Skipping serialization because the ERF sweep did not fully converge.")
+        return None
 
     return serialize_erf(filename, foldername, parameter, curve)

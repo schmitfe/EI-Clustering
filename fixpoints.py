@@ -8,15 +8,33 @@ tol = 1e-4
 steps = 20000
 
 
-def function(x,y):
+def function(x, y):
     """
-    Do Interpolation to get smaller data-grid
-    :param x: array with x_data
-    :param y: array with y_data
-    :return:
+    Smooth ERF samples via interpolation.  When fewer than two finite points are
+    available, fall back to the raw data so partial sweeps can still be plotted
+    and analyzed.
     """
-    f1 = interp1d(x, y,fill_value="extrapolate")
-    x_new = np.linspace(0,1,steps)
+    x_arr = np.asarray(x, dtype=float)
+    y_arr = np.asarray(y, dtype=float)
+    if x_arr.size == 0 or y_arr.size == 0:
+        return x_arr, y_arr
+    mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+    x_arr = x_arr[mask]
+    y_arr = y_arr[mask]
+    if x_arr.size == 0:
+        return x_arr, y_arr
+    order = np.argsort(x_arr)
+    x_arr = x_arr[order]
+    y_arr = y_arr[order]
+    unique_x, unique_idx = np.unique(x_arr, return_index=True)
+    x_arr = unique_x
+    y_arr = y_arr[unique_idx]
+    if x_arr.size == 1:
+        x_new = np.linspace(0, 1, steps)
+        y_new = np.full_like(x_new, y_arr[0])
+        return x_new, y_new
+    f1 = interp1d(x_arr, y_arr, fill_value="extrapolate")
+    x_new = np.linspace(0, 1, steps)
     y_new = f1(x_new)
     return (x_new, y_new)
 
@@ -34,7 +52,7 @@ def calc_jacobi(parameter, v1_0, solve, kappa):
     :return: Jacobi Matrix
     """
     rate_system = RateSystem(parameter, v1_0, kappa=kappa)
-    full_rates = np.concatenate(([float(v1_0)], np.asarray(solve, dtype=float)))
+    full_rates = rate_system.full_rates_numpy(solve)
     return rate_system.jacobian_numpy(full_rates)
 
 def calc_fixpoints(file, kappa):
@@ -42,6 +60,9 @@ def calc_fixpoints(file, kappa):
     v_in_old, v_out_old, solves, parameter = file
     #interpolation
     v_in, v_out = function(v_in_old,v_out_old)
+    if len(v_in) == 0 or len(v_out) == 0:
+        print("Skipping fixpoint analysis: no ERF samples available.")
+        return {}
     v_out_old = np.asarray(v_out_old, dtype=float)
 
     Q = parameter['Q']
@@ -93,7 +114,7 @@ def calc_fixpoints(file, kappa):
 
             print("Solving...")
             rate_system = RateSystem(parameter, cross_point, kappa=kappa)
-            initial_guess = np.asarray(initial, dtype=float).reshape((2 * Q - 1,))
+            initial_guess = np.asarray(initial, dtype=float)
             solve, value, success = rate_system.solve(initial_guess)
             if not success:
                 print('warning! convergence problems')
