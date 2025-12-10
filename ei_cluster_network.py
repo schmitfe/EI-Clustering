@@ -48,11 +48,36 @@ class EIClusterNetwork(RateSystem):
         return A, B, bias, tau
 
     def _build_population_groups(self, focus: np.ndarray) -> List[np.ndarray]:
-        if not self.collapse_types:
-            return super()._build_population_groups(focus)
         focus_set = set(int(idx) for idx in focus.tolist())
         if not focus_set:
             focus_set = {0}
+        if not self.collapse_types:
+            return self._build_full_focus_groups(focus_set)
+        return self._build_collapsed_groups(focus_set)
+
+    def _build_full_focus_groups(self, focus_set: set[int]) -> List[np.ndarray]:
+        groups: List[np.ndarray] = [np.array(sorted(focus_set), dtype=int)]
+        excit_focus = sorted(idx for idx in focus_set if 0 <= idx < self.Q)
+        paired_inhib = sorted(
+            {
+                idx + self.Q
+                for idx in excit_focus
+                if idx + self.Q < 2 * self.Q and (idx + self.Q) not in focus_set
+            }
+        )
+        if paired_inhib:
+            groups.append(np.array(paired_inhib, dtype=int))
+        remaining_excit = [idx for idx in range(self.Q) if idx not in focus_set]
+        for idx in remaining_excit:
+            groups.append(np.array([idx], dtype=int))
+        remaining_inhib = [
+            idx for idx in range(self.Q, 2 * self.Q) if idx not in focus_set and idx not in paired_inhib
+        ]
+        for idx in remaining_inhib:
+            groups.append(np.array([idx], dtype=int))
+        return groups
+
+    def _build_collapsed_groups(self, focus_set: set[int]) -> List[np.ndarray]:
         groups: List[np.ndarray] = [np.array(sorted(focus_set), dtype=int)]
         paired_inhib = sorted(
             idx + self.Q

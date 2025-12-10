@@ -347,7 +347,6 @@ def main() -> None:
         parameter["focus_count"] = max(1, int(args.focus_count))
     if args.full_focus_system:
         parameter["collapse_types"] = False
-        parameter["focus_count"] = 1
     else:
         parameter.setdefault("collapse_types", True)
     r_eplus_values = resolve_r_eplus(args, parameter)
