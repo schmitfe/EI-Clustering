@@ -152,6 +152,35 @@ def _select_best_from_group(group: List[Tuple[float, Dict[str, Any]]]) -> Tuple[
     return keep, extras
 
 
+def _min_distance_to_selected(value: float, selected: List[Tuple[float, Dict[str, Any]]]) -> float:
+    if not selected:
+        return float("inf")
+    distance = min(abs(float(value) - float(item[0])) for item in selected)
+    return float(distance)
+
+
+def _select_diverse_subset(
+    candidates: List[Tuple[float, Dict[str, Any]]],
+    max_fixpoints: int,
+) -> Tuple[List[Tuple[float, Dict[str, Any]]], List[Tuple[float, Dict[str, Any]]]]:
+    if len(candidates) <= max_fixpoints:
+        return list(candidates), []
+    pool = sorted(candidates, key=lambda item: _candidate_rank(item[0], item[1]))
+    selected: List[Tuple[float, Dict[str, Any]]] = []
+    if pool:
+        selected.append(pool.pop(0))
+    while len(selected) < max_fixpoints and pool:
+        pool.sort(
+            key=lambda item: (
+                -_min_distance_to_selected(item[0], selected),
+                _candidate_rank(item[0], item[1]),
+            )
+        )
+        selected.append(pool.pop(0))
+    dropped = pool
+    return selected, dropped
+
+
 def _is_trivial_fixpoint(point: float, entry: Dict[str, Any], *, threshold: float = 1e-6) -> bool:
     rates = entry.get("rates")
     if rates is None:
@@ -217,10 +246,9 @@ def _filter_fixpoint_candidates(
     excluded.extend((val, item, "duplicate_threshold") for val, item in extras)
     if len(candidates) <= max_fixpoints:
         return dict(candidates), excluded
-    ordered_candidates = sorted(candidates, key=lambda item: _candidate_rank(item[0], item[1]))
-    kept = ordered_candidates[:max_fixpoints]
-    for dropped in ordered_candidates[max_fixpoints:]:
-        excluded.append((dropped[0], dropped[1], "max_fixpoints"))
+    kept, dropped = _select_diverse_subset(candidates, max_fixpoints)
+    for drop in dropped:
+        excluded.append((drop[0], drop[1], "max_fixpoints"))
     return dict(kept), excluded
 
 
