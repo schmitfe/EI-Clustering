@@ -28,7 +28,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--v-end", type=float, default=1.0, help="ERF sweep end value.")
     parser.add_argument("--v-steps", type=int, default=1000, help="Number of ERF samples.")
     parser.add_argument("--retry-step", type=float, default=None, help="Optional retry increment for solver restarts.")
-    parser.add_argument("--plot", action="store_true", help="Plot ERF curves during simulation.")
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Plot an aggregated ERF figure during analysis instead of per-simulation plots.",
+    )
     parser.add_argument("--jobs", type=int, help="Number of parallel workers (default: CPU count).")
     parser.add_argument("--r-eplus", type=float, action="append", help="Explicit R_Eplus values (can repeat).")
     parser.add_argument("--r-eplus-start", type=float, help="Start of the R_Eplus sweep.")
@@ -53,19 +57,71 @@ def resolve_r_eplus(args: argparse.Namespace, parameter: Dict) -> List[float]:
     return [float(parameter.get("Q", 1.0))]
 
 
-def maybe_plot_curve(x: Sequence[float], y: Sequence[float], label: str, folder: str) -> None:
-    plt.figure()
-    plt.plot(x, y, label=label)
-    plt.legend()
-    plt.plot([0, 1], [0, 1], "black")
-    os.makedirs(folder, exist_ok=True)
-    plt.savefig(os.path.join(folder, f"erf_{label}.png"))
-    plt.close()
-
-
 def _erf_filename(value: float) -> str:
     encoded = f"{value:.2f}".replace(".", "_")
     return f"R_Eplus{encoded}.pkl"
+
+
+def _plot_erf_collection(
+    data: Dict[str, Sequence],
+    *,
+    parameter: Dict,
+    kappa: float,
+    connection_type: str,
+) -> None:
+    curves: List[Tuple[float, np.ndarray, np.ndarray]] = []
+    for key, entry in data.items():
+        if not isinstance(entry, Sequence) or len(entry) < 2:
+            continue
+        x_data = np.asarray(entry[0], dtype=float)
+        y_data = np.asarray(entry[1], dtype=float)
+        if x_data.size == 0 or y_data.size == 0:
+            continue
+        entry_param = entry[3] if len(entry) > 3 and isinstance(entry[3], dict) else {}
+        rep_value = entry_param.get("R_Eplus")
+        if rep_value is None:
+            try:
+                rep_value = float(key)
+            except (TypeError, ValueError):
+                continue
+        curves.append((float(rep_value), x_data, y_data))
+    if not curves:
+        print("Skipping ERF plotting: no valid curves found.")
+        return
+    curves.sort(key=lambda item: item[0])
+    rep_values = np.array([item[0] for item in curves], dtype=float)
+    vmin = float(np.nanmin(rep_values))
+    vmax = float(np.nanmax(rep_values))
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        print("Skipping ERF plotting: invalid R_Eplus values.")
+        return
+    if np.isclose(vmin, vmax):
+        spread = 0.5 if vmin == 0 else abs(vmin) * 0.1
+        vmin -= spread
+        vmax += spread
+    cmap = plt.get_cmap("viridis")
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    plt.figure()
+    for rep_value, x_data, y_data in curves:
+        plt.plot(x_data, y_data, color=cmap(norm(rep_value)), alpha=0.85, linewidth=1.5)
+    plt.plot([0, 1], [0, 1], color="k", linestyle="--", linewidth=1.0)
+    plt.xlabel("v_in")
+    plt.ylabel("v_out")
+    plt.ylim(-0.025, 1.025)
+    plt.xlim(-0.025, 1.025)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm)
+    cbar.set_label("R_Eplus")
+    plt.title(f"ERF curves (R_j = {parameter['R_j']})")
+    conn_label = str(connection_type).lower().replace(" ", "_")
+    encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
+    os.makedirs("plots", exist_ok=True)
+    output = os.path.join("plots", f"erfs_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}.png")
+    plt.tight_layout()
+    plt.savefig(output)
+    plt.close()
+    print(f"Stored ERF overview plot at {output}")
 
 
 def _simulate_erf_task(task: Tuple[float, Dict, Dict]) -> Tuple[float, Dict, ERFResult]:
@@ -116,8 +172,6 @@ def run_simulation(
         else:
             results = [_simulate_erf_task(task) for task in tasks]
     for value, current_param, result in results:
-        if args.plot:
-            maybe_plot_curve(result.x_data, result.y_data, label=f"R_Eplus_{value:.2f}", folder="plots")
         if not result.completed:
             print(f"Skipping serialization for R_Eplus = {value}: solver did not converge for the entire sweep.")
             continue
@@ -131,13 +185,15 @@ def run_simulation(
     return None
 
 
-def run_analysis(folder: str, parameter: Dict) -> None:
+def run_analysis(folder: str, parameter: Dict, *, plot_erfs: bool = False) -> None:
     print(f"Analyzing data in {folder}")
     bundle_path = aggregate_data(folder)
     with open(bundle_path, "rb") as handle:
         data = pickle.load(handle)
     kappa = parameter.get("kappa", 0.0)
     connection_type = parameter.get("connection_type", "bernoulli")
+    if plot_erfs:
+        _plot_erf_collection(data, parameter=parameter, kappa=kappa, connection_type=connection_type)
     all_fixpoints = {}
     for key, value in data.items():
         print(f"P_Eplus: {key}")
@@ -211,7 +267,7 @@ def main() -> None:
             else:
                 print("Skipping analysis: no ERF data folder was provided or generated.")
                 return
-        run_analysis(folder, parameter)
+        run_analysis(folder, parameter, plot_erfs=args.plot)
 
 
 if __name__ == "__main__":
