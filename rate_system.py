@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from scipy import optimize, special
@@ -341,7 +341,7 @@ class RateSystem:
         tol: float = 1e-4,
         interpolation_steps: int = 20000,
         **network_kwargs,
-    ) -> Dict[float, str]:
+    ) -> Dict[float, Dict[str, Any]]:
         x_data, y_data, solves, parameter = sweep_entry
         x_interp, y_interp = interpolate_curve(x_data, y_data, steps=interpolation_steps)
         if x_interp.size == 0 or y_interp.size == 0:
@@ -366,7 +366,7 @@ class RateSystem:
                 else:
                     crossings.append((float(cross_val), idx))
             prev_diff = curr_diff
-        fixpoints: Dict[float, str] = {}
+        fixpoints: Dict[float, Dict[str, Any]] = {}
         if not crossings:
             return fixpoints
         solves_array = [np.asarray(s, dtype=float) for s in solves]
@@ -377,31 +377,53 @@ class RateSystem:
                 slope = np.inf
             else:
                 slope = (y_interp[idx] - y_interp[idx - 1]) / (x_interp[idx] - x_interp[idx - 1])
-            if not np.isfinite(slope) or slope > 1:
-                fixpoints[cross_point] = "unstable"
-                continue
+            entry: Dict[str, Any] = {
+                "stability": "unstable",
+                "rates": None,
+                "residual_norm": float("inf"),
+                "solver_success": False,
+                "slope": float(slope) if np.isfinite(slope) else float("inf"),
+                "included": False,
+            }
+            slope_unstable = not np.isfinite(slope) or slope > 1
             if len(solves_array) == 0:
-                fixpoints[cross_point] = "unstable"
+                entry["reason"] = "missing_erf_solution"
+                fixpoints[cross_point] = entry
                 continue
             closest_idx = int(np.argmin(np.abs(v_out_old - cross_point)))
             closest_idx = min(max(closest_idx, 0), len(solves_array) - 1)
             initial = solves_array[closest_idx]
             system = cls(parameter, cross_point, **network_kwargs)
             solve, residual, success = system.solve(initial)
-            if not success or not np.isfinite(residual).all():
-                print("Warning: convergence problems near cross-point")
-                fixpoints[cross_point] = "unstable"
-                continue
-            jacobian = system.jacobian_numpy(solve)
-            if not np.isfinite(jacobian).all():
-                fixpoints[cross_point] = "unstable"
-                continue
-            try:
-                eigval = np.linalg.eigvals(jacobian)
-            except np.linalg.LinAlgError:
-                fixpoints[cross_point] = "unstable"
-                continue
-            fixpoints[cross_point] = "stable" if (eigval < 0).all() else "unstable"
+            residual = np.asarray(residual, dtype=float)
+            residual_norm = float(np.linalg.norm(residual)) if residual.size else 0.0
+            if not np.isfinite(residual).all():
+                residual_norm = float("inf")
+            entry["solver_success"] = bool(success)
+            entry["residual_norm"] = residual_norm
+            if success and np.isfinite(residual).all():
+                entry["rates"] = system.full_rates_numpy(solve)
+            else:
+                entry["rates"] = None
+            if slope_unstable or not success or not np.isfinite(residual).all():
+                if not success or not np.isfinite(residual).all():
+                    print("Warning: convergence problems near cross-point")
+                stability = "unstable"
+            else:
+                jacobian = system.jacobian_numpy(solve)
+                if not np.isfinite(jacobian).all():
+                    stability = "unstable"
+                else:
+                    try:
+                        eigval = np.linalg.eigvals(jacobian)
+                    except np.linalg.LinAlgError:
+                        stability = "unstable"
+                    else:
+                        stability = "stable" if (eigval < 0).all() else "unstable"
+            entry["stability"] = stability
+            if "reason" not in entry:
+                entry["reason"] = "slope" if slope_unstable else None
+            fixpoints[cross_point] = entry
         return fixpoints
 
 

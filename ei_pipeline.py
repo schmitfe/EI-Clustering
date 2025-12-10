@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import multiprocessing as mp
 import os
-from typing import Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -124,6 +124,63 @@ def _plot_erf_collection(
     print(f"Stored ERF overview plot at {output}")
 
 
+def _residual_score(entry: Dict[str, Any]) -> float:
+    score = entry.get("residual_norm")
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return float("inf")
+    if not np.isfinite(value):
+        return float("inf")
+    return value
+
+
+def _select_best_from_group(group: List[Tuple[float, Dict[str, Any]]]) -> Tuple[Tuple[float, Dict[str, Any]] | None, List[Tuple[float, Dict[str, Any]]]]:
+    if not group:
+        return None, []
+    ordered = sorted(group, key=lambda item: (_residual_score(item[1]), float(item[0])))
+    keep = ordered[0]
+    extras = ordered[1:]
+    return keep, extras
+
+
+def _filter_fixpoint_candidates(
+    fixpoints: Dict[float, Dict[str, Any]],
+    *,
+    threshold: float = 1e-3,
+    max_fixpoints: int = 3,
+) -> Tuple[Dict[float, Dict[str, Any]], List[Tuple[float, Dict[str, Any], str]]]:
+    if not fixpoints:
+        return {}, []
+    sorted_points = sorted(fixpoints.items(), key=lambda item: float(item[0]))
+    candidates: List[Tuple[float, Dict[str, Any]]] = []
+    excluded: List[Tuple[float, Dict[str, Any], str]] = []
+    current_group: List[Tuple[float, Dict[str, Any]]] = []
+    last_value: float | None = None
+    for key, entry in sorted_points:
+        value = float(key)
+        if last_value is None or abs(value - last_value) <= threshold:
+            current_group.append((key, entry))
+        else:
+            keep, extras = _select_best_from_group(current_group)
+            if keep is not None:
+                candidates.append(keep)
+            excluded.extend((val, item, "duplicate_threshold") for val, item in extras)
+            current_group = [(key, entry)]
+        last_value = value
+    keep, extras = _select_best_from_group(current_group)
+    if keep is not None:
+        candidates.append(keep)
+    excluded.extend((val, item, "duplicate_threshold") for val, item in extras)
+    if len(candidates) <= max_fixpoints:
+        return dict(candidates), excluded
+    ordered_candidates = sorted(candidates, key=lambda item: (_residual_score(item[1]), float(item[0])))
+    kept = ordered_candidates[:max_fixpoints]
+    for dropped in ordered_candidates[max_fixpoints:]:
+        excluded.append((dropped[0], dropped[1], "max_fixpoints"))
+    return dict(kept), excluded
+
+
 def _simulate_erf_task(task: Tuple[float, Dict, Dict]) -> Tuple[float, Dict, ERFResult]:
     value, parameter, sweep_kwargs = task
     current_param = dict(parameter)
@@ -194,23 +251,46 @@ def run_analysis(folder: str, parameter: Dict, *, plot_erfs: bool = False) -> No
     connection_type = parameter.get("connection_type", "bernoulli")
     if plot_erfs:
         _plot_erf_collection(data, parameter=parameter, kappa=kappa, connection_type=connection_type)
-    all_fixpoints = {}
+    all_fixpoints: Dict[str, Dict[float, Dict[str, Any]]] = {}
+    filtered_threshold = 1e-3
     for key, value in data.items():
         print(f"P_Eplus: {key}")
         fixpoint = EIClusterNetwork.compute_fixpoints(value, kappa=kappa, connection_type=connection_type)
+        filtered, excluded = _filter_fixpoint_candidates(fixpoint, threshold=filtered_threshold, max_fixpoints=3)
+        kept_values = sorted(float(point) for point in filtered)
+        for entry in fixpoint.values():
+            entry["included"] = False
+            entry["filter_reason"] = None
+        for point, entry in filtered.items():
+            entry["included"] = True
+            entry["filter_reason"] = None
+        for point, entry, reason in excluded:
+            entry["included"] = False
+            entry["filter_reason"] = reason
+        if excluded:
+            dropped_str = ", ".join(f"{float(val):.5f} ({reason})" for val, _, reason in excluded)
+            kept_str = ", ".join(f"{val:.5f}" for val in kept_values) if kept_values else "none"
+            print(
+                f"Filtered fixpoints for P_Eplus {key}: kept [{kept_str}], "
+                f"excluded [{dropped_str}] (threshold={filtered_threshold})."
+            )
         all_fixpoints[key] = fixpoint
     x_stable: List[float] = []
     y_stable: List[float] = []
     x_unstable: List[float] = []
     y_unstable: List[float] = []
     for r_value, result in all_fixpoints.items():
-        for point, state in result.items():
-            if state == "stable":
+        for point, entry in result.items():
+            if not entry.get("included"):
+                continue
+            status = entry.get("stability", "unstable")
+            point_value = float(point)
+            if status == "stable":
                 x_stable.append(float(r_value))
-                y_stable.append(point)
+                y_stable.append(point_value)
             else:
                 x_unstable.append(float(r_value))
-                y_unstable.append(point)
+                y_unstable.append(point_value)
     if x_stable or x_unstable:
         plt.figure()
         if x_stable:
@@ -241,8 +321,22 @@ def run_analysis(folder: str, parameter: Dict, *, plot_erfs: bool = False) -> No
     conn_label = str(connection_type).lower().replace(" ", "_")
     encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
     output_path = os.path.join("data", f"all_fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}.pkl")
+    params_path = os.path.join(folder, "params.yaml")
+    params_content = None
+    if os.path.exists(params_path):
+        with open(params_path, "r", encoding="utf-8") as params_file:
+            params_content = params_file.read()
+    summary_payload = {
+        "metadata": {
+            "source_folder": os.path.abspath(folder),
+            "params_path": os.path.abspath(params_path) if os.path.exists(params_path) else None,
+            "params_yaml": params_content,
+            "analysis_parameter": dict(parameter),
+        },
+        "fixpoints": all_fixpoints,
+    }
     with open(output_path, "wb") as file:
-        pickle.dump(all_fixpoints, file)
+        pickle.dump(summary_payload, file)
     print(f"Stored fixpoint summary at {output_path}")
 
 
