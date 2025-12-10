@@ -68,6 +68,7 @@ def _plot_erf_collection(
     parameter: Dict,
     kappa: float,
     connection_type: str,
+    tag: str | None = None,
 ) -> None:
     curves: List[Tuple[float, np.ndarray, np.ndarray]] = []
     for key, entry in data.items():
@@ -113,11 +114,13 @@ def _plot_erf_collection(
     sm.set_array([])
     cbar = plt.colorbar(sm)
     cbar.set_label("R_Eplus")
-    plt.title(f"ERF curves (R_j = {parameter['R_j']})")
+    tag_label = f", tag={tag}" if tag else ""
+    plt.title(f"ERF curves (R_j = {parameter['R_j']}{tag_label})")
     conn_label = str(connection_type).lower().replace(" ", "_")
     encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
     os.makedirs("plots", exist_ok=True)
-    output = os.path.join("plots", f"erfs_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}.png")
+    tag_suffix = f"_{tag}" if tag else ""
+    output = os.path.join("plots", f"erfs_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}{tag_suffix}.png")
     plt.tight_layout()
     plt.savefig(output)
     plt.close()
@@ -320,8 +323,16 @@ def run_analysis(folder: str, parameter: Dict, *, plot_erfs: bool = False) -> No
         data = pickle.load(handle)
     kappa = parameter.get("kappa", 0.0)
     connection_type = parameter.get("connection_type", "bernoulli")
+    filtered = {k: v for k, v in parameter.items() if k != "R_Eplus"}
+    analysis_tag = sim_tag_from_cfg(filtered)
     if plot_erfs:
-        _plot_erf_collection(data, parameter=parameter, kappa=kappa, connection_type=connection_type)
+        _plot_erf_collection(
+            data,
+            parameter=parameter,
+            kappa=kappa,
+            connection_type=connection_type,
+            tag=analysis_tag,
+        )
     all_fixpoints: Dict[str, Dict[float, Dict[str, Any]]] = {}
     filtered_threshold = 1e-3
     for key, value in data.items():
@@ -383,16 +394,25 @@ def run_analysis(folder: str, parameter: Dict, *, plot_erfs: bool = False) -> No
         if x_values:
             plt.xlim(0.995, max(x_values) + 0.05)
         plt.legend()
-        plt.title(f"R_j = {parameter['R_j']}")
+        tag_label = f", tag={analysis_tag}" if analysis_tag else ""
+        plt.title(f"R_j = {parameter['R_j']}{tag_label}")
         conn_label = str(connection_type).lower().replace(" ", "_")
         encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
         os.makedirs("plots", exist_ok=True)
-        plt.savefig(os.path.join("plots", f"fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}.png"))
+        plt.savefig(
+            os.path.join(
+                "plots",
+                f"fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}_{analysis_tag}.png",
+            )
+        )
         plt.close()
     os.makedirs("data", exist_ok=True)
     conn_label = str(connection_type).lower().replace(" ", "_")
     encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
-    output_path = os.path.join("data", f"all_fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}.pkl")
+    output_path = os.path.join(
+        "data",
+        f"all_fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}_{analysis_tag}.pkl",
+    )
     params_path = os.path.join(folder, "params.yaml")
     params_content = None
     if os.path.exists(params_path):
