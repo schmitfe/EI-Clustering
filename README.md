@@ -64,3 +64,36 @@ Key controls remain the same:
 Defaults live in `sim_config/default_simulation.yaml` and can be overridden via
 `--config` (to select another YAML) and repeated `-O path=value` CLI overrides.
 Use `python ei_pipeline.py --help` for the full set of options.
+
+## Binary Network Simulation
+Run `python binary_pipeline.py` to instantiate the binary-network counterpart
+with the exact same configuration file and override semantics.  The script
+respects the global clustering parameters (`kappa`, `connection_type`,
+`R_Eplus`, `R_j`, etc.), reproduces the mixed probability/weight scheme, and
+supports Bernoulli, Poisson, or fixed-indegree synapse generation.  Simulation
+settings live under the `binary` section in the YAML (`warmup_steps`,
+`simulation_steps`, `sample_interval`, `batch_size`, `seed`, and
+`output_name`) and can be overridden via `-O binary.sample_interval=25`, etc.
+Each run stores downsampled population activities in
+`data/<ConnectionType>/RjXX_XX/<tag>/binary/` alongside a YAML summary, using
+the same deterministic folder layout as the mean-field pipeline.  Every
+`activity_trace.npz` now bundles a `neuron_states` array (samples × neurons) so
+you can compute pairwise correlations or reconstruct raster plots.  Add
+`--plot-activity` to dump a neuron-by-time heatmap that spans the entire
+recording; the figure is generated directly from `neuron_states`.
+
+To initialize the network near a predicted mean-field state, configure the new
+`initial_activity` block in the YAML.  Supply a scalar or a length-`Q` list for
+`excitatory` and `inhibitory` and choose `mode: bernoulli` (sample each neuron
+with the given probability) or `mode: deterministic` (exactly match the desired
+fraction by shuffling ones).  Example:
+
+```yaml
+initial_activity:
+  mode: deterministic
+  excitatory: [0.3, 0.1, 0.1, 0.05]
+  inhibitory: 0.02
+```
+
+This ensures binary simulations start from the same clustered activity profile
+used by the mean-field solver, enabling apples-to-apples comparisons.
