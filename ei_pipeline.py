@@ -135,13 +135,53 @@ def _residual_score(entry: Dict[str, Any]) -> float:
     return value
 
 
+def _candidate_rank(point: float, entry: Dict[str, Any]) -> Tuple[int, float, float, float]:
+    stability_rank = 0 if entry.get("stability") == "stable" else 1
+    residual_rank = _residual_score(entry)
+    magnitude_rank = -abs(float(point))
+    value_rank = -float(point)
+    return stability_rank, residual_rank, magnitude_rank, value_rank
+
+
 def _select_best_from_group(group: List[Tuple[float, Dict[str, Any]]]) -> Tuple[Tuple[float, Dict[str, Any]] | None, List[Tuple[float, Dict[str, Any]]]]:
     if not group:
         return None, []
-    ordered = sorted(group, key=lambda item: (_residual_score(item[1]), float(item[0])))
+    ordered = sorted(group, key=lambda item: _candidate_rank(item[0], item[1]))
     keep = ordered[0]
     extras = ordered[1:]
     return keep, extras
+
+
+def _is_trivial_fixpoint(point: float, entry: Dict[str, Any], *, threshold: float = 1e-6) -> bool:
+    rates = entry.get("rates")
+    if rates is None:
+        return False
+    arr = np.asarray(rates, dtype=float).ravel()
+    if arr.size == 0:
+        return False
+    return (abs(float(point)) <= threshold) and np.all(np.abs(arr) <= threshold)
+
+
+def _describe_fixpoints(
+    entries,
+    *,
+    include_reason: bool = False,
+) -> str:
+    if not entries:
+        return "none"
+    chunks = []
+    for item in entries:
+        if include_reason:
+            point, entry, reason = item
+        else:
+            point, entry = item
+            reason = None
+        stability = entry.get("stability", "?")
+        text = f"{float(point):.5f} [{stability}]"
+        if include_reason and reason:
+            text = f"{text} ({reason})"
+        chunks.append(text)
+    return ", ".join(chunks)
 
 
 def _filter_fixpoint_candidates(
@@ -159,6 +199,9 @@ def _filter_fixpoint_candidates(
     last_value: float | None = None
     for key, entry in sorted_points:
         value = float(key)
+        if _is_trivial_fixpoint(value, entry):
+            excluded.append((key, entry, "trivial_zero"))
+            continue
         if last_value is None or abs(value - last_value) <= threshold:
             current_group.append((key, entry))
         else:
@@ -174,7 +217,7 @@ def _filter_fixpoint_candidates(
     excluded.extend((val, item, "duplicate_threshold") for val, item in extras)
     if len(candidates) <= max_fixpoints:
         return dict(candidates), excluded
-    ordered_candidates = sorted(candidates, key=lambda item: (_residual_score(item[1]), float(item[0])))
+    ordered_candidates = sorted(candidates, key=lambda item: _candidate_rank(item[0], item[1]))
     kept = ordered_candidates[:max_fixpoints]
     for dropped in ordered_candidates[max_fixpoints:]:
         excluded.append((dropped[0], dropped[1], "max_fixpoints"))
@@ -257,7 +300,6 @@ def run_analysis(folder: str, parameter: Dict, *, plot_erfs: bool = False) -> No
         print(f"P_Eplus: {key}")
         fixpoint = EIClusterNetwork.compute_fixpoints(value, kappa=kappa, connection_type=connection_type)
         filtered, excluded = _filter_fixpoint_candidates(fixpoint, threshold=filtered_threshold, max_fixpoints=3)
-        kept_values = sorted(float(point) for point in filtered)
         for entry in fixpoint.values():
             entry["included"] = False
             entry["filter_reason"] = None
@@ -267,12 +309,14 @@ def run_analysis(folder: str, parameter: Dict, *, plot_erfs: bool = False) -> No
         for point, entry, reason in excluded:
             entry["included"] = False
             entry["filter_reason"] = reason
-        if excluded:
-            dropped_str = ", ".join(f"{float(val):.5f} ({reason})" for val, _, reason in excluded)
-            kept_str = ", ".join(f"{val:.5f}" for val in kept_values) if kept_values else "none"
+        kept_entries = sorted(filtered.items(), key=lambda item: float(item[0]))
+        excluded_entries = sorted(excluded, key=lambda item: float(item[0]))
+        if fixpoint:
+            kept_str = _describe_fixpoints(kept_entries)
+            excluded_str = _describe_fixpoints(excluded_entries, include_reason=True)
             print(
-                f"Filtered fixpoints for P_Eplus {key}: kept [{kept_str}], "
-                f"excluded [{dropped_str}] (threshold={filtered_threshold})."
+                f"Fixpoints for P_Eplus {key}: kept [{kept_str}], "
+                f"excluded [{excluded_str}] (threshold={filtered_threshold})."
             )
         all_fixpoints[key] = fixpoint
     x_stable: List[float] = []
