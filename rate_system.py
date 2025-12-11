@@ -1,3 +1,4 @@
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -6,6 +7,8 @@ import numpy as np
 from scipy import optimize, special
 
 from sim_config import sim_tag_from_cfg
+
+logger = logging.getLogger(__name__)
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
@@ -197,7 +200,12 @@ class RateSystem:
         if self.use_jax:
             try:
                 return self._solve_with_optimistix(initial)
-            except Exception:
+            except (ValueError, RuntimeError, TypeError, AttributeError) as e:
+                logger.warning(
+                    "Optimistix solver failed with %s: %s. Falling back to scipy solver.",
+                    type(e).__name__,
+                    str(e),
+                )
                 self.use_jax = False
         return self._solve_with_scipy(initial)
 
