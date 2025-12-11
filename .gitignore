@@ -1,9 +1,8 @@
-# Python cache
+# Build artifacts
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Build artifacts
 *.so
 .Python
 build/
@@ -28,6 +27,12 @@ ENV/
 env/
 
 # IDEs
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 .vscode/
 .idea/
 *.swp
@@ -37,3 +42,11 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Data and output
+data/
+plots/
+*.pkl
+*.pickle
+
+.DS_Store
