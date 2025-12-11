@@ -8,12 +8,16 @@ NumPy arrays so the solvers can work with a consistent interface.
 """
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from typing import Callable, Dict, Sequence, Tuple
 
 import numpy as np
 import sympy
 from sympy import Matrix, Symbol, diff
+
+logger = logging.getLogger(__name__)
 
 try:
     import jax
@@ -145,8 +149,18 @@ def prepare_system_functions(
 
     try:
         bundle = builder(funcs, var_names)
-    except Exception:
+    except Exception as e:
         if use_autodiff:
+            # Log the JAX compilation failure for debugging purposes
+            logger.warning(
+                "JAX compilation failed, falling back to SymPy: %s: %s",
+                type(e).__name__,
+                str(e)
+            )
+            # In debug mode, re-raise the exception to help developers diagnose issues
+            if os.environ.get("EI_CLUSTERING_DEBUG", "").lower() in ("1", "true", "yes"):
+                raise
+            
             backend = "sympy"
             key = _cache_key(funcs, var_names, backend)
             if key in _SYSTEM_CACHE:
