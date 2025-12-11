@@ -2,22 +2,7 @@ import numpy as np
 import sympy
 from sympy import Matrix
 
-def give_values(phi_minus, var, solve):
-    """
-    calculate value = f(x)
-    :param phi_minus: vector of the functions converted to zero
-    :param var: variables
-    :param solve: value x that should be inserted to the function
-    :return: vector f(x)
-    """
-
-    functions_minus = []
-    values = []
-    for i in range(len(var)):
-        functions_minus.append(sympy.lambdify(var, phi_minus[i]))
-    for func in functions_minus:
-        values.append((func(*solve)))
-    return values
+from solver_utils import prepare_system_functions
 
 def updated_mini(x0, values, mini):
     """
@@ -39,7 +24,7 @@ def updated_mini(x0, values, mini):
     return mini
 
 
-def recursion(funcs, var, variance, F, J, starter, x0, mini, i=0, tolerance=1e-6, max_iter=100):
+def recursion(funcs, var, variance, F, J, value_func, starter, x0, mini, i=0, tolerance=1e-6, max_iter=100):
     """
     Recursive function, which is to find a solution for the equation system by means of the newton method.
      If the solution of the system converges or the value is within the tolerance near zero, the solution is returned.
@@ -66,23 +51,23 @@ def recursion(funcs, var, variance, F, J, starter, x0, mini, i=0, tolerance=1e-6
         if i > max_iter:
             raise RecursionError
 
-        if np.any(variance(*xn) < 0):
-            return recursion(funcs, var, variance, F, J, starter + 0.001, starter + 0.001, mini,
+        if np.any(np.asarray(variance(*xn), dtype=float) < 0):
+            return recursion(funcs, var, variance, F, J, value_func, starter + 0.001, starter + 0.001, mini,
                              i + 1)  # ? starter = x0
 
-        val = give_values(funcs, var, xn)
+        val = value_func(*xn)
 
         if np.all(np.abs(val) < tolerance) or np.linalg.norm(xn - x0) < tolerance:
             return (xn, val, True)
 
         else:
-            return recursion(funcs, var, variance, F, J, starter, xn, updated_mini(xn, val, mini), i + 1)
+            return recursion(funcs, var, variance, F, J, value_func, starter, xn, updated_mini(xn, val, mini), i + 1)
 
     except RecursionError:
         return (*mini, False)
 
 
-def solver(funcs, var, variance, x0, F, J):
+def solver(funcs, var, variance, x0, F=None, J=None, value_func=None, prefer_autodiff=True):
     """
 
     :param funcs:
@@ -94,5 +79,14 @@ def solver(funcs, var, variance, x0, F, J):
     :return:
     """
     print("Newtonverfahren wird angewendet.")
-    mini = [x0, np.linalg.norm(give_values(funcs, var, x0))]
-    return recursion(funcs, var, sympy.lambdify(var, Matrix(np.array(variance))), F, J, np.zeros_like(x0), x0, mini)
+    if F is None or J is None or value_func is None:
+        system_functions = prepare_system_functions(funcs, var, prefer_autodiff=prefer_autodiff)
+        F = system_functions.F
+        J = system_functions.J
+        value_func = system_functions.value_func
+    else:
+        value_func = value_func or (lambda *args: np.asarray(F(*args), dtype=float).reshape(-1))
+
+    mini = [x0, np.linalg.norm(value_func(*x0))]
+    variance_func = sympy.lambdify(var, Matrix(np.array(variance)), modules="numpy")
+    return recursion(funcs, var, variance_func, F, J, value_func, np.zeros_like(x0), x0, mini)

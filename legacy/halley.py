@@ -2,21 +2,7 @@ import numpy as np
 import sympy
 from sympy import Matrix, Symbol, diff
 
-def give_values(phi_minus, var, solve):
-    """
-    calculate value = f(x)
-    :param phi_minus: vector of the functions converted to zero
-    :param var: variables
-    :param solve: value x that should be inserted to the function
-    :return: vector f(x)
-    """
-    functions_minus = []
-    values = []
-    for i in range(len(var)):
-        functions_minus.append(sympy.lambdify(var, phi_minus[i]))
-    for func in functions_minus:
-        values.append((func(*solve)))
-    return values
+from solver_utils import prepare_system_functions
 
 
 def jacobi_matrix(funcs, rates):
@@ -70,7 +56,7 @@ def update_mini(x0, values, mini):
     return mini
 
 
-def recursion(funcs, var, variance, F, H, J, starter, x0, mini, i=0, max_iter=200):
+def recursion(funcs, var, variance, F, H, J, value_func, starter, x0, mini, i=0, max_iter=200):
     """
         Recursive function, which is to find a solve for the equation system by means of the Halley method.
          If the solution of the system converges or the value is within the tolerance near zero, the solution is returned.
@@ -96,22 +82,32 @@ def recursion(funcs, var, variance, F, H, J, starter, x0, mini, i=0, max_iter=20
         xb = np.linalg.solve(J(*x0) + 0.5 * H(*x0).dot(xa), - F(*x0)).dot(xa.dot(xa)).reshape(shape, )
         xn = x0 + xa + xb
 
-        if np.any(variance(*xn) < 0):
-            return recursion(funcs, var, variance, F, H, J, starter + 0.001, starter + 0.001, mini, i + 1)
+        if np.any(np.asarray(variance(*xn), dtype=float) < 0):
+            return recursion(funcs, var, variance, F, H, J, value_func, starter + 0.001, starter + 0.001, mini, i + 1)
 
-        val = give_values(funcs, var, xn)
+        val = value_func(*xn)
 
         if np.all(np.abs(val) < 1e-1):
             return xn
 
         else:
-            return recursion(funcs, var, variance, F, H, J, starter, xn, update_mini(xn, val, mini), i + 1)
+            return recursion(funcs, var, variance, F, H, J, value_func, starter, xn, update_mini(xn, val, mini), i + 1)
     return mini[0]
 
 
-def solver(funcs, var, variance, initial, F, J, H):
+def solver(funcs, var, variance, initial, F=None, J=None, H=None, value_func=None, prefer_autodiff=True):
     print("Startwert für das Lösungsverfahren wird bestimmt")
-    variance = sympy.lambdify(var, Matrix(np.array(variance)))
+    system_functions = None
+    if F is None or J is None or H is None or value_func is None:
+        system_functions = prepare_system_functions(funcs, var, prefer_autodiff=prefer_autodiff)
+        F = system_functions.F
+        J = system_functions.J
+        H = system_functions.H
+        value_func = system_functions.value_func
+    else:
+        value_func = value_func or (lambda *args: np.asarray(F(*args), dtype=float).reshape(-1))
+
+    variance = sympy.lambdify(var, Matrix(np.array(variance)), modules="numpy")
     x0 = initial.reshape((int(len(var)),))
-    mini = [x0, np.linalg.norm(give_values(funcs, var, x0))]
-    return recursion(funcs, var, variance, F, H, J, x0, x0, mini)
+    mini = [x0, np.linalg.norm(value_func(*x0))]
+    return recursion(funcs, var, variance, F, H, J, value_func, x0, x0, mini)
