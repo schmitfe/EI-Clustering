@@ -88,10 +88,10 @@ net_dict = {
     # additional scaling factor for all weights
     # - can be used to scale weights with network size
     "s": 1.0,
-    # fixed indegree - otherwise established with probability ps
-    "fixed_indegree": False,
-    # cluster network by "weight" or "probabilities"
-    "clustering": "weight",
+    # connection rule: pairwise_bernoulli, pairwise_poisson or fixed_indegree
+    "connection_rule": "pairwise_bernoulli",
+    # interpolation factor between probability (0) and weight (1) clustering
+    "kappa": 1.0,
     # ratio excitatory to inhibitory clustering,
     # rj = 0 means no clustering, which resembles a clustered network
     # with a blanket of inhibition

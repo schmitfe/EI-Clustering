@@ -35,6 +35,23 @@ A raster plot of the network activity is saved as ``clustered_ei_raster.png``.
 The code can be parallelized by using multiple threads during the NEST simulation.
 This can be done by setting the parameter ``n_vp`` in the ``run_simulation_EI.py`` script.
 
+Configuration notes
+-------------------
+
+* The network exposes a ``kappa`` parameter in ``net_dict`` that continuously interpolates between pure probability clustering (``kappa = 0``) and pure weight clustering (``kappa = 1``). Legacy ``clustering`` values of ``"probabilities"`` or ``"weight"`` are understood and mapped to the respective ``kappa`` endpoint, and numeric ``clustering`` entries are treated as shorthand for ``kappa`` to remain backward compatible with older scripts.
+* Synapses are generated according to the ``connection_rule`` entry, which accepts ``"pairwise_bernoulli"``, ``"pairwise_poisson"``, or ``"fixed_indegree"``. Bernoulli connections automatically split into several passes whenever the effective probability ``p`` exceeds one, while the Poisson variant uses NEST's ``pairwise_avg_num_conns`` argument to support dense motifs without manual splitting:
+
+  .. code-block:: python
+
+     conn_spec = {
+         "rule": "pairwise_poisson",
+         "pairwise_avg_num_conns": p_avg_num_conns,
+     }
+
+  The ``fixed_indegree`` rule deterministically samples the requested indegree from each cluster, keeping the previous behavior.
+
+Adjust these parameters directly in ``network_params.py`` before calling ``python run_simulation.py`` to run custom simulations with alternative clustering and connection statistics.
+
 Contributions to this PyNEST model implementation
 -------------------------------------------------
 

@@ -85,16 +85,10 @@ class ClusteredNetwork:
             self.connect,
         ]
 
-        if self._params["clustering"] == "weight":
-            jep = self._params["rep"]
-            jip = 1.0 + (jep - 1) * self._params["rj"]
-            self._params["jplus"] = np.array([[jep, jip], [jip, jip]])
-        elif self._params["clustering"] == "probabilities":
-            pep = self._params["rep"]
-            pip = 1.0 + (pep - 1) ** self._params["rj"]
-            self._params["pplus"] = np.array([[pep, pip], [pip, pip]])
-        else:
-            raise ValueError("Clustering type not recognized")
+        self._params["kappa"] = self._determine_kappa(
+            self._params.get("kappa"),
+            self._params.get("clustering"),
+        )
 
     def setup_nest(self):
         """Initializes the NEST kernel.
@@ -204,437 +198,167 @@ class ClusteredNetwork:
         self._populations = [E_pops, I_pops]
 
     def connect(self):
-        """Connect the excitatory and inhibitory populations with each other
-        in the EI-clustered scheme
+        """Connect the EI populations using the kappa-controlled clustering."""
 
-        Raises
-        ------
-        ValueError
-            If the clustering method is not recognized
-        """
+        N_E = self._params["N_E"]
+        N_I = self._params["N_I"]
+        N_total = N_E + N_I
 
-        if "clustering" not in self._params or self._params["clustering"] == "weight":
-            self.connect_weight()
-        elif self._params["clustering"] == "probabilities":
-            self.connect_probabilities()
-        else:
-            raise ValueError("Clustering method %s not implemented" % self._params["clustering"])
-
-    def connect_probabilities(self):
-        """Connect the clusters with a probability EI-cluster scheme
-
-        Connects the excitatory and inhibitory populations with each other
-        in the EI-clustered scheme by increasing the probabilities of the
-        connections within the clusters and decreasing the probabilities of the
-        connections between the clusters. The weights are calculated so that
-        the total input to a neuron is balanced.
-        """
-
-        #  self._populations[0] -> Excitatory population
-        #  self._populations[1] -> Inhibitory population
-
-        N = self._params["N_E"] + self._params["N_I"]  # total units
-        # if js are not given compute them so that sqrt(K) spikes equal v_thr-E_L and rows are balanced
-        # if any of the js is nan or not given
-        if self._params.get("js") is None or np.isnan(self._params.get("js")).any():
+        js = self._params.get("js")
+        if js is None or np.isnan(js).any():
             js = helper.calculate_RBN_weights(self._params)
-        js *= self._params["s"]
+        js = js * self._params["s"] / np.sqrt(N_total)
 
-        if self._params["n_clusters"] > 1:
-            pminus = (self._params["n_clusters"] - self._params["pplus"]) / float(self._params["n_clusters"] - 1)
-        else:
-            self._params["pplus"] = np.ones((2, 2))
-            pminus = np.ones((2, 2))
+        baseline = self._params["baseline_conn_prob"]
+        r_eplus = self._params["rep"]
+        r_iplus = 1.0 + (r_eplus - 1.0) * self._params["rj"]
 
-        p_plus = self._params["pplus"] * self._params["baseline_conn_prob"]
-        p_minus = pminus * self._params["baseline_conn_prob"]
+        prob_in_e, prob_out_e, weight_in_e, weight_out_e = self._mix_scales(r_eplus)
+        prob_in_i, prob_out_i, weight_in_i, weight_out_i = self._mix_scales(r_iplus)
 
-        # Connection probabilities within clusters can exceed 1. In this case, we iteratively split
-        # the connections in multiple synapse populations with probabilities < 1.
-        iterations = np.ones((2, 2), dtype=int)
-        # test if any of the probabilities is larger than 1
-        if np.any(p_plus > 1):
-            print("The probability of some connections is larger than 1.")
-            print("Pre-splitting the connections in multiple synapse populations:")
-            printoptions = np.get_printoptions()
-            np.set_printoptions(precision=2, floatmode="fixed")
-            print("p_plus:\n", p_plus)
-            print("p_minus:\n", p_minus)
-            for i in range(2):
-                for j in range(2):
-                    if p_plus[i, j] > 1:
-                        iterations[i, j] = int(np.ceil(p_plus[i, j]))
-                        p_plus[i, j] /= iterations[i, j]
-            print("\nPost-splitting the connections in multiple synapse populations:")
-            print("p_plus:\n", p_plus)
-            print("Number of synapse populations:\n", iterations)
-            np.set_printoptions(**printoptions)
+        p_plus = np.ones((2, 2))
+        p_minus = np.ones((2, 2))
+        weight_plus = np.ones((2, 2))
+        weight_minus = np.ones((2, 2))
 
-        # define the synapses and connect the populations
-
-        # Excitatory to excitatory neuron connections
-        j_ee = js[0, 0] / np.sqrt(N)
-        nest.CopyModel("static_synapse", "EE", {"weight": j_ee, "delay": self._params["delay"]})
-
-        if self._params["fixed_indegree"]:
-            K_EE_plus = int(p_plus[0, 0] * self._params["N_E"] / self._params["n_clusters"])
-            print("K_EE+: ", K_EE_plus)
-            K_EE_minus = int(p_minus[0, 0] * self._params["N_E"] / self._params["n_clusters"])
-            print("K_EE-: ", K_EE_minus)
-            conn_params_EE_plus = {
-                "rule": "fixed_indegree",
-                "indegree": K_EE_plus,
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-            conn_params_EE_minus = {
-                "rule": "fixed_indegree",
-                "indegree": K_EE_minus,
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-
-        else:
-            conn_params_EE_plus = {
-                "rule": "pairwise_bernoulli",
-                "p": p_plus[0, 0],
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-            conn_params_EE_minus = {
-                "rule": "pairwise_bernoulli",
-                "p": p_minus[0, 0],
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-        for i, pre in enumerate(self._populations[0]):
-            for j, post in enumerate(self._populations[0]):
-                if i == j:
-                    # same cluster
-                    for n in range(iterations[0, 0]):
-                        nest.Connect(pre, post, conn_params_EE_plus, "EE")
+        # Build lookup tables for in-cluster and out-of-cluster probabilities/weights for each
+        # combination of source/target types so that the double loop below can simply index them.
+        for tgt in range(2):
+            for src in range(2):
+                if tgt == 0 and src == 0:
+                    pin, pout, win, wout = (prob_in_e, prob_out_e, weight_in_e, weight_out_e)
                 else:
-                    nest.Connect(pre, post, conn_params_EE_minus, "EE")
+                    pin, pout, win, wout = (prob_in_i, prob_out_i, weight_in_i, weight_out_i)
+                p_plus[tgt, src] = baseline[tgt, src] * pin
+                p_minus[tgt, src] = baseline[tgt, src] * pout
+                weight_plus[tgt, src] = win
+                weight_minus[tgt, src] = wout
 
-        # Inhibitory to excitatory neuron connections
-        j_ei = js[0, 1] / np.sqrt(N)
-        nest.CopyModel("static_synapse", "EI", {"weight": j_ei, "delay": self._params["delay"]})
+        # Each tuple describes (synapse label, source population index, target population index).
+        connection_defs = [
+            ("EE", 0, 0),
+            ("EI", 1, 0),
+            ("IE", 0, 1),
+            ("II", 1, 1),
+        ]
 
-        if self._params["fixed_indegree"]:
-            K_EI_plus = int(p_plus[0, 1] * self._params["N_I"] / self._params["n_clusters"])
-            print("K_EI+: ", K_EI_plus)
-            K_EI_minus = int(p_minus[0, 1] * self._params["N_I"] / self._params["n_clusters"])
-            print("K_EI-: ", K_EI_minus)
-            conn_params_EI_plus = {
+        for label, src_type, tgt_type in connection_defs:
+            base_weight = js[tgt_type, src_type]
+            syn_plus = f"{label}_plus"
+            syn_minus = f"{label}_minus"
+            nest.CopyModel(
+                "static_synapse",
+                syn_plus,
+                {"weight": base_weight * weight_plus[tgt_type, src_type], "delay": self._params["delay"]},
+            )
+            nest.CopyModel(
+                "static_synapse",
+                syn_minus,
+                {"weight": base_weight * weight_minus[tgt_type, src_type], "delay": self._params["delay"]},
+            )
+
+            plus_params, plus_iterations = self._build_connection_params(p_plus[tgt_type, src_type], src_type)
+            minus_params, minus_iterations = self._build_connection_params(p_minus[tgt_type, src_type], src_type)
+
+            for tgt_cluster, post in enumerate(self._populations[tgt_type]):
+                for src_cluster, pre in enumerate(self._populations[src_type]):
+                    if tgt_cluster == src_cluster:
+                        if plus_iterations == 0:
+                            continue
+                        for _ in range(plus_iterations):
+                            nest.Connect(pre, post, plus_params, syn_plus)
+                    else:
+                        if minus_iterations == 0:
+                            continue
+                        for _ in range(minus_iterations):
+                            nest.Connect(pre, post, minus_params, syn_minus)
+
+    def _build_connection_params(self, probability, source_type):
+        """Build connection parameters for the requested rule."""
+
+        if probability <= 0:
+            return None, 0
+
+        rule = self._params.get("connection_rule", "pairwise_bernoulli")
+        rule = str(rule).lower().replace("-", "_")
+
+        if rule == "pairwise_poisson":
+            conn_params = {
+                "rule": "pairwise_poisson",
+                "pairwise_avg_num_conns": probability,
+                "allow_autapses": False,
+                "allow_multapses": True,
+            }
+            return conn_params, 1
+
+        if rule == "fixed_indegree":
+            cluster_size = (
+                self._params["N_E"] // self._params["n_clusters"]
+                if source_type == 0
+                else self._params["N_I"] // self._params["n_clusters"]
+            )
+            indegree = int(probability * cluster_size)
+            if indegree <= 0:
+                return None, 0
+            conn_params = {
                 "rule": "fixed_indegree",
-                "indegree": K_EI_plus,
+                "indegree": indegree,
                 "allow_autapses": False,
                 "allow_multapses": True,
             }
-            conn_params_EI_minus = {
-                "rule": "fixed_indegree",
-                "indegree": K_EI_minus,
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
+            return conn_params, 1
 
-        else:
-            conn_params_EI_plus = {
+        if rule == "pairwise_bernoulli":
+            iterations = 1 if probability <= 1.0 else int(np.ceil(probability))
+            effective_prob = probability / iterations
+            conn_params = {
                 "rule": "pairwise_bernoulli",
-                "p": p_plus[0, 1],
+                "p": effective_prob,
                 "allow_autapses": False,
                 "allow_multapses": True,
             }
-            conn_params_EI_minus = {
-                "rule": "pairwise_bernoulli",
-                "p": p_minus[0, 1],
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-        for i, pre in enumerate(self._populations[1]):
-            for j, post in enumerate(self._populations[0]):
-                if i == j:
-                    # same cluster
-                    for n in range(iterations[0, 1]):
-                        nest.Connect(pre, post, conn_params_EI_plus, "EI")
-                else:
-                    nest.Connect(pre, post, conn_params_EI_minus, "EI")
+            return conn_params, iterations
 
-        # Excitatory to inhibitory neuron connections
-        j_ie = js[1, 0] / np.sqrt(N)
-        nest.CopyModel("static_synapse", "IE", {"weight": j_ie, "delay": self._params["delay"]})
+        raise ValueError(f"Unknown connection rule '{self._params.get('connection_rule')}'")
 
-        if self._params["fixed_indegree"]:
-            K_IE_plus = int(p_plus[1, 0] * self._params["N_E"] / self._params["n_clusters"])
-            print("K_IE+: ", K_IE_plus)
-            K_IE_minus = int(p_minus[1, 0] * self._params["N_E"] / self._params["n_clusters"])
-            print("K_IE-: ", K_IE_minus)
-            conn_params_IE_plus = {
-                "rule": "fixed_indegree",
-                "indegree": K_IE_plus,
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-            conn_params_IE_minus = {
-                "rule": "fixed_indegree",
-                "indegree": K_IE_minus,
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
+    def _mix_scales(self, r_plus):
+        """Return probability and weight scaling factors for the given cluster ratio."""
 
-        else:
-            conn_params_IE_plus = {
-                "rule": "pairwise_bernoulli",
-                "p": p_plus[1, 0],
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-            conn_params_IE_minus = {
-                "rule": "pairwise_bernoulli",
-                "p": p_minus[1, 0],
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-        for i, pre in enumerate(self._populations[0]):
-            for j, post in enumerate(self._populations[1]):
-                if i == j:
-                    # same cluster
-                    for n in range(iterations[1, 0]):
-                        nest.Connect(pre, post, conn_params_IE_plus, "IE")
-                else:
-                    nest.Connect(pre, post, conn_params_IE_minus, "IE")
+        n_clusters = self._params["n_clusters"]
+        if n_clusters <= 1 or r_plus == 1.0:
+            return 1.0, 1.0, 1.0, 1.0
 
-        # Inhibitory to inhibitory neuron connections
-        j_ii = js[1, 1] / np.sqrt(N)
-        nest.CopyModel("static_synapse", "II", {"weight": j_ii, "delay": self._params["delay"]})
+        kappa = float(self._params["kappa"])
+        prob_in = r_plus ** (1.0 - kappa)
+        prob_out = (n_clusters - prob_in) / float(n_clusters - 1)
+        weight_in = r_plus ** kappa
+        weight_out = (n_clusters - weight_in) / float(n_clusters - 1)
+        return prob_in, prob_out, weight_in, weight_out
 
-        if self._params["fixed_indegree"]:
-            K_II_plus = int(p_plus[1, 1] * self._params["N_I"] / self._params["n_clusters"])
-            print("K_II+: ", K_II_plus)
-            K_II_minus = int(p_minus[1, 1] * self._params["N_I"] / self._params["n_clusters"])
-            print("K_II-: ", K_II_minus)
-            conn_params_II_plus = {
-                "rule": "fixed_indegree",
-                "indegree": K_II_plus,
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-            conn_params_II_minus = {
-                "rule": "fixed_indegree",
-                "indegree": K_II_minus,
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
+    @staticmethod
+    def _determine_kappa(kappa_value, clustering_value):
+        """Resolve the effective kappa parameter from legacy inputs."""
 
-        else:
-            conn_params_II_plus = {
-                "rule": "pairwise_bernoulli",
-                "p": p_plus[1, 1],
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-            conn_params_II_minus = {
-                "rule": "pairwise_bernoulli",
-                "p": p_minus[1, 1],
-                "allow_autapses": False,
-                "allow_multapses": True,
-            }
-        for i, pre in enumerate(self._populations[1]):
-            for j, post in enumerate(self._populations[1]):
-                if i == j:
-                    # same cluster
-                    for n in range(iterations[1, 1]):
-                        nest.Connect(pre, post, conn_params_II_plus, "II")
-                else:
-                    nest.Connect(pre, post, conn_params_II_minus, "II")
+        if kappa_value is not None:
+            return float(kappa_value)
+        if clustering_value is None:
+            return 1.0
 
-    def connect_weight(self):
-        """Connect the clusters with a weight EI-cluster scheme
+        if isinstance(clustering_value, str):
+            option = clustering_value.lower()
+            if option == "weight":
+                return 1.0
+            if option == "probabilities":
+                return 0.0
+            try:
+                return float(clustering_value)
+            except ValueError as exc:
+                raise ValueError("Clustering must be 'weight', 'probabilities' or a numeric value.") from exc
 
-        Connects the excitatory and inhibitory populations with
-        each other in the EI-clustered scheme by increasing the weights
-        of the connections within the clusters and decreasing the weights
-        of the connections between the clusters. The weights are calculated
-        so that the total input to a neuron is balanced.
-        """
-
-        #  self._populations[0] -> Excitatory population
-        #  self._populations[1] -> Inhibitory population
-
-        N = self._params["N_E"] + self._params["N_I"]  # total units
-
-        # if js are not given compute them so that sqrt(K) spikes equal v_thr-E_L and rows are balanced
-        # if any of the js is nan or not given
-        if self._params.get("js") is None or np.isnan(self._params.get("js")).any():
-            js = helper.calculate_RBN_weights(self._params)
-        js *= self._params["s"]
-
-        # jminus is calculated so that row sums remain constant
-        if self._params["n_clusters"] > 1:
-            jminus = (self._params["n_clusters"] - self._params["jplus"]) / float(self._params["n_clusters"] - 1)
-        else:
-            self._params["jplus"] = np.ones((2, 2))
-            jminus = np.ones((2, 2))
-
-        # define the synapses and connect the populations
-
-        # Excitatory to excitatory neuron connections
-        j_ee = js[0, 0] / np.sqrt(N)
-        nest.CopyModel(
-            "static_synapse",
-            "EE_plus",
-            {
-                "weight": self._params["jplus"][0, 0] * j_ee,
-                "delay": self._params["delay"],
-            },
-        )
-        nest.CopyModel(
-            "static_synapse",
-            "EE_minus",
-            {"weight": jminus[0, 0] * j_ee, "delay": self._params["delay"]},
-        )
-        if self._params["fixed_indegree"]:
-            K_EE = int(self._params["baseline_conn_prob"][0, 0] * self._params["N_E"] / self._params["n_clusters"])
-            print("K_EE: ", K_EE)
-            conn_params_EE = {
-                "rule": "fixed_indegree",
-                "indegree": K_EE,
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-
-        else:
-            conn_params_EE = {
-                "rule": "pairwise_bernoulli",
-                "p": self._params["baseline_conn_prob"][0, 0],
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-        for i, pre in enumerate(self._populations[0]):
-            for j, post in enumerate(self._populations[0]):
-                if i == j:
-                    # same cluster
-                    nest.Connect(pre, post, conn_params_EE, "EE_plus")
-                else:
-                    nest.Connect(pre, post, conn_params_EE, "EE_minus")
-
-        # Inhibitory to excitatory neuron connections
-        j_ei = js[0, 1] / np.sqrt(N)
-        nest.CopyModel(
-            "static_synapse",
-            "EI_plus",
-            {
-                "weight": j_ei * self._params["jplus"][0, 1],
-                "delay": self._params["delay"],
-            },
-        )
-        nest.CopyModel(
-            "static_synapse",
-            "EI_minus",
-            {"weight": j_ei * jminus[0, 1], "delay": self._params["delay"]},
-        )
-        if self._params["fixed_indegree"]:
-            K_EI = int(self._params["baseline_conn_prob"][0, 1] * self._params["N_I"] / self._params["n_clusters"])
-            print("K_EI: ", K_EI)
-            conn_params_EI = {
-                "rule": "fixed_indegree",
-                "indegree": K_EI,
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-        else:
-            conn_params_EI = {
-                "rule": "pairwise_bernoulli",
-                "p": self._params["baseline_conn_prob"][0, 1],
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-        for i, pre in enumerate(self._populations[1]):
-            for j, post in enumerate(self._populations[0]):
-                if i == j:
-                    # same cluster
-                    nest.Connect(pre, post, conn_params_EI, "EI_plus")
-                else:
-                    nest.Connect(pre, post, conn_params_EI, "EI_minus")
-
-        # Excitatory to inhibitory neuron connections
-        j_ie = js[1, 0] / np.sqrt(N)
-        nest.CopyModel(
-            "static_synapse",
-            "IE_plus",
-            {
-                "weight": j_ie * self._params["jplus"][1, 0],
-                "delay": self._params["delay"],
-            },
-        )
-        nest.CopyModel(
-            "static_synapse",
-            "IE_minus",
-            {"weight": j_ie * jminus[1, 0], "delay": self._params["delay"]},
-        )
-
-        if self._params["fixed_indegree"]:
-            K_IE = int(self._params["baseline_conn_prob"][1, 0] * self._params["N_E"] / self._params["n_clusters"])
-            print("K_IE: ", K_IE)
-            conn_params_IE = {
-                "rule": "fixed_indegree",
-                "indegree": K_IE,
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-        else:
-            conn_params_IE = {
-                "rule": "pairwise_bernoulli",
-                "p": self._params["baseline_conn_prob"][1, 0],
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-        for i, pre in enumerate(self._populations[0]):
-            for j, post in enumerate(self._populations[1]):
-                if i == j:
-                    # same cluster
-                    nest.Connect(pre, post, conn_params_IE, "IE_plus")
-                else:
-                    nest.Connect(pre, post, conn_params_IE, "IE_minus")
-
-        # Inhibitory to inhibitory neuron connections
-        j_ii = js[1, 1] / np.sqrt(N)
-        nest.CopyModel(
-            "static_synapse",
-            "II_plus",
-            {
-                "weight": j_ii * self._params["jplus"][1, 1],
-                "delay": self._params["delay"],
-            },
-        )
-        nest.CopyModel(
-            "static_synapse",
-            "II_minus",
-            {"weight": j_ii * jminus[1, 1], "delay": self._params["delay"]},
-        )
-        if self._params["fixed_indegree"]:
-            K_II = int(self._params["baseline_conn_prob"][1, 1] * self._params["N_I"] / self._params["n_clusters"])
-            print("K_II: ", K_II)
-            conn_params_II = {
-                "rule": "fixed_indegree",
-                "indegree": K_II,
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-        else:
-            conn_params_II = {
-                "rule": "pairwise_bernoulli",
-                "p": self._params["baseline_conn_prob"][1, 1],
-                "allow_autapses": False,
-                "allow_multapses": False,
-            }
-        for i, pre in enumerate(self._populations[1]):
-            for j, post in enumerate(self._populations[1]):
-                if i == j:
-                    # same cluster
-                    nest.Connect(pre, post, conn_params_II, "II_plus")
-                else:
-                    nest.Connect(pre, post, conn_params_II, "II_minus")
+        try:
+            return float(clustering_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Clustering must be 'weight', 'probabilities' or a numeric value.") from exc
 
     def create_stimulation(self):
         """Create a current source and connect it to clusters."""
