@@ -34,6 +34,9 @@ class ERFResult:
 
 class RateSystem:
     """General mean-field solver with helper utilities for ERF and fixpoints."""
+    # Minimum allowed variance to prevent numerical instabilities.
+    # Chosen small enough to avoid affecting dynamics, only avoids divide-by-zero.
+    VAR_EPS = 1e-12
 
     def __init__(
         self,
@@ -42,13 +45,17 @@ class RateSystem:
         *,
         focus_population: Optional[Union[int, Sequence[int]]] = None,
         prefer_jax: bool = True,
-        max_steps: int = 256,
+        root_tol: float = 1e-9,
+        max_function_evals: int = 4000,
+        max_newton_steps: Optional[int] = 256,
         **network_kwargs,
     ) -> None:
         self.parameter = dict(parameter)
         self.v_focus = float(v_focus)
         self.prefer_jax = bool(prefer_jax)
-        self.max_steps = int(max_steps)
+        self.root_tol = root_tol
+        self.max_function_evals = max_function_evals
+        self.max_steps = max_newton_steps
         self.network_kwargs = dict(network_kwargs)
         self.A, self.B, self.bias, self.tau = self._build_dynamics(self.parameter, **self.network_kwargs)
         self.population_count = int(self.A.shape[0])
@@ -151,12 +158,12 @@ class RateSystem:
 
     def _phi_numpy(self, full_rates: np.ndarray) -> np.ndarray:
         mean = self.A.dot(full_rates) + self.bias
-        var = np.maximum(self.B.dot(full_rates), 1e-12)
+        var = np.maximum(self.B.dot(full_rates), self.VAR_EPS)
         return 0.5 * (1 - special.erf(-mean / np.sqrt(2.0 * var)))
 
     def _phi_jacobian_numpy(self, full_rates: np.ndarray) -> np.ndarray:
         mean = self.A.dot(full_rates) + self.bias
-        var = np.maximum(self.B.dot(full_rates), 1e-12)
+        var = np.maximum(self.B.dot(full_rates), self.VAR_EPS)
         inv_sqrt = 1.0 / np.sqrt(2.0 * var)
         exp_term = np.exp(-(mean ** 2) / (2.0 * var))
         coeff = (1.0 / np.sqrt(np.pi)) * exp_term * inv_sqrt
@@ -173,11 +180,11 @@ class RateSystem:
 
     @staticmethod
     def _jax_residual(x, args):
-        A, B, bias, tau, v_focus, focus_vector, selector, membership, reduction = args
+        A, B, bias, tau, v_focus, focus_vector, selector, membership, reduction, var_eps = args
         group_values = selector @ x + focus_vector * v_focus
         full_rates = membership @ group_values
         mean = A @ full_rates + bias
-        var = jnp.maximum(B @ full_rates, 1e-12)
+        var = jnp.maximum(B @ full_rates, var_eps)
         phi = 0.5 * (1 - jspecial.erf(-mean / jnp.sqrt(2.0 * var)))
         residual = (phi - full_rates) / tau
         return reduction @ residual
@@ -199,15 +206,15 @@ class RateSystem:
             self.residual_numpy,
             initial,
             method="hybr",
-            tol=1e-9,
-            options={"maxfev": 4000},
+            tol=self.root_tol,
+            options={"maxfev": self.max_function_evals},
         )
         return result.x, result.fun, bool(result.success)
 
     def _solve_with_optimistix(self, initial: np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool]:
         args = self._prepare_jax_args()
         x0 = jnp.asarray(initial, dtype=jnp.float64)
-        solver = optx.Newton(rtol=1e-9, atol=1e-9, max_steps=self.max_steps)
+        solver = optx.Newton(rtol=self.root_tol, atol=self.root_tol, max_steps=self.max_steps)
         solution = optx.root_find(self._jax_residual, solver, x0, args=args)
         success = bool(solution.result == optx.RESULTS.successful)
         value = np.asarray(solution.value, dtype=float)
@@ -225,6 +232,7 @@ class RateSystem:
                 jnp.asarray(self.selector_matrix, dtype=jnp.float64),
                 jnp.asarray(self.group_membership, dtype=jnp.float64),
                 jnp.asarray(self.residual_matrix, dtype=jnp.float64),
+                float(self.VAR_EPS),
             )
         return self._jax_args
 
@@ -294,7 +302,17 @@ class RateSystem:
         When ``retry_step`` is provided, the solver retries inputs separated by
         that value whenever convergence fails. If the ERF cannot be completed
         the ``completed`` flag is ``False`` and no serialization should happen.
+        Parameters
+        ----------
+        start : float, optional
+            Lower bound of the input range for the ERF (default: 0.02).
+        end : float, optional
+            Upper bound of the input range for the ERF (default: 1.0).
+        step_number : int, optional
+            Number of steps between ``start`` and ``end`` (default: 20).
+        ...
         """
+        ERF_EPS = 1e-12  # Tolerance for floating-point comparison of v_in against end
         x_data: List[float] = []
         y_data: List[float] = []
         solves: List[np.ndarray] = []
@@ -303,7 +321,7 @@ class RateSystem:
         aborted = False
         current_initial = initial_guess
         fallback_values = list(fallback_initials) if fallback_initials is not None else [0.02, 0.2, 0.5, 0.8, 0.98]
-        while v_in <= end + 1e-12:
+        while v_in <= end + ERF_EPS:
             system = cls(parameter, v_in, **network_kwargs)
             solution, residual, success = system.solve(current_initial)
             if not success:
@@ -330,7 +348,7 @@ class RateSystem:
             if step == 0:
                 break
             v_in = system.v_focus + step
-        completed = (not aborted) and (step == 0 or v_in > end + 1e-12)
+        completed = (not aborted) and (step == 0 or v_in > end + ERF_EPS)
         return ERFResult(x_data=x_data, y_data=y_data, solves=solves, completed=completed)
 
     @classmethod
@@ -338,10 +356,29 @@ class RateSystem:
         cls,
         sweep_entry: Sequence,
         *,
-        tol: float = 1e-4,
-        interpolation_steps: int = 20000,
+        tol: float = 1e-3,
+        interpolation_steps: int = 10_000,
         **network_kwargs,
     ) -> Dict[float, Dict[str, Any]]:
+        """
+        Compute fixed points from an ERF sweep.
+        Fixed points with slope larger than 1 at the intersection with the identity line are considered unstable in the 1D map approximation.
+
+        Parameters
+        ----------
+        sweep_entry : sequence
+            Tuple (x_data, y_data, solves, parameter) as returned by generate_erf_curve.
+        tol : float, optional
+            Tolerance for detecting crossings of the identity line (x = y) and for
+            merging nearby crossings. Crossings where |x - y| <= tol are treated as
+            fixed points, and crossings within tol of each other are merged. Default
+            is 1e-3.
+        interpolation_steps : int, optional
+            Number of interpolation points used to refine the ERF before searching
+            for crossings. Larger values increase accuracy but also cost. Default
+            is 10_000.
+        """
+        SLOPE_STABILITY_THRESHOLD = 1.0 # |d(ERF)/dv| < 1 ⇒ stable in 1D; > 1 ⇒ unstable
         x_data, y_data, solves, parameter = sweep_entry
         x_interp, y_interp = interpolate_curve(x_data, y_data, steps=interpolation_steps)
         if x_interp.size == 0 or y_interp.size == 0:
@@ -385,7 +422,7 @@ class RateSystem:
                 "slope": float(slope) if np.isfinite(slope) else float("inf"),
                 "included": False,
             }
-            slope_unstable = not np.isfinite(slope) or slope > 1
+            slope_unstable = not np.isfinite(slope) or slope > SLOPE_STABILITY_THRESHOLD
             if len(solves_array) == 0:
                 entry["reason"] = "missing_erf_solution"
                 fixpoints[cross_point] = entry
