@@ -26,12 +26,22 @@ ENV/
 env/
 
 # IDE
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# Data and output
+data/
+plots/
+*.pkl
+*.pickle
+
 .DS_Store
-Thumbs.db
