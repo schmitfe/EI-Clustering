@@ -140,10 +140,27 @@ class EIClusterNetwork(RateSystem):
         j_II *= scale
 
         def mix_scales(R_plus: float) -> tuple[float, float, float, float]:
+            """
+            Compute scaling factors for in-cluster and out-of-cluster connections.
+            
+            When Q > 1: Distributes connection strengths between in-cluster (prob_in, weight_in) 
+            and out-of-cluster (prob_out, weight_out) based on the clustering strength R_plus.
+            
+            When Q = 1: Only one cluster exists, so there are no out-of-cluster connections.
+            In this case, prob_out and weight_out are set equal to prob_in and weight_in,
+            which ensures that all connection parameters use the same scaling without 
+            division by zero. The structured matrix builder will handle the single-cluster 
+            case appropriately.
+            """
             prob_in = R_plus ** (1.0 - kappa)
-            prob_out = (self.Q - prob_in) / (self.Q - 1)
             weight_in = R_plus ** kappa
-            weight_out = (self.Q - weight_in) / (self.Q - 1)
+            if self.Q == 1:
+                # With a single cluster, all connections are in-cluster
+                prob_out = prob_in
+                weight_out = weight_in
+            else:
+                prob_out = (self.Q - prob_in) / (self.Q - 1)
+                weight_out = (self.Q - weight_in) / (self.Q - 1)
             return prob_in, prob_out, weight_in, weight_out
 
         P_scale_in_E, P_scale_out_E, J_scale_in_E, J_scale_out_E = mix_scales(R_Eplus)
