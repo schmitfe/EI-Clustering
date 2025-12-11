@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from rate_system import RateSystem
+from .rate_system import RateSystem
 
 
 class EIClusterNetwork(RateSystem):

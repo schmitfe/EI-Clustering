@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 
-from ei_cluster_network import EIClusterNetwork
-from rate_system import (
+from MeanField.ei_cluster_network import EIClusterNetwork
+from MeanField.rate_system import (
     ERFResult,
     aggregate_data,
     ensure_output_folder,

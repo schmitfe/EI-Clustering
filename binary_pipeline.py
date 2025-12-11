@@ -8,7 +8,7 @@ import numpy as np
 
 from BinaryNetwork.ClusteredEI_network import ClusteredEI_network
 
-from rate_system import ensure_output_folder
+from MeanField.rate_system import ensure_output_folder
 from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg, write_yaml_config
 
 
