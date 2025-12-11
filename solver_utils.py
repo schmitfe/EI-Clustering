@@ -126,7 +126,7 @@ def prepare_system_functions(
     Parameters
     ----------
     funcs:
-        The symbolic expressions describing the residual vector (phi_minus).
+        The symbolic expressions describing the residual vector.
     var:
         The ordered sequence of variable names matching the symbolic expressions.
     prefer_autodiff:
