@@ -17,3 +17,15 @@ kappa: 0.0
 connection_type: bernoulli
 m_X: 0.03
 collapse_types: true
+initial_activity:
+  mode: bernoulli
+  excitatory: null
+  inhibitory: null
+binary:
+  warmup_steps: 5000
+  simulation_steps: 20000
+  sample_interval: 10
+  batch_size: 10
+  seed: null
+  output_name: activity_trace
+  plot_activity: false
