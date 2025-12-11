@@ -19,6 +19,12 @@ from sympy import Matrix, Symbol, diff
 
 logger = logging.getLogger(__name__)
 
+
+def _is_debug_mode() -> bool:
+    """Check if debug mode is enabled via environment variable."""
+    return os.environ.get("EI_CLUSTERING_DEBUG", "").lower() in ("1", "true", "yes")
+
+
 try:
     import jax
     import jax.numpy as jnp
@@ -158,9 +164,9 @@ def prepare_system_functions(
                 str(e)
             )
             # In debug mode, re-raise the exception to help developers diagnose issues
-            if os.environ.get("EI_CLUSTERING_DEBUG", "").lower() in ("1", "true", "yes"):
+            if _is_debug_mode():
                 raise
-            
+
             backend = "sympy"
             key = _cache_key(funcs, var_names, backend)
             if key in _SYSTEM_CACHE:
