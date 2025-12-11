@@ -141,9 +141,14 @@ class EIClusterNetwork(RateSystem):
 
         def mix_scales(R_plus: float) -> tuple[float, float, float, float]:
             prob_in = R_plus ** (1.0 - kappa)
-            prob_out = (self.Q - prob_in) / (self.Q - 1)
             weight_in = R_plus ** kappa
-            weight_out = (self.Q - weight_in) / (self.Q - 1)
+            if self.Q == 1:
+                # With a single cluster, all connections are in-cluster
+                prob_out = prob_in
+                weight_out = weight_in
+            else:
+                prob_out = (self.Q - prob_in) / (self.Q - 1)
+                weight_out = (self.Q - weight_in) / (self.Q - 1)
             return prob_in, prob_out, weight_in, weight_out
 
         P_scale_in_E, P_scale_out_E, J_scale_in_E, J_scale_out_E = mix_scales(R_Eplus)
