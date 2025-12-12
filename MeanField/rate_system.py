@@ -222,8 +222,8 @@ class RateSystem:
     def _solve_with_optimistix(self, initial: np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool]:
         args = self._prepare_jax_args()
         x0 = jnp.asarray(initial, dtype=jnp.float64)
-        solver = optx.Newton(rtol=self.root_tol, atol=self.root_tol, max_steps=self.max_steps)
-        solution = optx.root_find(self._jax_residual, solver, x0, args=args)
+        solver = optx.Newton(rtol=self.root_tol, atol=self.root_tol)
+        solution = optx.root_find(self._jax_residual, solver, x0, max_steps=self.max_steps, args=args)
         success = bool(solution.result == optx.RESULTS.successful)
         value = np.asarray(solution.value, dtype=float)
         return value, self.residual_numpy(value), success
