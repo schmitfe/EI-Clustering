@@ -73,7 +73,7 @@ def _save_activity_plot(states: np.ndarray, interval: int, parameter: Dict, path
     neuron_count = states.shape[1]
     fig_width = max(steps / 80.0, 6.0)
     fig_height = max(neuron_count / 400.0, 4.5)
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    fig, ax = plt.subplots(figsize=(10, 6))
     mesh = ax.imshow(states.T, interpolation="none", aspect="auto", origin="lower", cmap="binary")
     ax.set_xlabel(f"Sample index (interval={interval})")
     ax.set_ylabel("Neuron index")
@@ -81,6 +81,73 @@ def _save_activity_plot(states: np.ndarray, interval: int, parameter: Dict, path
     ax.set_title(title)
     cbar = fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label("State (0/1)")
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+
+
+def _save_activity_onset_plot(states: np.ndarray, interval: int, parameter: Dict, path: str) -> None:
+    if states.size == 0:
+        raise RuntimeError("Cannot plot activity: no neuron states were recorded.")
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("matplotlib is required to save activity plots. Install it via 'pip install matplotlib'.") from exc
+    steps, neuron_count = states.shape
+    state_int = states.astype(np.int16, copy=False)
+    event_times: List[np.ndarray] = []
+    event_neurons: List[np.ndarray] = []
+    if steps > 1:
+        transitions = np.argwhere(np.diff(state_int, axis=0) == 1)
+        if transitions.size:
+            event_times.append(transitions[:, 0] + 1)
+            event_neurons.append(transitions[:, 1])
+    if event_times:
+        onset_times = np.concatenate(event_times)
+        onset_neurons = np.concatenate(event_neurons)
+    else:
+        onset_times = np.zeros(0, dtype=int)
+        onset_neurons = np.zeros(0, dtype=int)
+    excitatory_count = int(parameter.get("N_E", neuron_count) or 0)
+    excitatory_count = max(0, min(excitatory_count, neuron_count))
+    excit_mask = onset_neurons < excitatory_count
+    inhib_mask = onset_neurons >= excitatory_count
+    excit_times = onset_times[excit_mask]
+    excit_neurons = onset_neurons[excit_mask]
+    inhib_times = onset_times[inhib_mask]
+    inhib_neurons = onset_neurons[inhib_mask]
+    #fig_width = max(steps / 80.0, 6.0)
+    #fig_height = max(neuron_count / 400.0, 4.5)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    if excit_times.size:
+        ax.scatter(
+            excit_times * interval,
+            excit_neurons,
+            s=18,
+            marker=".",
+            color="black",
+            linewidths=0.8,
+            label="Excitatory",
+        )
+    if inhib_times.size:
+        ax.scatter(
+            inhib_times * interval,
+            inhib_neurons,
+            s=18,
+            marker=".",
+            color="#8B0000",
+            linewidths=0.8,
+            label="Inhibitory",
+        )
+    ax.set_ylim(-0.5, neuron_count - 0.5)
+    ax.set_xlabel(f"Sample index (interval={interval})")
+    ax.set_ylabel("Neuron index")
+    ax.set_title(f"Binary activity onsets (R_Eplus={parameter.get('R_Eplus')}, R_j={parameter.get('R_j')})")
+    if excit_times.size and inhib_times.size:
+        ax.legend(loc="upper right")
     fig.tight_layout()
     fig.savefig(path, dpi=200)
     plt.close(fig)
@@ -141,9 +208,12 @@ def main() -> None:
         seed=seed,
     )
     plot_path = None
+    onset_plot_path = None
     if binary_cfg.get("plot_activity"):
         plot_path = os.path.join(binary_folder, f"{output_name}_activity.png")
         _save_activity_plot(states, interval, parameter, plot_path)
+        onset_plot_path = os.path.join(binary_folder, f"{output_name}_activity_onsets.png")
+        _save_activity_onset_plot(states, interval, parameter, onset_plot_path)
     summary = {
         "warmup_steps": warmup_steps,
         "simulation_steps": total_steps,
@@ -156,6 +226,7 @@ def main() -> None:
         "activity_plot": {
             "enabled": bool(binary_cfg.get("plot_activity")),
             "file": os.path.basename(plot_path) if plot_path else None,
+            "onsets_file": os.path.basename(onset_plot_path) if onset_plot_path else None,
         },
     }
     write_yaml_config(summary, os.path.join(binary_folder, f"{output_name}_summary.yaml"))
