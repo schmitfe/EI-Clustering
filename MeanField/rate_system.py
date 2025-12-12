@@ -14,7 +14,9 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 try:  # pragma: no cover - optional dependency
     from jax import config as jax_config
+
     jax_config.update("jax_enable_x64", True)
+    import jax
     import jax.numpy as jnp
     from jax.scipy import special as jspecial
     import optimistix as optx
@@ -25,6 +27,8 @@ except Exception:  # pragma: no cover - optional dependency
     jspecial = None
     optx = None
     HAS_JAX = False
+
+JAX_SOLVER_CACHE: Dict[Tuple[int, float, int], Dict[str, Any]] = {}
 
 
 @dataclass
@@ -58,7 +62,14 @@ class RateSystem:
         self.prefer_jax = bool(prefer_jax)
         self.root_tol = root_tol
         self.max_function_evals = max_function_evals
-        self.max_steps = max_newton_steps
+        default_steps = 256
+        if max_newton_steps is None:
+            self.max_steps = default_steps
+        else:
+            steps = int(max_newton_steps)
+            if steps <= 0:
+                raise ValueError("max_newton_steps must be positive.")
+            self.max_steps = steps
         self.network_kwargs = dict(network_kwargs)
         self.A, self.B, self.bias, self.tau = self._build_dynamics(self.parameter, **self.network_kwargs)
         self.population_count = int(self.A.shape[0])
@@ -182,8 +193,8 @@ class RateSystem:
         return self.residual_matrix @ residual
 
     @staticmethod
-    def _jax_residual(x, args):
-        A, B, bias, tau, v_focus, focus_vector, selector, membership, reduction, var_eps = args
+    def _jax_residual(x, v_focus, args):
+        A, B, bias, tau, focus_vector, selector, membership, reduction, var_eps = args
         group_values = selector @ x + focus_vector * v_focus
         full_rates = membership @ group_values
         mean = A @ full_rates + bias
@@ -221,12 +232,15 @@ class RateSystem:
 
     def _solve_with_optimistix(self, initial: np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool]:
         args = self._prepare_jax_args()
+        solver_entry = self._get_jax_solver()
+        if solver_entry is None:
+            raise RuntimeError("Optimistix solver is unavailable.")
         x0 = jnp.asarray(initial, dtype=jnp.float64)
-        solver = optx.Newton(rtol=self.root_tol, atol=self.root_tol)
-        solution = optx.root_find(self._jax_residual, solver, x0, max_steps=self.max_steps, args=args)
-        success = bool(solution.result == optx.RESULTS.successful)
-        value = np.asarray(solution.value, dtype=float)
-        return value, self.residual_numpy(value), success
+        v_focus = jnp.asarray(float(self.v_focus), dtype=jnp.float64)
+        value, status, _ = solver_entry["single"](x0, v_focus, args)
+        success = bool(np.asarray(status, dtype=bool))
+        value_np = np.asarray(value, dtype=float)
+        return value_np, self.residual_numpy(value_np), success
 
     def _prepare_jax_args(self):
         if self._jax_args is None:
@@ -235,7 +249,6 @@ class RateSystem:
                 jnp.asarray(self.B, dtype=jnp.float64),
                 jnp.asarray(self.bias, dtype=jnp.float64),
                 jnp.asarray(self.tau, dtype=jnp.float64),
-                float(self.v_focus),
                 jnp.asarray(self.focus_vector, dtype=jnp.float64),
                 jnp.asarray(self.selector_matrix, dtype=jnp.float64),
                 jnp.asarray(self.group_membership, dtype=jnp.float64),
@@ -243,6 +256,18 @@ class RateSystem:
                 float(self.VAR_EPS),
             )
         return self._jax_args
+
+    def _get_jax_solver(self):
+        if not (self.use_jax and HAS_JAX and optx is not None):
+            return None
+        if self.dim == 0:
+            return None
+        key = (self.dim, float(self.root_tol), int(self.max_steps))
+        entry = JAX_SOLVER_CACHE.get(key)
+        if entry is None:
+            entry = _build_jax_solver_entry(self.dim, float(self.root_tol), int(self.max_steps))
+            JAX_SOLVER_CACHE[key] = entry
+        return entry
 
     def phi_numpy(self, x: np.ndarray) -> np.ndarray:
         rates = self._full_rates_numpy(np.asarray(x, dtype=float))
@@ -291,6 +316,40 @@ class RateSystem:
             f"Initial guess must have length {self.dim}, {self.group_count}, {self.population_count}, or {non_focus_count}, got {arr.size}."
         )
 
+    def solve_sequence(
+        self,
+        v_focus_values: Sequence[float],
+        initial_guess: Optional[np.ndarray] = None,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        values = np.asarray(list(v_focus_values), dtype=float)
+        if values.size == 0:
+            return np.zeros((0, self.dim)), np.zeros((0,), dtype=bool)
+        if self.dim == 0:
+            zeros = np.zeros((values.size, 0), dtype=float)
+            return zeros, np.ones((values.size,), dtype=bool)
+        if not (self.use_jax and HAS_JAX and optx is not None):
+            return None
+        solver_entry = self._get_jax_solver()
+        if solver_entry is None:
+            return None
+        args = self._prepare_jax_args()
+        initial = self._coerce_initial(initial_guess)
+        x0 = jnp.asarray(initial, dtype=jnp.float64)
+        v_seq = jnp.asarray(values, dtype=jnp.float64)
+        try:
+            solutions, statuses, _ = solver_entry["scan"](x0, v_seq, args)
+        except (ValueError, RuntimeError, TypeError, AttributeError) as exc:
+            logger.warning(
+                "Optimistix sweep failed with %s: %s. Falling back to sequential solver.",
+                type(exc).__name__,
+                str(exc),
+            )
+            self.use_jax = False
+            return None
+        solution_np = np.asarray(solutions, dtype=float)
+        success = np.asarray(statuses, dtype=bool)
+        return solution_np, success
+
     # --- class helpers --------------------------------------------------
     @classmethod
     def generate_erf_curve(
@@ -324,39 +383,97 @@ class RateSystem:
         x_data: List[float] = []
         y_data: List[float] = []
         solves: List[np.ndarray] = []
-        v_in = float(start)
         step = (end - start) / max(step_number, 1)
         aborted = False
-        current_initial = initial_guess
         fallback_values = list(fallback_initials) if fallback_initials is not None else [0.02, 0.2, 0.5, 0.8, 0.98]
-        while v_in <= end + ERF_EPS:
-            system = cls(parameter, v_in, **network_kwargs)
-            solution, residual, success = system.solve(current_initial)
-            if not success:
-                for seed in fallback_values:
-                    if system.dim == 0:
-                        candidate = np.zeros((0,), dtype=float)
-                    else:
-                        candidate = np.full((system.dim,), float(seed), dtype=float)
-                    solution, residual, success = system.solve(candidate)
-                    if success:
-                        break
-                if retry_step is not None and not success:
-                    v_in += retry_step
-                    current_initial = solution
-                    continue
-                if not success:
-                    aborted = True
-                    break
-            phi_values = system.phi_numpy(solution)
-            x_data.append(system.v_focus)
-            y_data.append(system.focus_output(phi_values))
-            solves.append(solution)
-            current_initial = solution
+        vector_values: Optional[List[float]] = None
+        if retry_step is None:
+            vector_values = []
             if step == 0:
-                break
-            v_in = system.v_focus + step
-        completed = (not aborted) and (step == 0 or v_in > end + ERF_EPS)
+                vector_values.append(float(start))
+            else:
+                cursor = float(start)
+                while cursor <= end + ERF_EPS:
+                    vector_values.append(cursor)
+                    cursor += step
+        initial_focus = float(start)
+        if vector_values:
+            initial_focus = float(vector_values[0])
+        system = cls(parameter, initial_focus, **network_kwargs)
+        current_initial = initial_guess
+        prefetched_solutions: Optional[np.ndarray] = None
+        prefix_limit = 0
+        if vector_values and system.use_jax:
+            seq_result = system.solve_sequence(vector_values, initial_guess=current_initial)
+            if seq_result is not None:
+                prefetched_solutions, success_flags = seq_result
+                failure = np.flatnonzero(~success_flags)
+                prefix_limit = int(failure[0]) if failure.size else len(vector_values)
+        if vector_values is not None:
+            total_points = len(vector_values)
+            idx = 0
+            while idx < total_points:
+                v_in = vector_values[idx]
+                system.v_focus = float(v_in)
+                use_prefetched = prefetched_solutions is not None and idx < prefix_limit
+                if use_prefetched:
+                    solution = np.asarray(prefetched_solutions[idx], dtype=float)
+                    success = True
+                else:
+                    solution, residual, success = system.solve(current_initial)
+                    if not success:
+                        for seed in fallback_values:
+                            if system.dim == 0:
+                                candidate = np.zeros((0,), dtype=float)
+                            else:
+                                candidate = np.full((system.dim,), float(seed), dtype=float)
+                            solution, residual, success = system.solve(candidate)
+                            if success:
+                                break
+                        if not success:
+                            aborted = True
+                            break
+                phi_values = system.phi_numpy(solution)
+                x_data.append(system.v_focus)
+                y_data.append(system.focus_output(phi_values))
+                solves.append(solution)
+                current_initial = solution
+                idx += 1
+            completed = (not aborted) and (vector_values is not None and len(x_data) == len(vector_values))
+        else:
+            v_in = float(start)
+            next_value = v_in
+            while v_in <= end + ERF_EPS:
+                system.v_focus = float(v_in)
+                solution, residual, success = system.solve(current_initial)
+                if not success:
+                    for seed in fallback_values:
+                        if system.dim == 0:
+                            candidate = np.zeros((0,), dtype=float)
+                        else:
+                            candidate = np.full((system.dim,), float(seed), dtype=float)
+                        solution, residual, success = system.solve(candidate)
+                        if success:
+                            break
+                    if retry_step is not None and not success:
+                        v_in += retry_step
+                        next_value = v_in
+                        current_initial = solution
+                        continue
+                    if not success:
+                        aborted = True
+                        break
+                phi_values = system.phi_numpy(solution)
+                x_data.append(system.v_focus)
+                y_data.append(system.focus_output(phi_values))
+                solves.append(solution)
+                current_initial = solution
+                if step == 0:
+                    next_value = float("inf")
+                    break
+                v_in = system.v_focus + step
+                next_value = v_in
+            completed = (not aborted) and (step == 0 or next_value > end + ERF_EPS)
         return ERFResult(x_data=x_data, y_data=y_data, solves=solves, completed=completed)
 
     @classmethod
@@ -470,6 +587,41 @@ class RateSystem:
                 entry["reason"] = "slope" if slope_unstable else None
             fixpoints[cross_point] = entry
         return fixpoints
+
+
+def _build_jax_solver_entry(dim: int, root_tol: float, max_steps: int):
+    if not (HAS_JAX and optx is not None):
+        raise RuntimeError("JAX/Optimistix are required for the accelerated solver.")
+    solver = optx.Newton(rtol=root_tol, atol=root_tol)
+
+    def residual_with_focus(x, packed):
+        vf, args = packed
+        return RateSystem._jax_residual(x, vf, args)
+
+    def run_one(x0, v_focus, args):
+        packed = (v_focus, args)
+        solution = optx.root_find(residual_with_focus, solver, x0, args=packed, max_steps=max_steps)
+        status = jnp.asarray(solution.result == optx.RESULTS.successful, dtype=jnp.bool_)
+        err_attr = getattr(solution, "error", None)
+        if err_attr is None:
+            error = jnp.zeros((), dtype=jnp.float64)
+        else:
+            error = jnp.asarray(err_attr, dtype=jnp.float64)
+        return solution.value, status, error
+
+    single = jax.jit(run_one)
+
+    def scan_impl(x0, v_values, args):
+        def body(carry, vf):
+            value, status, error = run_one(carry, vf, args)
+            return value, (value, status, error)
+
+        _, outputs = jax.lax.scan(body, x0, v_values)
+        values, statuses, errors = outputs
+        return values, statuses, errors
+
+    scan = jax.jit(scan_impl)
+    return {"single": single, "scan": scan}
 
 
 def interpolate_curve(x: Sequence[float], y: Sequence[float], *, steps: int = 20000) -> Tuple[np.ndarray, np.ndarray]:
