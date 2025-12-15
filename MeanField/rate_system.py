@@ -40,6 +40,16 @@ class ERFResult:
     completed: bool
 
 
+class SolverConvergenceError(RuntimeError):
+    """Raised when the Optimistix solver exhausts its iteration budget."""
+
+    def __init__(self, v_focus: float, max_steps: int):
+        message = f"Optimistix solver did not converge within {int(max_steps)} steps at v_focus={float(v_focus):.6f}."
+        super().__init__(message)
+        self.v_focus = float(v_focus)
+        self.max_steps = int(max_steps)
+
+
 class RateSystem:
     """General mean-field solver with helper utilities for ERF and fixpoints."""
     # Minimum allowed variance to prevent numerical instabilities.
@@ -212,6 +222,8 @@ class RateSystem:
         if self.use_jax:
             try:
                 return self._solve_with_optimistix(initial)
+            except SolverConvergenceError:
+                raise
             except (ValueError, RuntimeError, TypeError, AttributeError) as e:
                 logger.warning(
                     "Optimistix solver failed with %s: %s. Falling back to scipy solver.",
@@ -241,10 +253,7 @@ class RateSystem:
         value, status, _ = solver_entry["single"](x0, v_focus, args)
         success = bool(np.asarray(status, dtype=bool))
         if not success:
-            raise RuntimeError(
-                f"Optimistix solver did not find a solution within {self.max_steps} steps "
-                f"at v_focus={float(self.v_focus):.6f}."
-            )
+            raise SolverConvergenceError(self.v_focus, self.max_steps)
         value_np = np.asarray(value, dtype=float)
         return value_np, self.residual_numpy(value_np), success
 
@@ -426,16 +435,32 @@ class RateSystem:
                     solution = np.asarray(prefetched_solutions[idx], dtype=float)
                     success = True
                 else:
-                    solution, residual, success = system.solve(current_initial)
+                    skip_due_to_solver = False
+                    try:
+                        solution, residual, success = system.solve(current_initial)
+                    except SolverConvergenceError as exc:
+                        logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                        skip_due_to_solver = True
+                    if skip_due_to_solver:
+                        idx += 1
+                        continue
                     if not success:
                         for seed in fallback_values:
                             if system.dim == 0:
                                 candidate = np.zeros((0,), dtype=float)
                             else:
                                 candidate = np.full((system.dim,), float(seed), dtype=float)
-                            solution, residual, success = system.solve(candidate)
+                            try:
+                                solution, residual, success = system.solve(candidate)
+                            except SolverConvergenceError as exc:
+                                logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                                skip_due_to_solver = True
+                                break
                             if success:
                                 break
+                        if skip_due_to_solver:
+                            idx += 1
+                            continue
                         if not success:
                             aborted = True
                             break
@@ -451,16 +476,40 @@ class RateSystem:
             next_value = v_in
             while v_in <= end + ERF_EPS:
                 system.v_focus = float(v_in)
-                solution, residual, success = system.solve(current_initial)
+                skip_due_to_solver = False
+                try:
+                    solution, residual, success = system.solve(current_initial)
+                except SolverConvergenceError as exc:
+                    logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                    skip_due_to_solver = True
+                if skip_due_to_solver:
+                    if step == 0:
+                        aborted = True
+                        break
+                    v_in = system.v_focus + step
+                    next_value = v_in
+                    continue
                 if not success:
                     for seed in fallback_values:
                         if system.dim == 0:
                             candidate = np.zeros((0,), dtype=float)
                         else:
                             candidate = np.full((system.dim,), float(seed), dtype=float)
-                        solution, residual, success = system.solve(candidate)
+                        try:
+                            solution, residual, success = system.solve(candidate)
+                        except SolverConvergenceError as exc:
+                            logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                            skip_due_to_solver = True
+                            break
                         if success:
                             break
+                    if skip_due_to_solver:
+                        if step == 0:
+                            aborted = True
+                            break
+                        v_in = system.v_focus + step
+                        next_value = v_in
+                        continue
                     if retry_step is not None and not success:
                         v_in += retry_step
                         next_value = v_in
@@ -562,7 +611,17 @@ class RateSystem:
             closest_idx = min(max(closest_idx, 0), len(solves_array) - 1)
             initial = solves_array[closest_idx]
             system = cls(parameter, cross_point, **network_kwargs)
-            solve, residual, success = system.solve(initial)
+            try:
+                solve, residual, success = system.solve(initial)
+            except SolverConvergenceError as exc:
+                entry["solver_success"] = False
+                entry["residual_norm"] = float("inf")
+                entry["rates"] = None
+                entry["stability"] = "unstable"
+                entry["reason"] = "solver_failed"
+                entry["error"] = str(exc)
+                fixpoints[cross_point] = entry
+                continue
             residual = np.asarray(residual, dtype=float)
             residual_norm = float(np.linalg.norm(residual)) if residual.size else 0.0
             if not np.isfinite(residual).all():
