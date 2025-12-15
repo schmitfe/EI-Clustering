@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
-from typing import Dict, List, Tuple
+import pickle
+from copy import deepcopy
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -29,6 +31,17 @@ def parse_args() -> argparse.Namespace:
         "--plot-activity",
         action="store_true",
         help="Render a heatmap from activity_trace.npz and store it next to the binary traces.",
+    )
+    parser.add_argument(
+        "--fixpoints-file",
+        type=str,
+        help="Path to an all_fixpoints_*.pkl summary to seed binary simulations from fixed points.",
+    )
+    parser.add_argument(
+        "--fixpoint-reps",
+        type=float,
+        nargs="+",
+        help="R_Eplus values (rep grid) to simulate when --fixpoints-file is provided.",
     )
     return parser.parse_args()
 
@@ -153,10 +166,12 @@ def _save_activity_onset_plot(states: np.ndarray, interval: int, parameter: Dict
     plt.close(fig)
 
 
-def main() -> None:
-    args = parse_args()
-    parameter = load_from_args(args)
-    binary_cfg = _resolve_binary_config(parameter, args)
+def run_binary_simulation(
+    parameter: Dict[str, Any],
+    binary_cfg: Dict[str, Any],
+    *,
+    output_name: str | None = None,
+) -> Dict[str, Any]:
     seed = binary_cfg.get("seed")
     if seed is not None:
         np.random.seed(int(seed))
@@ -195,9 +210,9 @@ def main() -> None:
         write_yaml_config(filtered, params_path)
     binary_folder = os.path.join(folder, "binary")
     os.makedirs(binary_folder, exist_ok=True)
-    output_name = str(binary_cfg["output_name"])
+    resolved_output_name = output_name or str(binary_cfg["output_name"])
     np.savez_compressed(
-        os.path.join(binary_folder, f"{output_name}.npz"),
+        os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         rates=rates,
         times=np.arange(rates.shape[0]) * interval,
         names=np.array(names),
@@ -210,9 +225,9 @@ def main() -> None:
     plot_path = None
     onset_plot_path = None
     if binary_cfg.get("plot_activity"):
-        plot_path = os.path.join(binary_folder, f"{output_name}_activity.png")
+        plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity.png")
         _save_activity_plot(states, interval, parameter, plot_path)
-        onset_plot_path = os.path.join(binary_folder, f"{output_name}_activity_onsets.png")
+        onset_plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity_onsets.png")
         _save_activity_onset_plot(states, interval, parameter, onset_plot_path)
     summary = {
         "warmup_steps": warmup_steps,
@@ -229,13 +244,219 @@ def main() -> None:
             "onsets_file": os.path.basename(onset_plot_path) if onset_plot_path else None,
         },
     }
-    write_yaml_config(summary, os.path.join(binary_folder, f"{output_name}_summary.yaml"))
+    summary_path = os.path.join(binary_folder, f"{resolved_output_name}_summary.yaml")
+    write_yaml_config(summary, summary_path)
     if names:
         print("Average population activities:")
         for name, value in zip(names, means):
             print(f"  {name}: {value:.4f}")
     else:
         print("No samples recorded. Increase simulation_steps or reduce sample_interval.")
+    return {
+        "binary_folder": binary_folder,
+        "output_name": resolved_output_name,
+        "names": names,
+        "means": means,
+        "trace_path": os.path.join(binary_folder, f"{resolved_output_name}.npz"),
+        "summary_path": summary_path,
+    }
+
+
+def load_fixpoint_summary(path: str) -> Dict[str, Any]:
+    with open(path, "rb") as handle:
+        payload = pickle.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Fixpoint file {path} did not contain a dictionary payload.")
+    if "metadata" not in payload or "fixpoints" not in payload:
+        raise ValueError(f"Fixpoint file {path} is missing required keys.")
+    if not isinstance(payload["metadata"], dict):
+        raise ValueError(f"Fixpoint file {path} contains malformed metadata.")
+    return payload
+
+
+def available_rep_values(fixpoints: Dict[int, Dict[str, Any]]) -> List[float]:
+    reps: List[float] = []
+    seen = set()
+    for entries in fixpoints.values():
+        for key in entries.keys():
+            rep = _parse_rep_from_key(key)
+            if rep is None or rep in seen:
+                continue
+            seen.add(rep)
+            reps.append(rep)
+    return sorted(reps)
+
+
+def focus_rep_grid(fixpoints: Dict[int, Dict[str, Any]]) -> Dict[int, List[float]]:
+    grid: Dict[int, List[float]] = {}
+    for focus_count, entries in fixpoints.items():
+        values = sorted(
+            rep
+            for rep in (_parse_rep_from_key(key) for key in entries.keys())
+            if rep is not None
+        )
+        grid[int(focus_count)] = values
+    return grid
+
+
+def simulate_fixpoint_reps(
+    fixpoint_path: str,
+    reps: Sequence[float],
+    overrides: argparse.Namespace,
+) -> None:
+    if not reps:
+        raise ValueError("No rep values were provided for the fixpoint batch mode.")
+    summary = load_fixpoint_summary(fixpoint_path)
+    metadata = summary.get("metadata") or {}
+    analysis_parameter = metadata.get("analysis_parameter")
+    if not isinstance(analysis_parameter, dict):
+        raise ValueError(f"Fixpoint file {fixpoint_path} does not define 'analysis_parameter'.")
+    base_parameter: Dict[str, Any] = deepcopy(analysis_parameter)
+    fixpoints = summary.get("fixpoints")
+    if not isinstance(fixpoints, dict) or not fixpoints:
+        raise ValueError(f"Fixpoint file {fixpoint_path} does not list any fixpoints.")
+    binary_cfg = _resolve_binary_config(base_parameter, overrides)
+    base_output_name = overrides.output_name or binary_cfg.get("output_name", "activity_trace")
+    binary_cfg = dict(binary_cfg)
+    binary_cfg["output_name"] = base_output_name
+    available = available_rep_values(fixpoints)
+    missing = [
+        rep
+        for rep in reps
+        if not any(abs(rep - candidate) <= 1e-9 for candidate in available)
+    ]
+    if missing:
+        raise ValueError(
+            f"Rep values {missing} are not available in {os.path.basename(fixpoint_path)}. "
+            f"Available reps: {available}."
+        )
+    for rep in reps:
+        rep_parameter = deepcopy(base_parameter)
+        rep_parameter["R_Eplus"] = float(rep)
+        rep_label = _format_rep_label(rep)
+        output_name = f"{base_output_name}_rep{rep_label}"
+        focus_entries = _extract_fixpoints_for_rep(fixpoints, rep)
+        if not focus_entries:
+            print(f"Warning: no fixpoints recorded for rep {rep:g} in {fixpoint_path}.")
+        print(f"Simulating binary network for rep {rep:g} (output '{output_name}').")
+        result = run_binary_simulation(rep_parameter, binary_cfg, output_name=output_name)
+        _store_fixpoint_reference(
+            result["binary_folder"],
+            output_name,
+            fixpoint_path,
+            rep,
+            focus_entries,
+            result["names"],
+            result["means"],
+            result["trace_path"],
+            result["summary_path"],
+        )
+
+
+def _parse_rep_from_key(key: str) -> float | None:
+    if "_focus" not in key:
+        return None
+    prefix, _, _ = key.partition("_focus")
+    try:
+        return float(prefix)
+    except ValueError:
+        return None
+
+
+def _extract_fixpoints_for_rep(
+    fixpoints: Dict[int, Dict[str, Any]],
+    rep: float,
+) -> Dict[int, Dict[str, Any]]:
+    extracted: Dict[int, Dict[str, Any]] = {}
+    for focus_count, entries in fixpoints.items():
+        match_key = None
+        match_entry = None
+        for key, value in entries.items():
+            rep_value = _parse_rep_from_key(str(key))
+            if rep_value is None:
+                continue
+            if abs(rep_value - rep) <= 1e-9:
+                match_key = key
+                match_entry = value
+                break
+        if match_entry is None:
+            continue
+        extracted[int(focus_count)] = {
+            "key": match_key,
+            "fixpoints": _sanitize_fixpoint_entries(match_entry),
+        }
+    return extracted
+
+
+def _sanitize_fixpoint_entries(entries: Dict[Any, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sanitized: List[Dict[str, Any]] = []
+    for point, payload in sorted(entries.items(), key=lambda item: float(item[0])):
+        clean_entry = {"value": float(point)}
+        for key, value in payload.items():
+            clean_entry[str(key)] = _clean_value(value)
+        sanitized.append(clean_entry)
+    return sanitized
+
+
+def _clean_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, dict):
+        return {k: _clean_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean_value(v) for v in value]
+    return value
+
+
+def _format_rep_label(rep: float) -> str:
+    formatted = f"{rep:.6f}".rstrip("0").rstrip(".")
+    if not formatted:
+        formatted = "0"
+    return formatted.replace("-", "m").replace(".", "_")
+
+
+def _store_fixpoint_reference(
+    binary_folder: str,
+    output_name: str,
+    fixpoint_path: str,
+    rep_value: float,
+    focus_entries: Dict[int, Dict[str, Any]],
+    names: List[str],
+    means: np.ndarray,
+    trace_path: str,
+    summary_path: str,
+) -> None:
+    rates = {name: float(value) for name, value in zip(names, means)}
+    payload = {
+        "fixpoints_file": os.path.abspath(fixpoint_path),
+        "rep_value": float(rep_value),
+        "rep_label": _format_rep_label(rep_value),
+        "trace_file": os.path.abspath(trace_path),
+        "summary_file": os.path.abspath(summary_path),
+        "population_rates": rates,
+        "focus_fixpoints": focus_entries,
+    }
+    output_path = os.path.join(binary_folder, f"{output_name}_fixpoints.yaml")
+    write_yaml_config(payload, output_path)
+    print(f"Stored fixpoint reference at {output_path}")
+
+
+def main() -> None:
+    args = parse_args()
+    if args.fixpoints_file:
+        if not args.fixpoint_reps:
+            raise ValueError("Provide at least one --fixpoint-reps value when using --fixpoints-file.")
+        simulate_fixpoint_reps(args.fixpoints_file, args.fixpoint_reps, args)
+        return
+    parameter = load_from_args(args)
+    binary_cfg = _resolve_binary_config(parameter, args)
+    run_binary_simulation(parameter, binary_cfg)
 
 
 if __name__ == "__main__":
