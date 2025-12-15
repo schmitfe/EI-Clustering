@@ -1,18 +1,92 @@
 # Created by Felix J. Schmitt on 05/30/2023.
 # Class for binary networks (state is 0 or 1)
 
+from __future__ import annotations
+
+import math
+from typing import List, Sequence
+
 import numpy as np
-import os
+from numba import njit
+
+try:  # pragma: no cover - optional dependency
+    import scipy.sparse as sp
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    sp = None
+
+
+@njit(cache=True)
+def _dense_batch_kernel(neurons, state, field, thresholds, weights):
+    """
+    Update neurons in-place for dense weight matrices.
+    Parameters
+    ----------
+    neurons : np.ndarray
+        Indices that should be updated (int64).
+    state : np.ndarray
+        Binary neuron state vector (int8).
+    field : np.ndarray
+        Cached synaptic field h = W @ state (float32).
+    thresholds : np.ndarray
+        Per-neuron thresholds (float32).
+    weights : np.ndarray
+        Dense weight matrix (float32).
+    """
+    neuron_count = weights.shape[0]
+    for idx in range(neurons.size):
+        neuron = neurons[idx]
+        old_state = state[neuron]
+        potential = field[neuron]
+        if old_state == 0:
+            new_state = 1 if potential >= thresholds[neuron] else 0
+        else:
+            new_state = 0
+        if new_state != old_state:
+            delta = new_state - old_state
+            state[neuron] = new_state
+            for target in range(neuron_count):
+                field[target] += delta * weights[target, neuron]
+
+
+@njit(cache=True)
+def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indptr):
+    """
+    Update neurons for sparse CSC weights.
+    Parameters
+    ----------
+    data, indices, indptr : np.ndarray
+        CSC column representation (float32, int32, int64/int32).
+    """
+    for idx in range(neurons.size):
+        neuron = neurons[idx]
+        old_state = state[neuron]
+        potential = field[neuron]
+        if old_state == 0:
+            new_state = 1 if potential >= thresholds[neuron] else 0
+        else:
+            new_state = 0
+        if new_state != old_state:
+            delta = new_state - old_state
+            state[neuron] = new_state
+            start = indptr[neuron]
+            end = indptr[neuron + 1]
+            for ptr in range(start, end):
+                row = indices[ptr]
+                field[row] += delta * data[ptr]
+
 
 class NetworkElement:
     def __init__(self, reference, name="Some Network Element"):
         self.name = name
         self.reference = reference
         self.view = None
+
     def set_view(self, view):
-        self.view = view
+        self.view = np.asarray(view, dtype=np.int64)
+
     def initialze(self):
         pass
+
 
 class Neuron(NetworkElement):
     def __init__(self, reference, N=1, name="Some Neuron", tau=1.0):
@@ -20,25 +94,40 @@ class Neuron(NetworkElement):
         self.N = N
         self.state = None
         self.tau = tau
+
     def update(self):
         pass
+
     def set_view(self, view):
-        self.state = self.reference.state[view[0]:view[1]]
-        self.view = view
+        super().set_view(view)
+        self.state = self.reference.state[self.view[0]:self.view[1]]
+
     def initialze(self):
         self.reference.state[self.view[0]:self.view[1]] = self._initial_state()
 
+
 class BinaryNeuronPopulation(Neuron):
-    def __init__(self, reference, N=1, threshold=1.0, name="Binary Neuron Population", tau=1.0, initializer=None, **kwargs):
+    def __init__(
+        self,
+        reference,
+        N=1,
+        threshold=1.0,
+        name="Binary Neuron Population",
+        tau=1.0,
+        initializer=None,
+        **kwargs,
+    ):
         super().__init__(reference, N, name, tau=tau)
-        self.threshold = threshold
+        self.threshold = float(threshold)
         self.initializer = initializer
+
     def update(self, weights=None, state=None, index=None, input_value=None, **kwargs):
         if input_value is None:
             if weights is None or state is None:
                 raise ValueError("weights and state have to be provided when input_value is not set")
             input_value = np.sum(weights * state)
         return np.heaviside(input_value - self.threshold, 0)
+
     def _initial_state(self):
         if callable(self.initializer):
             values = np.asarray(self.initializer(self.N), dtype=np.int16)
@@ -64,8 +153,10 @@ class BackgroundActivity(Neuron):
             self.update = self.update_stochastic
         else:
             self.update = self.update_deterministic
+
     def update_stochastic(self, weights=None, state=None, Index=None, **kwargs):
         return np.random.choice([0, 1], 1) * self.update_deterministic(weights, state, **kwargs)
+
     def update_deterministic(self, weights=None, state=None, Index=None, **kwargs):
         # if activity is a float, set all neurons to this activity
         if isinstance(self.Activity, float):
@@ -77,173 +168,307 @@ class BackgroundActivity(Neuron):
             return 1.0
 
     def initialze(self):
-        self.state = np.array([self.update() for i in range(self.N)])
+        self.state = np.array([self.update() for _ in range(self.N)])
+
 
 class Synapse(NetworkElement):
     def __init__(self, reference, pre, post, name="Some Synapse"):
-        super().__init__(reference, name= post.name + " <- " + pre.name)
+        super().__init__(reference, name=post.name + " <- " + pre.name)
         self.pre = pre
         self.post = post
-        # weights is a matrix of shape (pre.N, post.N)
-        self.weights = None
-    def set_view(self, view):
 
-        self.weights = self.reference.weights[view[1,0]:view[1,1], view[0,0]:view[0,1]]
-        self.view = view
+    def set_view(self, view):
+        super().set_view(view)
+
+    def _write_block(self, block: np.ndarray):
+        """Add a dense block to the global weight matrix (dense or sparse backend)."""
+        post_start, post_end = int(self.view[1, 0]), int(self.view[1, 1])
+        pre_start, pre_end = int(self.view[0, 0]), int(self.view[0, 1])
+        self.reference._write_weight_block(post_start, post_end, pre_start, pre_end, block)
+
     def initialze(self):
-        self.reference.weights[self.view[1, 0]:self.view[1, 1], self.view[0, 0]:self.view[0, 1]] = np.random.rand(self.post.N, self.pre.N)
+        raise NotImplementedError
+
 
 class PairwiseBernoulliSynapse(Synapse):
     def __init__(self, reference, pre, post, p=0.5, j=1.0):
-        super().__init__(reference, pre, post )
-        self.p = p
-        self.j = j
-    def initialze(self):
-        # if p is greater 1, split into two synapses
-        p = self.p
-        n_iterations = 1
-        while p > 1:
-            p /= 2
-            n_iterations += 1
-        if n_iterations > 1:
-            print("Warning: p > 1, splitting synapse into " + str(n_iterations) + " synapses")
+        super().__init__(reference, pre, post)
+        self.p = float(p)
+        self.j = float(j)
 
-        for i in range(n_iterations):
-            self.reference.weights[self.view[1, 0]:self.view[1, 1], self.view[0, 0]:self.view[0, 1]] += \
-                np.random.choice([0, self.j], size=(self.post.N, self.pre.N), p=[1-p, p])
+    def initialze(self):
+        shape = (self.post.N, self.pre.N)
+        block = np.zeros(shape, dtype=self.reference.weight_dtype)
+        p = self.p
+        iterations = 1
+        while p > 1:
+            p /= 2.0
+            iterations += 1
+        for _ in range(iterations):
+            draws = (np.random.random(size=shape) < p).astype(block.dtype, copy=False)
+            block += draws * self.j
+        self._write_block(block)
+
 
 class PoissonSynapse(Synapse):
     def __init__(self, reference, pre, post, rate=0.5, j=1.0):
         super().__init__(reference, pre, post)
-        self.rate = rate
-        self.j = j
+        self.rate = float(rate)
+        self.j = float(j)
+
     def initialze(self):
-        samples = np.random.poisson(lam=self.rate, size=(self.post.N, self.pre.N))
-        self.reference.weights[self.view[1, 0]:self.view[1, 1], self.view[0, 0]:self.view[0, 1]] += samples * self.j
+        shape = (self.post.N, self.pre.N)
+        samples = np.random.poisson(lam=self.rate, size=shape).astype(self.reference.weight_dtype, copy=False)
+        self._write_block(samples * self.j)
+
 
 class FixedIndegreeSynapse(Synapse):
     def __init__(self, reference, pre, post, p=0.5, j=1.0):
         super().__init__(reference, pre, post)
-        self.p = p
-        self.j = j
+        self.p = float(p)
+        self.j = float(j)
+
     def initialze(self):
+        block = np.zeros((self.post.N, self.pre.N), dtype=self.reference.weight_dtype)
         p = max(self.p, 0.0)
         target_count = int(round(p * self.pre.N))
         target_count = min(max(target_count, 0), self.pre.N)
         if target_count == 0:
+            self._write_block(block)
             return
-        for target in range(self.post.N):
+        for tgt in range(self.post.N):
             pres = np.random.choice(self.pre.N, size=target_count, replace=True)
-            idx_rows = self.view[1, 0] + target
-            idx_cols = self.view[0, 0] + pres
-            self.reference.weights[idx_rows, idx_cols] += self.j
+            np.add.at(block[tgt], pres, self.j)
+        self._write_block(block)
+
 
 class AllToAllSynapse(Synapse):
     def __init__(self, reference, pre, post, j=1.0):
         super().__init__(reference, pre, post)
-        self.j = j
+        self.j = float(j)
+
     def initialze(self):
-        self.reference.weights[self.view[1, 0]:self.view[1, 1], self.view[0, 0]:self.view[0, 1]] = \
-            np.ones((self.post.N, self.pre.N)) * self.j
+        block = np.full((self.post.N, self.pre.N), self.j, dtype=self.reference.weight_dtype)
+        self._write_block(block)
 
 
 class BinaryNetwork:
     def __init__(self, name="Some Binary Network"):
         self.name = name
         self.N = 0
-        self.population = []
-        self.synapses = []
-        self.state = None
-        self.weights = None
-        self.LUT = None # look up table for the update function
+        self.population: List[Neuron] = []
+        self.synapses: List[Synapse] = []
+        self.state: np.ndarray | None = None
+        self.weights_dense: np.ndarray | None = None
+        self.weights_csr = None
+        self.weights_csc = None
+        self.weights = None  # compatibility alias
+        self.LUT = None  # look up table for the update function
         self.sim_steps = 0
         self.population_lookup = None
         self.neuron_lookup = None
+        self.update_prob = None
+        self.thresholds = None
+        self.field = None
+        self.weight_mode = "dense"
+        self.weight_dtype = np.float32
+        self._sparse_rows: List[np.ndarray] = []
+        self._sparse_cols: List[np.ndarray] = []
+        self._sparse_data: List[np.ndarray] = []
 
-    def add_population(self, population):
+    def add_population(self, population: Neuron):
         self.population.append(population)
         self.N += population.N
         return population
 
-    def add_synapse(self, synapse):
+    def add_synapse(self, synapse: Synapse):
         self.synapses.append(synapse)
 
-    def initialize(self, autapse=False):
-        self.state = np.zeros(self.N, dtype=np.int16)
-        self.weights = np.zeros((self.N, self.N))
-        self.update_prob = np.zeros(self.N)
+    def initialize(
+        self,
+        autapse: bool = False,
+        weight_mode: str = "auto",
+        ram_budget_gb: float = 12.0,
+        weight_dtype=np.float32,
+    ):
+        if self.N == 0:
+            raise RuntimeError("Cannot initialize network without populations.")
+        self.weight_dtype = np.dtype(weight_dtype)
+        if self.weight_dtype not in (np.float32, np.float64):
+            raise ValueError("weight_dtype must be float32 or float64.")
+        self.state = np.zeros(self.N, dtype=np.int8)
+        self.field = np.zeros(self.N, dtype=self.weight_dtype)
+        self.update_prob = np.zeros(self.N, dtype=self.weight_dtype)
         self.population_lookup = np.zeros(self.N, dtype=np.int32)
         self.neuron_lookup = np.zeros(self.N, dtype=np.int32)
+        self.thresholds = np.zeros(self.N, dtype=self.weight_dtype)
         N_start = 0
         for idx, population in enumerate(self.population):
-            population.set_view([N_start,N_start + population.N])
+            population.set_view([N_start, N_start + population.N])
             N_start += population.N
             population.initialze()
-            # fill update_prob with the inverse tau
-            self.update_prob[population.view[0]:population.view[1]] = 1.0/population.tau
+            self.update_prob[population.view[0]:population.view[1]] = 1.0 / max(population.tau, 1e-9)
             self.population_lookup[population.view[0]:population.view[1]] = idx
-            self.neuron_lookup[population.view[0]:population.view[1]] = np.arange(population.N, dtype=np.int32)
-        self.LUT= np.array([population.view for population in self.population])
-        # normalize update_prob
-        self.update_prob /= self.update_prob.sum()
+            self.neuron_lookup[population.view[0]:population.view[1]] = np.arange(
+                population.N, dtype=np.int32
+            )
+            threshold_value = getattr(population, "threshold", 0.0)
+            self.thresholds[population.view[0]:population.view[1]] = float(threshold_value)
+        self.LUT = np.array([population.view for population in self.population])
+        total = float(self.update_prob.sum())
+        if not math.isfinite(total) or total <= 0:
+            raise RuntimeError("Invalid update probabilities. Check tau values.")
+        self.update_prob /= total
+        self.weight_mode = self._choose_weight_mode(weight_mode, ram_budget_gb)
+        self.weights_dense = None
+        self.weights_csr = None
+        self.weights_csc = None
+        self.weights = None
+        self._sparse_rows.clear()
+        self._sparse_cols.clear()
+        self._sparse_data.clear()
+        if self.weight_mode == "dense":
+            self.weights_dense = np.zeros((self.N, self.N), dtype=self.weight_dtype)
+        else:
+            if sp is None:
+                raise ModuleNotFoundError(
+                    "SciPy is required for sparse weight mode. Install it via 'pip install scipy'."
+                )
         for synapse in self.synapses:
-            synapse.set_view(np.array([[synapse.pre.view[0], synapse.pre.view[1]],[synapse.post.view[0], synapse.post.view[1]]]))
+            synapse.set_view(
+                np.array(
+                    [[synapse.pre.view[0], synapse.pre.view[1]], [synapse.post.view[0], synapse.post.view[1]]],
+                    dtype=np.int64,
+                )
+            )
             synapse.initialze()
+        if self.weight_mode == "dense":
+            if not autapse:
+                np.fill_diagonal(self.weights_dense, 0.0)
+            self.weights = self.weights_dense
+        else:
+            row = np.concatenate(self._sparse_rows) if self._sparse_rows else np.zeros(0, dtype=np.int64)
+            col = np.concatenate(self._sparse_cols) if self._sparse_cols else np.zeros(0, dtype=np.int64)
+            data = np.concatenate(self._sparse_data) if self._sparse_data else np.zeros(0, dtype=self.weight_dtype)
+            matrix = sp.coo_matrix((data, (row, col)), shape=(self.N, self.N), dtype=self.weight_dtype)
+            if not autapse:
+                matrix.setdiag(0.0)
+            matrix.sum_duplicates()
+            self.weights_csr = matrix.tocsr()
+            self.weights_csc = matrix.tocsc()
+            self.weights = self.weights_csr
+        self._recompute_field()
         self.sim_steps = 0
-        # set diagonal to zero
-        if not autapse:
-            np.fill_diagonal(self.weights, 0)
+
+    def _recompute_field(self):
+        state_float = self.state.astype(self.weight_dtype, copy=False)
+        if self.weight_mode == "dense":
+            self.field = self.weights_dense @ state_float
+        else:
+            self.field = self.weights_csr.dot(state_float).astype(self.weight_dtype, copy=False)
+
+    def _write_weight_block(self, row_start, row_end, col_start, col_end, block):
+        block = np.asarray(block, dtype=self.weight_dtype)
+        if block.shape != (row_end - row_start, col_end - col_start):
+            raise ValueError("Block shape does not match target slice.")
+        if self.weight_mode == "dense":
+            self.weights_dense[row_start:row_end, col_start:col_end] += block
+        else:
+            rows = np.arange(row_start, row_end, dtype=np.int64)
+            cols = np.arange(col_start, col_end, dtype=np.int64)
+            row_idx = np.repeat(rows, block.shape[1])
+            col_idx = np.tile(cols, block.shape[0])
+            values = block.reshape(-1)
+            mask = values != 0.0
+            if mask.any():
+                self._sparse_rows.append(row_idx[mask])
+                self._sparse_cols.append(col_idx[mask])
+                self._sparse_data.append(values[mask])
+
+    def _choose_weight_mode(self, requested: str, ram_budget_gb: float) -> str:
+        requested = str(requested or "auto").lower()
+        if requested in {"dense", "sparse"}:
+            return requested
+        if requested != "auto":
+            raise ValueError("weight_mode must be 'dense', 'sparse', or 'auto'.")
+        # Estimate dense memory footprint assuming float32.
+        bytes_per_entry = np.dtype(self.weight_dtype).itemsize
+        dense_bytes = self.N * self.N * bytes_per_entry
+        dense_gb = dense_bytes / (1024 ** 3)
+        safety = 0.6 * float(ram_budget_gb)
+        print("Simulating network as: " + "dense" if dense_gb <= safety else "sparse")
+        return "dense" if dense_gb <= safety else "sparse"
+
+    def _select_neurons(self, count: int) -> np.ndarray:
+        return np.random.choice(self.N, size=count, p=self.update_prob)
+
+    def _update_batch_dense(self, neurons: np.ndarray):
+        if neurons.size == 0:
+            return
+        _dense_batch_kernel(neurons, self.state, self.field, self.thresholds, self.weights_dense)
+
+    def _update_batch_sparse(self, neurons: np.ndarray):
+        if neurons.size == 0:
+            return
+        _sparse_batch_kernel(
+            neurons,
+            self.state,
+            self.field,
+            self.thresholds,
+            self.weights_csc.data,
+            self.weights_csc.indices,
+            self.weights_csc.indptr,
+        )
 
     def update(self):
-        # choose a random neuron according to update_prob and update it
-        #neuron = np.random.randint(self.N)
-        neuron = np.random.choice(self.N, p=self.update_prob)
-        # find the population to which the neuron belongs
-        population_idx = self.population_lookup[neuron]
+        neuron = self._select_neurons(1)
+        self._process_batch(neuron)
 
-        # find the index of the neuron in the population
-        neuronIDX = self.neuron_lookup[neuron]
-        # update the neuron
-        if self.state[neuron] == 0:
-            self.state[neuron] = self.population[population_idx].update(self.weights[neuron, :],
-                                                                    self.state, neuronIDX)
-        else:
-            self.state[neuron] = 0
-        self.sim_steps += 1
-
-    def _update_batch(self, neurons):
+    def _process_batch(self, neurons: Sequence[int]):
         neurons = np.asarray(neurons, dtype=np.int64)
-        batch_size = neurons.size
-        if batch_size == 0:
-            return
-        potentials = self.weights[neurons, :].dot(self.state)
-        for idx in range(batch_size):
-            neuron = neurons[idx]
-            population_idx = self.population_lookup[neuron]
-            neuronIDX = self.neuron_lookup[neuron]
-            old_state = self.state[neuron]
-            if old_state == 0:
-                new_state = self.population[population_idx].update(self.weights[neuron, :],
-                                                                   self.state, neuronIDX,
-                                                                   input_value=potentials[idx])
-            else:
-                new_state = 0
-            if new_state != old_state:
-                delta = new_state - old_state
-                self.state[neuron] = new_state
-                if idx + 1 < batch_size:
-                    remaining = neurons[idx + 1:]
-                    potentials[idx + 1:] += delta * self.weights[remaining, neuron]
-            self.sim_steps += 1
+        if self.weight_mode == "dense":
+            self._update_batch_dense(neurons)
+        else:
+            self._update_batch_sparse(neurons)
+        self.sim_steps += neurons.size
 
     def run(self, steps=1000, batch_size=1):
-        if batch_size <= 1:
-            for i in range(steps):
-                self.update()
-            return
+        if self.state is None or self.update_prob is None:
+            raise RuntimeError("Call initialize() before run().")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
         steps_done = 0
         while steps_done < steps:
             current_batch = min(batch_size, steps - steps_done)
-            neurons = np.random.choice(self.N, size=current_batch, p=self.update_prob)
-            self._update_batch(neurons)
+            neurons = self._select_neurons(current_batch)
+            self._process_batch(neurons)
             steps_done += current_batch
+
+
+def _build_demo_network(weight_mode: str) -> BinaryNetwork:
+    net = BinaryNetwork(f"demo-{weight_mode}")
+    pop_e = BinaryNeuronPopulation(net, N=4, threshold=0.5, tau=5.0)
+    pop_i = BinaryNeuronPopulation(net, N=4, threshold=0.5, tau=5.0)
+    net.add_population(pop_e)
+    net.add_population(pop_i)
+    net.add_synapse(PairwiseBernoulliSynapse(net, pop_e, pop_e, p=0.2, j=1.0))
+    net.add_synapse(PairwiseBernoulliSynapse(net, pop_i, pop_i, p=0.2, j=1.0))
+    net.add_synapse(PairwiseBernoulliSynapse(net, pop_e, pop_i, p=0.5, j=1.1))
+    net.add_synapse(PairwiseBernoulliSynapse(net, pop_i, pop_e, p=0.5, j=-0.8))
+    net.initialize(weight_mode=weight_mode, autapse=False, ram_budget_gb=0.1)
+    return net
+
+
+if __name__ == "__main__":
+    np.random.seed(0)
+    print("Running dense backend demo...")
+    dense_net = _build_demo_network("dense")
+    dense_net.run(steps=20, batch_size=4)
+    print("Dense state:", dense_net.state)
+    if sp is not None:
+        print("Running sparse backend demo...")
+        sparse_net = _build_demo_network("sparse")
+        sparse_net.run(steps=20, batch_size=4)
+        print("Sparse state:", sparse_net.state)
+    else:
+        print("SciPy not available; skipping sparse demo.")

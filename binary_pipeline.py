@@ -167,6 +167,13 @@ def _save_activity_onset_plot(states: np.ndarray, interval: int, parameter: Dict
     plt.close(fig)
 
 
+def _taggable_binary_config(parameter: Dict[str, Any]) -> Dict[str, Any]:
+    filtered = dict(parameter)
+    for key in ("R_Eplus", "focus_count", "focus_counts"):
+        filtered.pop(key, None)
+    return filtered
+
+
 def run_binary_simulation(
     parameter: Dict[str, Any],
     binary_cfg: Dict[str, Any],
@@ -203,8 +210,7 @@ def run_binary_simulation(
     mean_rates = {name: float(value) for name, value in zip(names, mean_values)}
     states = np.vstack(state_trace) if state_trace else np.zeros((0, network.N), dtype=np.uint8)
 
-    filtered = dict(parameter)
-    filtered.pop("R_Eplus", None)
+    filtered = _taggable_binary_config(parameter)
     tag = sim_tag_from_cfg(filtered)
     folder = ensure_output_folder(parameter, tag=tag)
     params_path = os.path.join(folder, "params.yaml")

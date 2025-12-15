@@ -439,7 +439,7 @@ class RateSystem:
                     try:
                         solution, residual, success = system.solve(current_initial)
                     except SolverConvergenceError as exc:
-                        logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                        logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
                         skip_due_to_solver = True
                     if skip_due_to_solver:
                         idx += 1
@@ -453,7 +453,7 @@ class RateSystem:
                             try:
                                 solution, residual, success = system.solve(candidate)
                             except SolverConvergenceError as exc:
-                                logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                                logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
                                 skip_due_to_solver = True
                                 break
                             if success:
@@ -480,7 +480,7 @@ class RateSystem:
                 try:
                     solution, residual, success = system.solve(current_initial)
                 except SolverConvergenceError as exc:
-                    logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                    logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
                     skip_due_to_solver = True
                 if skip_due_to_solver:
                     if step == 0:
@@ -498,7 +498,7 @@ class RateSystem:
                         try:
                             solution, residual, success = system.solve(candidate)
                         except SolverConvergenceError as exc:
-                            logger.warning("Skipping v_in %.6f: %s", float(v_in), str(exc))
+                            logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
                             skip_due_to_solver = True
                             break
                         if success:
@@ -665,7 +665,7 @@ def _build_jax_solver_entry(dim: int, root_tol: float, max_steps: int):
 
     def run_one(x0, v_focus, args):
         packed = (v_focus, args)
-        solution = optx.root_find(residual_with_focus, solver, x0, args=packed, max_steps=max_steps, throw=False)
+        solution = optx.root_find(residual_with_focus, solver, x0, args=packed, max_steps=max_steps, throw=True)
         # Keep throw=False to avoid the large Optimistix stack; failure is handled upstream.
         status = jnp.asarray(solution.result == optx.RESULTS.successful, dtype=jnp.bool_)
         err_attr = getattr(solution, "error", None)
