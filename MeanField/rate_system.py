@@ -54,7 +54,7 @@ class RateSystem:
         prefer_jax: bool = True,
         root_tol: float = 1e-9,
         max_function_evals: int = 4000,
-        max_newton_steps: Optional[int] = 256,
+        max_newton_steps: Optional[int] = 1000,
         **network_kwargs,
     ) -> None:
         self.parameter = dict(parameter)
