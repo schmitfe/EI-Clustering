@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import pickle
 from copy import deepcopy
@@ -198,7 +199,8 @@ def run_binary_simulation(
     if not names:
         names = [pop.name for pop in network.E_pops + network.I_pops]
     rates = np.vstack(trace) if trace else np.zeros((0, pop_count))
-    means = rates.mean(axis=0) if rates.size else np.zeros(pop_count)
+    mean_values = rates.mean(axis=0) if rates.size else np.zeros(pop_count)
+    mean_rates = {name: float(value) for name, value in zip(names, mean_values)}
     states = np.vstack(state_trace) if state_trace else np.zeros((0, network.N), dtype=np.uint8)
 
     filtered = dict(parameter)
@@ -235,7 +237,7 @@ def run_binary_simulation(
         "sample_interval": interval,
         "batch_size": batch_size,
         "seed": seed,
-        "mean_rates": {name: float(value) for name, value in zip(names, means)},
+        "mean_rates": mean_rates,
         "samples": rates.shape[0],
         "neurons": states.shape[1] if states.size else network.N,
         "activity_plot": {
@@ -248,18 +250,27 @@ def run_binary_simulation(
     write_yaml_config(summary, summary_path)
     if names:
         print("Average population activities:")
-        for name, value in zip(names, means):
+        for name in names:
+            value = mean_rates.get(name, 0.0)
             print(f"  {name}: {value:.4f}")
     else:
         print("No samples recorded. Increase simulation_steps or reduce sample_interval.")
-    return {
+    result = {
         "binary_folder": binary_folder,
         "output_name": resolved_output_name,
         "names": names,
-        "means": means,
+        "mean_rates": mean_rates,
         "trace_path": os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         "summary_path": summary_path,
     }
+    del trace
+    del state_trace
+    del rates
+    del states
+    del mean_values
+    del network
+    gc.collect()
+    return result
 
 
 def load_fixpoint_summary(path: str) -> Dict[str, Any]:
@@ -346,8 +357,7 @@ def simulate_fixpoint_reps(
             fixpoint_path,
             rep,
             focus_entries,
-            result["names"],
-            result["means"],
+            result["mean_rates"],
             result["trace_path"],
             result["summary_path"],
         )
@@ -427,19 +437,17 @@ def _store_fixpoint_reference(
     fixpoint_path: str,
     rep_value: float,
     focus_entries: Dict[int, Dict[str, Any]],
-    names: List[str],
-    means: np.ndarray,
+    mean_rates: Dict[str, float],
     trace_path: str,
     summary_path: str,
 ) -> None:
-    rates = {name: float(value) for name, value in zip(names, means)}
     payload = {
         "fixpoints_file": os.path.abspath(fixpoint_path),
         "rep_value": float(rep_value),
         "rep_label": _format_rep_label(rep_value),
         "trace_file": os.path.abspath(trace_path),
         "summary_file": os.path.abspath(summary_path),
-        "population_rates": rates,
+        "population_rates": dict(mean_rates),
         "focus_fixpoints": focus_entries,
     }
     output_path = os.path.join(binary_folder, f"{output_name}_fixpoints.yaml")

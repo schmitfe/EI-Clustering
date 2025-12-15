@@ -8,6 +8,12 @@ import numpy as np
 from .rate_system import RateSystem
 
 
+def _total_population(parameter: Dict) -> float:
+    if "N_E" not in parameter or "N_I" not in parameter:
+        raise ValueError("Parameters must define both N_E and N_I.")
+    return float(parameter["N_E"]) + float(parameter["N_I"])
+
+
 class EIClusterNetwork(RateSystem):
     """Specialized rate system for the EI-cluster network."""
 
@@ -104,9 +110,9 @@ class EIClusterNetwork(RateSystem):
         return groups
 
     def _build_connectivity(self, parameter: Dict, kappa: float, connection_type: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        N = parameter["N"]
         N_E = parameter["N_E"]
         N_I = parameter["N_I"]
+        N = _total_population(parameter)
         V_th = parameter["V_th"]
         g = parameter["g"]
         p0_ee = parameter["p0_ee"]
