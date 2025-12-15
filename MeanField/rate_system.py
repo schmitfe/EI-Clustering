@@ -16,6 +16,7 @@ try:  # pragma: no cover - optional dependency
     from jax import config as jax_config
 
     jax_config.update("jax_enable_x64", True)
+    import equinox as eqx
     import jax
     import jax.numpy as jnp
     from jax.scipy import special as jspecial
@@ -239,6 +240,11 @@ class RateSystem:
         v_focus = jnp.asarray(float(self.v_focus), dtype=jnp.float64)
         value, status, _ = solver_entry["single"](x0, v_focus, args)
         success = bool(np.asarray(status, dtype=bool))
+        if not success:
+            raise RuntimeError(
+                f"Optimistix solver did not find a solution within {self.max_steps} steps "
+                f"at v_focus={float(self.v_focus):.6f}."
+            )
         value_np = np.asarray(value, dtype=float)
         return value_np, self.residual_numpy(value_np), success
 
@@ -600,7 +606,8 @@ def _build_jax_solver_entry(dim: int, root_tol: float, max_steps: int):
 
     def run_one(x0, v_focus, args):
         packed = (v_focus, args)
-        solution = optx.root_find(residual_with_focus, solver, x0, args=packed, max_steps=max_steps)
+        solution = optx.root_find(residual_with_focus, solver, x0, args=packed, max_steps=max_steps, throw=False)
+        # Keep throw=False to avoid the large Optimistix stack; failure is handled upstream.
         status = jnp.asarray(solution.result == optx.RESULTS.successful, dtype=jnp.bool_)
         err_attr = getattr(solution, "error", None)
         if err_attr is None:
@@ -609,7 +616,8 @@ def _build_jax_solver_entry(dim: int, root_tol: float, max_steps: int):
             error = jnp.asarray(err_attr, dtype=jnp.float64)
         return solution.value, status, error
 
-    single = jax.jit(run_one)
+    single = eqx.filter_jit(run_one)
+        #jax.jit(run_one))
 
     def scan_impl(x0, v_values, args):
         def body(carry, vf):
@@ -620,7 +628,7 @@ def _build_jax_solver_entry(dim: int, root_tol: float, max_steps: int):
         values, statuses, errors = outputs
         return values, statuses, errors
 
-    scan = jax.jit(scan_impl)
+    scan = eqx.filter_jit(scan_impl)#jax.jit(scan_impl)
     return {"single": single, "scan": scan}
 
 
@@ -666,10 +674,20 @@ def ensure_output_folder(parameter: Dict, *, tag: Optional[str] = None) -> str:
     return folder
 
 
-def serialize_erf(file_path: str, parameter: Dict, result: ERFResult) -> Optional[str]:
+def serialize_erf(
+    file_path: str,
+    parameter: Dict,
+    result: ERFResult,
+    *,
+    focus_count: Optional[int] = None,
+) -> Optional[str]:
     if not result.completed:
         return None
-    payload = {str(parameter["R_Eplus"]): [result.x_data, result.y_data, result.solves, parameter]}
+    R_value = float(parameter["R_Eplus"])
+    focus_value = focus_count if focus_count is not None else parameter.get("focus_count", 1)
+    focus_value = 1 if focus_value is None else int(focus_value)
+    key = f"{R_value:.12g}_focus{focus_value}"
+    payload = {key: [result.x_data, result.y_data, result.solves, parameter]}
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "wb") as file:
         import pickle
