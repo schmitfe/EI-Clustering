@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
         help="Render a heatmap from activity_trace.npz and store it next to the binary traces.",
     )
     parser.add_argument(
+        "--state-chunk-size",
+        type=int,
+        help="Number of samples per neuron-state chunk written to disk (default: keep all in memory).",
+    )
+    parser.add_argument(
         "--fixpoints-file",
         type=str,
         help="Path to an all_fixpoints_*.pkl summary to seed binary simulations from fixed points.",
@@ -60,6 +65,10 @@ def _resolve_binary_config(parameter: Dict, args: argparse.Namespace) -> Dict:
     cfg["seed"] = args.seed if args.seed is not None else cfg.get("seed")
     cfg["output_name"] = args.output_name or cfg.get("output_name", "activity_trace")
     cfg["plot_activity"] = bool(args.plot_activity or cfg.get("plot_activity", False))
+    if args.state_chunk_size is not None:
+        cfg["state_chunk_size"] = max(0, int(args.state_chunk_size))
+    else:
+        cfg["state_chunk_size"] = int(cfg.get("state_chunk_size", 0) or 0)
     return cfg
 
 
@@ -194,22 +203,6 @@ def run_binary_simulation(
         raise ValueError("sample_interval must be positive.")
     total_steps = int(binary_cfg["simulation_steps"])
     samples = max(total_steps // interval, 0)
-    trace: List[np.ndarray] = []
-    state_trace: List[np.ndarray] = []
-    names: List[str] = []
-    pop_count = len(network.E_pops) + len(network.I_pops)
-    for _ in range(samples):
-        network.run(interval, batch_size=batch_size)
-        names, values = _sample_populations(network)
-        trace.append(values)
-        state_trace.append(network.state.astype(np.uint8).copy())
-    if not names:
-        names = [pop.name for pop in network.E_pops + network.I_pops]
-    rates = np.vstack(trace) if trace else np.zeros((0, pop_count))
-    mean_values = rates.mean(axis=0) if rates.size else np.zeros(pop_count)
-    mean_rates = {name: float(value) for name, value in zip(names, mean_values)}
-    states = np.vstack(state_trace) if state_trace else np.zeros((0, network.N), dtype=np.uint8)
-
     filtered = _taggable_binary_config(parameter)
     tag = sim_tag_from_cfg(filtered)
     folder = ensure_output_folder(parameter, tag=tag)
@@ -219,6 +212,51 @@ def run_binary_simulation(
     binary_folder = os.path.join(folder, "binary")
     os.makedirs(binary_folder, exist_ok=True)
     resolved_output_name = output_name or str(binary_cfg["output_name"])
+    chunk_size = int(binary_cfg.get("state_chunk_size", 0) or 0)
+    chunk_paths: List[str] = []
+    chunk_buffer: List[np.ndarray] = []
+    chunk_index = 0
+    chunk_dir = None
+    if chunk_size > 0:
+        chunk_dir = os.path.join(binary_folder, f"{resolved_output_name}_state_chunks")
+        os.makedirs(chunk_dir, exist_ok=True)
+    trace: List[np.ndarray] = []
+    state_trace: List[np.ndarray] = [] if chunk_size == 0 else []
+    names: List[str] = []
+    pop_count = len(network.E_pops) + len(network.I_pops)
+    for _ in range(samples):
+        network.run(interval, batch_size=batch_size)
+        names, values = _sample_populations(network)
+        trace.append(values)
+        state_snapshot = network.state.astype(np.uint8).copy()
+        if chunk_size > 0:
+            chunk_buffer.append(state_snapshot)
+            if len(chunk_buffer) >= chunk_size:
+                chunk_index += 1
+                chunk_path = os.path.join(chunk_dir, f"{resolved_output_name}_states_chunk{chunk_index:04d}.npy")
+                np.save(chunk_path, np.stack(chunk_buffer, axis=0))
+                relative = os.path.relpath(chunk_path, binary_folder)
+                chunk_paths.append(relative)
+                chunk_buffer.clear()
+        else:
+            state_trace.append(state_snapshot)
+    if chunk_size > 0 and chunk_buffer:
+        chunk_index += 1
+        chunk_path = os.path.join(chunk_dir, f"{resolved_output_name}_states_chunk{chunk_index:04d}.npy")
+        np.save(chunk_path, np.stack(chunk_buffer, axis=0))
+        relative = os.path.relpath(chunk_path, binary_folder)
+        chunk_paths.append(relative)
+        chunk_buffer.clear()
+
+    if not names:
+        names = [pop.name for pop in network.E_pops + network.I_pops]
+    rates = np.vstack(trace) if trace else np.zeros((0, pop_count))
+    mean_values = rates.mean(axis=0) if rates.size else np.zeros(pop_count)
+    mean_rates = {name: float(value) for name, value in zip(names, mean_values)}
+    if chunk_size > 0:
+        states = np.zeros((0, network.N), dtype=np.uint8)
+    else:
+        states = np.vstack(state_trace) if state_trace else np.zeros((0, network.N), dtype=np.uint8)
     np.savez_compressed(
         os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         rates=rates,
@@ -233,10 +271,16 @@ def run_binary_simulation(
     plot_path = None
     onset_plot_path = None
     if binary_cfg.get("plot_activity"):
-        plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity.png")
-        _save_activity_plot(states, interval, parameter, plot_path)
-        onset_plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity_onsets.png")
-        _save_activity_onset_plot(states, interval, parameter, onset_plot_path)
+        if chunk_size > 0 and states.size == 0:
+            print(
+                "Activity plotting is disabled when --state-chunk-size is used. "
+                "Re-run without chunking to create plots."
+            )
+        else:
+            plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity.png")
+            _save_activity_plot(states, interval, parameter, plot_path)
+            onset_plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity_onsets.png")
+            _save_activity_onset_plot(states, interval, parameter, onset_plot_path)
     summary = {
         "warmup_steps": warmup_steps,
         "simulation_steps": total_steps,
@@ -250,6 +294,11 @@ def run_binary_simulation(
             "enabled": bool(binary_cfg.get("plot_activity")),
             "file": os.path.basename(plot_path) if plot_path else None,
             "onsets_file": os.path.basename(onset_plot_path) if onset_plot_path else None,
+        },
+        "state_chunks": {
+            "enabled": chunk_size > 0,
+            "chunk_size": chunk_size,
+            "files": chunk_paths,
         },
     }
     summary_path = os.path.join(binary_folder, f"{resolved_output_name}_summary.yaml")

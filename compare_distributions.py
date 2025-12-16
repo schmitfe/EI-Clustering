@@ -147,9 +147,10 @@ def main() -> None:
         yaml_path = os.path.splitext(npz_path)[0] + "_fixpoints.yaml"
         focus_rates = _load_focus_from_yaml(yaml_path, excit_count)
         plt.figure(figsize=(8, 5))
+        bins=np.linspace(0,1, max(1, args.bins), endpoint=True)
         counts, _, _ = plt.hist(
             excit_rates,
-            bins=max(1, args.bins),
+            bins=bins,
             color="#7fb0ff",
             alpha=0.7,
             label="Binary excitatory bins",
@@ -176,7 +177,7 @@ def main() -> None:
         plt.title(f"Firing rates for {base_name}")
         plt.xlabel("Mean firing rate")
         plt.ylabel("Bin frequency")
-        plt.ylim(0, 200)
+        plt.xlim(0,1)
         plt.legend()
         plt.tight_layout()
         output_name = os.path.splitext(base_name)[0] + "_rate_hist.png"
