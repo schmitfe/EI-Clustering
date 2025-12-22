@@ -82,6 +82,29 @@ def _sample_populations(network: ClusteredEI_network) -> Tuple[List[str], np.nda
     return names, values
 
 
+def _apply_population_rate_initialization(
+    network: ClusteredEI_network,
+    rates: Sequence[float],
+) -> None:
+    """
+    Set the initial network state by drawing neuron activities according to
+    per-population firing probabilities.
+    """
+    pops = network.E_pops + network.I_pops
+    values = np.asarray(rates, dtype=float).ravel()
+    if values.size != len(pops):
+        raise ValueError(
+            f"population_rate_inits must list {len(pops)} entries (one per population), "
+            f"got {values.size}."
+        )
+    for pop, prob in zip(pops, values):
+        start, end = int(pop.view[0]), int(pop.view[1])
+        prob = float(np.clip(prob, 0.0, 1.0))
+        draws = (np.random.random(pop.N) < prob).astype(np.uint8)
+        network.state[start:end] = draws
+    network._recompute_field()
+
+
 def _save_activity_plot(states: np.ndarray, interval: int, parameter: Dict, path: str) -> None:
     if states.size == 0:
         raise RuntimeError("Cannot plot activity: no neuron states were recorded.")
@@ -188,12 +211,15 @@ def run_binary_simulation(
     binary_cfg: Dict[str, Any],
     *,
     output_name: str | None = None,
+    population_rate_inits: Sequence[float] | None = None,
 ) -> Dict[str, Any]:
     seed = binary_cfg.get("seed")
     if seed is not None:
         np.random.seed(int(seed))
     network = ClusteredEI_network(parameter)
     network.initialize()
+    if population_rate_inits is not None:
+        _apply_population_rate_initialization(network, population_rate_inits)
     warmup_steps = int(binary_cfg["warmup_steps"])
     batch_size = int(binary_cfg["batch_size"])
     if warmup_steps > 0:
@@ -519,7 +545,7 @@ def main() -> None:
         return
     parameter = load_from_args(args)
     binary_cfg = _resolve_binary_config(parameter, args)
-    run_binary_simulation(parameter, binary_cfg)
+    run_binary_simulation(parameter, binary_cfg,population_rate_inits=0.1*np.ones(2*parameter["Q"]))
 
 
 if __name__ == "__main__":

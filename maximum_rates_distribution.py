@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import pickle
+from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
 from binary_pipeline import run_binary_simulation
 from MeanField.rate_system import ensure_output_folder
-from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg, write_yaml_config
+from sim_config import deep_update, parse_overrides, sim_tag_from_cfg, write_yaml_config
 
 try:  # pragma: no cover - optional dependency
     import yaml
@@ -26,7 +28,23 @@ def parse_args() -> argparse.Namespace:
             "build the distribution of maximum excitatory cluster rates."
         )
     )
-    add_override_arguments(parser)
+    parser.add_argument(
+        "source",
+        help="Path to a data folder (params.yaml) or an all_fixpoints_*.pkl bundle describing the network.",
+    )
+    parser.add_argument(
+        "--fixpoints",
+        type=str,
+        help="Path to all_fixpoints_*.pkl (required if the source folder has no detectable bundle).",
+    )
+    parser.add_argument(
+        "-O",
+        "--overwrite",
+        action="append",
+        default=[],
+        metavar="path=value",
+        help="Override a parameter using dotted-path notation (may be repeated).",
+    )
     parser.add_argument("--warmup-steps", type=int, help="Override binary.warmup_steps from the config.")
     parser.add_argument("--simulation-steps", type=int, help="Override binary.simulation_steps from the config.")
     parser.add_argument("--sample-interval", type=int, help="Override binary.sample_interval from the config.")
@@ -70,12 +88,101 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Recompute per-run maxima even if cached data are available.",
     )
-    parser.add_argument(
-        "--fixpoints-yaml",
-        type=str,
-        help="Optional focus_fixpoints YAML used to mark fixed points in the histogram.",
-    )
     return parser.parse_args()
+
+
+def _load_yaml_file(path: str) -> Dict[str, Any]:
+    if yaml is None:  # pragma: no cover - optional dependency
+        raise ModuleNotFoundError(
+            "PyYAML is required to read configuration files. Install it via 'pip install pyyaml'."
+        ) from YAML_ERROR
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} does not exist.")
+    with open(path, "r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def _load_params_from_folder(folder: str) -> Dict[str, Any]:
+    params_path = os.path.join(folder, "params.yaml")
+    if not os.path.exists(params_path):
+        raise FileNotFoundError(f"{folder} does not contain params.yaml.")
+    return _load_yaml_file(params_path)
+
+
+def _apply_overrides(parameter: Dict[str, Any], overrides: Sequence[str]) -> Dict[str, Any]:
+    if not overrides:
+        return dict(parameter)
+    updates = parse_overrides(overrides)
+    return deep_update(parameter, updates)
+
+
+def _load_fixpoint_bundle(path: str) -> Dict[str, Any]:
+    with open(path, "rb") as handle:
+        payload = pickle.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} does not contain a fixpoint dictionary payload.")
+    if "metadata" not in payload or "fixpoints" not in payload:
+        raise ValueError(f"{path} is missing required fixpoint metadata.")
+    return payload
+
+
+def _parse_rep_from_key(key: str) -> float | None:
+    if "_focus" not in key:
+        return None
+    prefix, _, _ = key.partition("_focus")
+    try:
+        return float(prefix)
+    except ValueError:
+        return None
+
+
+def _find_fixpoint_bundle_for_folder(folder: str, hint: str | None = None) -> str:
+    if hint:
+        path = os.path.abspath(hint)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Fixpoint file {path} does not exist.")
+        return path
+    folder = os.path.abspath(folder)
+    folder_path = Path(folder)
+    for parent in [folder_path] + list(folder_path.parents):
+        for candidate in parent.glob("all_fixpoints_*.pkl"):
+            try:
+                bundle = _load_fixpoint_bundle(str(candidate))
+            except Exception:
+                continue
+            source_folder = bundle.get("metadata", {}).get("source_folder")
+            if source_folder and os.path.abspath(str(source_folder)) == folder:
+                return str(candidate)
+    raise FileNotFoundError(
+        f"No all_fixpoints_*.pkl file references source folder {folder}. "
+        "Use --fixpoints to specify the path explicitly."
+    )
+
+
+def _resolve_simulation_source(
+    source: str,
+    *,
+    fixpoint_hint: str | None = None,
+    overrides: Sequence[str] | None = None,
+) -> Tuple[Dict[str, Any], str | None, str]:
+    source_path = os.path.abspath(source)
+    folder_override: str | None = None
+    if os.path.isfile(source_path) and source_path.endswith(".pkl"):
+        bundle = _load_fixpoint_bundle(source_path)
+        metadata = bundle.get("metadata", {})
+        parameter = metadata.get("analysis_parameter")
+        if not isinstance(parameter, dict):
+            raise ValueError(f"{source_path} does not define analysis parameters.")
+        folder_override = metadata.get("source_folder")
+        fixpoint_path = source_path
+    elif os.path.isdir(source_path):
+        parameter = _load_params_from_folder(source_path)
+        folder_override = source_path
+        fixpoint_path = _find_fixpoint_bundle_for_folder(source_path, fixpoint_hint)
+    else:
+        raise FileNotFoundError(f"{source_path} is neither a folder nor an all_fixpoints_*.pkl file.")
+    resolved_parameter = _apply_overrides(parameter, overrides or [])
+    return resolved_parameter, folder_override, fixpoint_path
 
 
 def _resolve_binary_config(parameter: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
@@ -100,10 +207,14 @@ def _filtered_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
     return filtered
 
 
-def _prepare_output_folders(parameter: Dict[str, Any]) -> Tuple[str, str, str]:
+def _prepare_output_folders(parameter: Dict[str, Any], *, base_folder: str | None = None) -> Tuple[str, str, str]:
     filtered = _filtered_parameter_for_tag(parameter)
-    tag = sim_tag_from_cfg(filtered)
-    folder = ensure_output_folder(parameter, tag=tag)
+    if base_folder:
+        folder = os.path.abspath(base_folder)
+        os.makedirs(folder, exist_ok=True)
+    else:
+        tag = sim_tag_from_cfg(filtered)
+        folder = ensure_output_folder(parameter, tag=tag)
     params_path = os.path.join(folder, "params.yaml")
     if not os.path.exists(params_path):
         write_yaml_config(filtered, params_path)
@@ -209,32 +320,39 @@ def _extract_focus_rates(rates: Sequence[float] | None, focus_count: int, excit_
     return [float(value) for value in arr[:focus_count]]
 
 
-def _load_focus_fixpoints(path: str, excit_count: int | None) -> Dict[int, List[float]]:
-    if not path:
-        return {}
-    if yaml is None:  # pragma: no cover - optional dependency
-        raise ModuleNotFoundError(
-            "PyYAML is required to load fixpoint references. Install it via 'pip install pyyaml'."
-        ) from YAML_ERROR
+def _load_focus_fixpoints_from_bundle(
+    bundle: Dict[str, Any],
+    excit_count: int | None,
+    target_rep: float,
+) -> Dict[int, Dict[str, List[float]]]:
     if excit_count is None:
         return {}
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Fixpoint reference {path} does not exist.")
-    with open(path, "r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
-    focus_rates: Dict[int, List[float]] = {}
-    entries = data.get("focus_fixpoints", {})
-    for focus_label, payload in entries.items():
+    focus_rates: Dict[int, Dict[str, List[float]]] = {}
+    fixpoints = bundle.get("fixpoints", {})
+    for focus_label, entries in fixpoints.items():
         try:
             focus_count = int(focus_label)
-        except ValueError:
+        except (TypeError, ValueError):
             continue
-        values: List[float] = []
-        for fixpoint in payload.get("fixpoints", []):
-            rates = _extract_focus_rates(fixpoint.get("rates"), focus_count, excit_count)
-            values.extend(rates)
-        if values:
-            focus_rates[focus_count] = values
+        stable_values: List[float] = []
+        unstable_values: List[float] = []
+        for rep_label, rep_entries in entries.items():
+            rep_value = _parse_rep_from_key(str(rep_label))
+            if rep_value is None or abs(rep_value - target_rep) > 1e-9:
+                continue
+            if not isinstance(rep_entries, dict):
+                continue
+            for fixpoint in rep_entries.values():
+                rates = _extract_focus_rates(fixpoint.get("rates"), focus_count, excit_count)
+                if not rates:
+                    continue
+                stability = str(fixpoint.get("stability", "") or "").lower()
+                if stability == "stable":
+                    stable_values.extend(rates)
+                else:
+                    unstable_values.extend(rates)
+        if stable_values or unstable_values:
+            focus_rates[focus_count] = {"stable": stable_values, "unstable": unstable_values}
     return focus_rates
 
 
@@ -251,12 +369,24 @@ def _prepare_matplotlib():
 
 def main() -> None:
     args = parse_args()
-    parameter = load_from_args(args)
+    parameter, folder_hint, fixpoints_path = _resolve_simulation_source(
+        args.source,
+        fixpoint_hint=args.fixpoints,
+        overrides=args.overwrite,
+    )
+    target_rep = parameter.get("R_Eplus")
+    if target_rep is None:
+        raise ValueError(
+            "Parameter set must define R_Eplus to align fixpoints with the simulated network. "
+            "Use -O R_Eplus=<value> if it is missing."
+        )
+    target_rep = float(target_rep)
     binary_cfg = _resolve_binary_config(parameter, args)
     bin_size = max(1, int(args.bin_size))
     bins = max(1, int(args.bins))
     total_simulations = max(0, int(args.simulations))
-    folder, binary_dir, analysis_dir = _prepare_output_folders(parameter)
+    folder, binary_dir, analysis_dir = _prepare_output_folders(parameter, base_folder=folder_hint)
+    bundle = _load_fixpoint_bundle(fixpoints_path)
     metadata_path = os.path.join(analysis_dir, "metadata.yaml")
     metadata = _load_metadata(metadata_path) if os.path.exists(metadata_path) else {}
     metadata_changed = False
@@ -280,8 +410,15 @@ def main() -> None:
     if metadata_seed is None or metadata_seed != base_seed:
         metadata["base_seed"] = base_seed
         metadata_changed = True
-    if args.fixpoints_yaml:
-        metadata["focus_fixpoints_file"] = os.path.abspath(args.fixpoints_yaml)
+    stored_fixpoints = metadata.get("fixpoints_file")
+    if stored_fixpoints:
+        if os.path.abspath(str(stored_fixpoints)) != os.path.abspath(fixpoints_path):
+            raise ValueError(
+                f"Analysis folder {analysis_dir} already references fixpoints file {stored_fixpoints}. "
+                f"Requested {fixpoints_path} would mix incompatible runs."
+            )
+    else:
+        metadata["fixpoints_file"] = os.path.abspath(fixpoints_path)
         metadata_changed = True
     excitatory_clusters = metadata.get("excitatory_clusters")
     if metadata_changed:
@@ -289,7 +426,7 @@ def main() -> None:
     seeds = [base_seed + idx for idx in range(total_simulations)]
     pooled_entries: List[float] = []
     seen_seeds: List[int] = []
-    focus_reference = metadata.get("focus_fixpoints_file")
+    focus_reference = os.path.abspath(fixpoints_path)
     for seed in seeds:
         label = _format_seed_label(base_output, seed)
         trace_path = os.path.join(binary_dir, f"{label}.npz")
@@ -340,15 +477,9 @@ def main() -> None:
         bin_size=np.array(bin_size, dtype=np.int64),
         seeds=np.asarray(seen_seeds, dtype=np.int64),
     )
-    focus_rates = {}
-    reference_path = args.fixpoints_yaml or focus_reference
-    if reference_path and excitatory_clusters:
-        try:
-            focus_rates = _load_focus_fixpoints(reference_path, excitatory_clusters)
-        except FileNotFoundError as exc:
-            print(f"Fixpoint reference warning: {exc}")
-        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
-            raise exc
+    focus_rates: Dict[int, Dict[str, List[float]]] = {}
+    if excitatory_clusters:
+        focus_rates = _load_focus_fixpoints_from_bundle(bundle, excitatory_clusters, target_rep)
     plt = _prepare_matplotlib()
     fig, ax = plt.subplots(figsize=(8, 5))
     edges = np.linspace(0.0, 1.0, max(2, bins + 1), endpoint=True)
@@ -364,27 +495,42 @@ def main() -> None:
         marker_base = max_count * 1.05
         marker_step = max(max_count * 0.08, 0.05)
         colors = plt.cm.tab10(np.linspace(0, 1, max(1, len(focus_rates))))
-        for idx, (focus_count, values) in enumerate(sorted(focus_rates.items())):
-            if not values:
+        for idx, (focus_count, payload) in enumerate(sorted(focus_rates.items())):
+            stable_values = payload.get("stable", [])
+            unstable_values = payload.get("unstable", [])
+            if not stable_values and not unstable_values:
                 continue
             y_level = marker_base + idx * marker_step
-            ax.scatter(
-                values,
-                np.full(len(values), y_level),
-                marker="v",
-                s=36,
-                color=colors[idx % len(colors)],
-                edgecolor="black",
-                linewidths=0.4,
-                label=f"Focus count {focus_count}",
-            )
+            color = colors[idx % len(colors)]
+            if stable_values:
+                ax.scatter(
+                    stable_values,
+                    np.full(len(stable_values), y_level),
+                    marker="v",
+                    s=36,
+                    color=color,
+                    edgecolor="black",
+                    linewidths=0.4,
+                    label=f"Focus count {focus_count} (stable)",
+                )
+            if unstable_values:
+                ax.scatter(
+                    unstable_values,
+                    np.full(len(unstable_values), y_level),
+                    marker="v",
+                    s=36,
+                    facecolors="none",
+                    edgecolors=color,
+                    linewidths=1.0,
+                    label=f"Focus count {focus_count} (unstable)",
+                )
     ax.set_xlabel("Mean firing rate")
     ax.set_ylabel("Bin frequency")
     ax.set_title("Distribution of maximum excitatory rates")
     ax.set_xlim(0.0, 1.0)
     if focus_rates:
         ax.legend()
-    ax.tight_layout()
+    plt.tight_layout()
     hist_path = os.path.join(analysis_dir, "max_rates_histogram.png")
     fig.savefig(hist_path, dpi=200)
     plt.close(fig)
@@ -396,7 +542,7 @@ def main() -> None:
         "seeds": seen_seeds,
         "pooled_samples": len(pooled_entries),
         "bin_size": bin_size,
-        "focus_fixpoints_file": reference_path,
+        "fixpoints_file": focus_reference,
     }
     write_yaml_config(summary, os.path.join(analysis_dir, "analysis_summary.yaml"))
     print(f"Stored pooled maxima at {pooled_path}")
