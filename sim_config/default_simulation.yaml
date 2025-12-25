@@ -25,6 +25,17 @@ binary:
   simulation_steps: 20000
   sample_interval: 10
   batch_size: 10
+  state_chunk_size: 0
+  population_rate_init: 0.1
   seed: null
   output_name: activity_trace
   plot_activity: false
+  log_step_states: true
+  log_decimate_factor: 10
+  log_decimate_zero_phase: true
+  log_decimate_ftype: iir
+  update_queue:
+    enabled: true
+    chunk_size: 5000
+    excitatory_repeat: 1
+    inhibitory_repeat: 2

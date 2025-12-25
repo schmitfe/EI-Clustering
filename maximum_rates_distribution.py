@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
-from binary_pipeline import run_binary_simulation
+from binary_pipeline import ensure_binary_behavior_defaults, run_binary_simulation
 from MeanField.rate_system import ensure_output_folder
 from sim_config import deep_update, parse_overrides, sim_tag_from_cfg, write_yaml_config
 
@@ -197,7 +197,10 @@ def _resolve_binary_config(parameter: Dict[str, Any], args: argparse.Namespace) 
     cfg["batch_size"] = args.batch_size if args.batch_size is not None else cfg.get("batch_size", 1)
     cfg["seed"] = args.seed if args.seed is not None else cfg.get("seed")
     cfg["output_name"] = args.output_name or cfg.get("output_name", "activity_trace")
-    return cfg
+    queue_cfg = cfg.get("update_queue")
+    if queue_cfg is not None and not isinstance(queue_cfg, dict):
+        raise ValueError("binary.update_queue must be a mapping when provided.")
+    return ensure_binary_behavior_defaults(cfg)
 
 
 def _filtered_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
@@ -245,7 +248,7 @@ def _save_metadata(path: str, payload: Dict[str, Any]) -> None:
     write_yaml_config(payload, path)
 
 
-def _load_trace_rates(trace_path: str) -> Tuple[np.ndarray, List[str]]:
+def _load_trace_payload(trace_path: str) -> Dict[str, Any]:
     if not os.path.exists(trace_path):
         raise FileNotFoundError(f"Trace {trace_path} does not exist.")
     with np.load(trace_path, allow_pickle=True) as data:
@@ -253,7 +256,21 @@ def _load_trace_rates(trace_path: str) -> Tuple[np.ndarray, List[str]]:
             raise ValueError(f"{trace_path} does not contain 'rates' and 'names'.")
         rates = np.asarray(data["rates"], dtype=float)
         names = [str(name) for name in data["names"]]
-    return rates, names
+        times = np.asarray(data.get("times"), dtype=float) if "times" in data else np.arange(rates.shape[0])
+        states = np.asarray(data.get("neuron_states"), dtype=np.uint8) if "neuron_states" in data else np.zeros((0, 0), dtype=np.uint8)
+        sample_interval = int(np.asarray(data.get("sample_interval", 1)).item())
+    return {
+        "rates": rates,
+        "names": names,
+        "times": times,
+        "states": states,
+        "sample_interval": sample_interval,
+    }
+
+
+def _load_trace_rates(trace_path: str) -> Tuple[np.ndarray, List[str]]:
+    payload = _load_trace_payload(trace_path)
+    return payload["rates"], payload["names"]
 
 
 def _compute_maxima_from_trace(trace_path: str, bin_samples: int) -> Tuple[List[float], int]:
@@ -367,6 +384,72 @@ def _prepare_matplotlib():
     return plt
 
 
+def _plot_onset_raster(ax, states: np.ndarray, sample_interval: int, excitatory_neurons: int):
+    if states.size == 0:
+        ax.text(0.5, 0.5, "No neuron state samples", ha="center", va="center", transform=ax.transAxes)
+        ax.set_xlabel("Time (steps)")
+        ax.set_ylabel("Neuron index")
+        ax.set_title("Neuron onset raster")
+        return
+    steps, neuron_count = states.shape
+    sample_interval = max(1, int(sample_interval))
+    state_int = states.astype(np.int16, copy=False)
+    if steps <= 1:
+        ax.text(0.5, 0.5, "Insufficient samples", ha="center", va="center", transform=ax.transAxes)
+        ax.set_xlabel("Time (steps)")
+        ax.set_ylabel("Neuron index")
+        ax.set_title("Neuron onset raster")
+        return
+    transitions = np.argwhere(np.diff(state_int, axis=0) == 1)
+    if transitions.size == 0:
+        ax.text(0.5, 0.5, "No onset transitions recorded", ha="center", va="center", transform=ax.transAxes)
+        ax.set_xlabel("Time (steps)")
+        ax.set_ylabel("Neuron index")
+        ax.set_title("Neuron onset raster")
+        return
+    excitatory_limit = max(0, min(int(excitatory_neurons), neuron_count))
+    times = (transitions[:, 0] + 1) * sample_interval
+    neurons = transitions[:, 1]
+    excit_mask = neurons < excitatory_limit
+    inhib_mask = neurons >= excitatory_limit
+    if excit_mask.any():
+        ax.scatter(times[excit_mask], neurons[excit_mask], s=6, marker=".", color="black", label="Excitatory")
+    if inhib_mask.any():
+        ax.scatter(times[inhib_mask], neurons[inhib_mask], s=6, marker=".", color="#8B0000", label="Inhibitory")
+    ax.set_xlabel("Time (steps)")
+    ax.set_ylabel("Neuron index")
+    ax.set_ylim(-0.5, neuron_count - 0.5)
+    if excit_mask.any() and inhib_mask.any():
+        ax.legend(loc="upper right")
+    ax.set_title("Neuron onset raster")
+
+
+def _plot_excitatory_rates(ax, times: np.ndarray, rates: np.ndarray, names: Sequence[str]):
+    if rates.size == 0 or not names:
+        ax.text(0.5, 0.5, "No rates available", ha="center", va="center", transform=ax.transAxes)
+        ax.set_xlabel("Time (steps)")
+        ax.set_ylabel("Activity")
+        ax.set_title("Excitatory rates over time")
+        return
+    excit_indices = [idx for idx, name in enumerate(names) if name.startswith("E")]
+    if not excit_indices:
+        ax.text(0.5, 0.5, "No excitatory populations", ha="center", va="center", transform=ax.transAxes)
+        ax.set_xlabel("Time (steps)")
+        ax.set_ylabel("Activity")
+        ax.set_title("Excitatory rates over time")
+        return
+    times = np.asarray(times, dtype=float)
+    if times.size != rates.shape[0]:
+        times = np.arange(rates.shape[0], dtype=float)
+    for idx in excit_indices:
+        ax.plot(times, rates[:, idx], linewidth=0.8, label=names[idx])
+    ax.set_xlabel("Time (steps)")
+    ax.set_ylabel("Activity")
+    ax.set_title("Excitatory rates over time")
+    if len(excit_indices) <= 10:
+        ax.legend(loc="upper right", fontsize=8, ncol=2)
+
+
 def main() -> None:
     args = parse_args()
     parameter, folder_hint, fixpoints_path = _resolve_simulation_source(
@@ -427,6 +510,8 @@ def main() -> None:
     pooled_entries: List[float] = []
     seen_seeds: List[int] = []
     focus_reference = os.path.abspath(fixpoints_path)
+    example_trace_path: str | None = None
+    example_seed: int | None = None
     for seed in seeds:
         label = _format_seed_label(base_output, seed)
         trace_path = os.path.join(binary_dir, f"{label}.npz")
@@ -464,6 +549,9 @@ def main() -> None:
             excitatory_clusters = excit_count
             metadata["excitatory_clusters"] = excit_count
             metadata_changed = True
+        if example_trace_path is None and os.path.exists(trace_path):
+            example_trace_path = trace_path
+            example_seed = seed
     if metadata_changed:
         _save_metadata(metadata_path, metadata)
     if not pooled_entries:
@@ -480,10 +568,21 @@ def main() -> None:
     focus_rates: Dict[int, Dict[str, List[float]]] = {}
     if excitatory_clusters:
         focus_rates = _load_focus_fixpoints_from_bundle(bundle, excitatory_clusters, target_rep)
+    example_payload: Dict[str, Any] | None = None
+    if example_trace_path:
+        try:
+            example_payload = _load_trace_payload(example_trace_path)
+        except Exception as exc:
+            print(f"Warning: could not load example trace {example_trace_path}: {exc}")
+            example_payload = None
     plt = _prepare_matplotlib()
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig = plt.figure(figsize=(12, 9))
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.2, 1.0])
+    ax_hist = fig.add_subplot(grid[0, :])
+    ax_raster = fig.add_subplot(grid[1, 0])
+    ax_rates = fig.add_subplot(grid[1, 1])
     edges = np.linspace(0.0, 1.0, max(2, bins + 1), endpoint=True)
-    counts, _, _ = ax.hist(
+    counts, _, _ = ax_hist.hist(
         pooled_array,
         bins=edges,
         color="#7fb0ff",
@@ -503,7 +602,7 @@ def main() -> None:
             y_level = marker_base + idx * marker_step
             color = colors[idx % len(colors)]
             if stable_values:
-                ax.scatter(
+                ax_hist.scatter(
                     stable_values,
                     np.full(len(stable_values), y_level),
                     marker="v",
@@ -514,7 +613,7 @@ def main() -> None:
                     label=f"Focus count {focus_count} (stable)",
                 )
             if unstable_values:
-                ax.scatter(
+                ax_hist.scatter(
                     unstable_values,
                     np.full(len(unstable_values), y_level),
                     marker="v",
@@ -524,12 +623,24 @@ def main() -> None:
                     linewidths=1.0,
                     label=f"Focus count {focus_count} (unstable)",
                 )
-    ax.set_xlabel("Mean firing rate")
-    ax.set_ylabel("Bin frequency")
-    ax.set_title("Distribution of maximum excitatory rates")
-    ax.set_xlim(0.0, 1.0)
+    ax_hist.set_xlabel("Mean firing rate")
+    ax_hist.set_ylabel("Bin frequency")
+    ax_hist.set_title("Distribution of maximum excitatory rates")
+    ax_hist.set_xlim(0.0, 1.0)
     if focus_rates:
-        ax.legend()
+        ax_hist.legend()
+    if example_payload is not None:
+        excit_neurons = int(parameter.get("N_E", example_payload["states"].shape[1] if example_payload["states"].ndim == 2 else 0) or 0)
+        _plot_onset_raster(ax_raster, example_payload["states"], example_payload["sample_interval"], excit_neurons)
+        _plot_excitatory_rates(ax_rates, example_payload["times"], example_payload["rates"], example_payload["names"])
+        if example_seed is not None:
+            ax_raster.set_title(ax_raster.get_title() + f" (seed {example_seed})")
+            ax_rates.set_title(ax_rates.get_title() + f" (seed {example_seed})")
+    else:
+        ax_raster.text(0.5, 0.5, "No trace available for raster plot", ha="center", va="center", transform=ax_raster.transAxes)
+        ax_raster.set_axis_off()
+        ax_rates.text(0.5, 0.5, "No rate trace available", ha="center", va="center", transform=ax_rates.transAxes)
+        ax_rates.set_axis_off()
     plt.tight_layout()
     hist_path = os.path.join(analysis_dir, "max_rates_histogram.png")
     fig.savefig(hist_path, dpi=200)

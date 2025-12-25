@@ -49,7 +49,60 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         help="R_Eplus values (rep grid) to simulate when --fixpoints-file is provided.",
     )
+    parser.add_argument(
+        "--population-rate-init",
+        type=float,
+        help="Set a uniform population firing-rate initializer (default: 0.1).",
+    )
     return parser.parse_args()
+
+
+DEFAULT_LOG_DECIMATE_FACTOR = 10
+DEFAULT_QUEUE_CHUNK_SIZE = 5000
+DEFAULT_INHIBITORY_REPEAT = 2
+
+
+def ensure_binary_behavior_defaults(cfg: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Ensure logging/queue defaults match the legacy binary simulation behavior."""
+    normalized = dict(cfg or {})
+    if "log_step_states" not in normalized:
+        normalized["log_step_states"] = True
+    else:
+        normalized["log_step_states"] = bool(normalized["log_step_states"])
+    raw_factor = normalized["log_decimate_factor"] if "log_decimate_factor" in normalized else DEFAULT_LOG_DECIMATE_FACTOR
+    if raw_factor in (None, "", 0):
+        normalized["log_decimate_factor"] = None
+    else:
+        normalized["log_decimate_factor"] = max(1, int(raw_factor))
+    normalized["log_decimate_zero_phase"] = bool(normalized.get("log_decimate_zero_phase", True))
+    normalized["log_decimate_ftype"] = str(normalized.get("log_decimate_ftype", "iir"))
+    queue_cfg = dict(normalized.get("update_queue") or {})
+    if "enabled" not in queue_cfg:
+        queue_cfg["enabled"] = True
+    else:
+        queue_cfg["enabled"] = bool(queue_cfg["enabled"])
+    raw_chunk = queue_cfg.get("chunk_size", DEFAULT_QUEUE_CHUNK_SIZE)
+    if raw_chunk in (None, "", 0):
+        queue_cfg["chunk_size"] = DEFAULT_QUEUE_CHUNK_SIZE
+    else:
+        queue_cfg["chunk_size"] = max(1, int(raw_chunk))
+    queue_cfg["excitatory_repeat"] = max(1, int(queue_cfg.get("excitatory_repeat", 1) or 1))
+    queue_cfg["inhibitory_repeat"] = max(
+        1,
+        int(queue_cfg.get("inhibitory_repeat", DEFAULT_INHIBITORY_REPEAT) or 1),
+    )
+    normalized["update_queue"] = queue_cfg
+    if "population_rate_init" in normalized:
+        entry = normalized["population_rate_init"]
+        if entry is None:
+            normalized["population_rate_init"] = None
+        elif isinstance(entry, (list, tuple, np.ndarray)):
+            normalized["population_rate_init"] = np.asarray(entry, dtype=float).tolist()
+        else:
+            normalized["population_rate_init"] = float(entry)
+    else:
+        normalized["population_rate_init"] = 0.1
+    return normalized
 
 
 def _resolve_binary_config(parameter: Dict, args: argparse.Namespace) -> Dict:
@@ -69,7 +122,14 @@ def _resolve_binary_config(parameter: Dict, args: argparse.Namespace) -> Dict:
         cfg["state_chunk_size"] = max(0, int(args.state_chunk_size))
     else:
         cfg["state_chunk_size"] = int(cfg.get("state_chunk_size", 0) or 0)
-    return cfg
+    if args.population_rate_init is not None:
+        cfg["population_rate_init"] = float(args.population_rate_init)
+    else:
+        cfg["population_rate_init"] = cfg.get("population_rate_init", 0.1)
+    queue_cfg = cfg.get("update_queue")
+    if queue_cfg is not None and not isinstance(queue_cfg, dict):
+        raise ValueError("binary.update_queue must be a mapping when provided.")
+    return ensure_binary_behavior_defaults(cfg)
 
 
 def _sample_populations(network: ClusteredEI_network) -> Tuple[List[str], np.ndarray]:
@@ -213,11 +273,37 @@ def run_binary_simulation(
     output_name: str | None = None,
     population_rate_inits: Sequence[float] | None = None,
 ) -> Dict[str, Any]:
+    binary_cfg = ensure_binary_behavior_defaults(binary_cfg)
     seed = binary_cfg.get("seed")
     if seed is not None:
         np.random.seed(int(seed))
     network = ClusteredEI_network(parameter)
     network.initialize()
+    default_rate = binary_cfg.get("population_rate_init")
+    if population_rate_inits is None and default_rate is not None:
+        pops = network.E_pops + network.I_pops
+        if isinstance(default_rate, (list, tuple, np.ndarray)):
+            inferred = np.asarray(default_rate, dtype=float).ravel()
+            if inferred.size != len(pops):
+                raise ValueError(
+                    f"binary.population_rate_init must supply {len(pops)} entries, got {inferred.size}."
+                )
+        else:
+            inferred = np.full(len(pops), float(default_rate), dtype=float)
+        population_rate_inits = inferred
+    queue_cfg = dict(binary_cfg.get("update_queue") or {})
+    if queue_cfg.get("enabled"):
+        excit_repeat = int(queue_cfg.get("excitatory_repeat", 1) or 1)
+        inhib_repeat = int(queue_cfg.get("inhibitory_repeat", 1) or 1)
+        chunk_size = queue_cfg.get("chunk_size")
+        chunk_cast = int(chunk_size) if chunk_size not in (None, "") else None
+        network.configure_cell_type_queue(
+            excitatory_repeat=max(1, excit_repeat),
+            inhibitory_repeat=max(1, inhib_repeat),
+            chunk_size=chunk_cast,
+        )
+    else:
+        network.configure_update_queue(None)
     if population_rate_inits is not None:
         _apply_population_rate_initialization(network, population_rate_inits)
     warmup_steps = int(binary_cfg["warmup_steps"])
@@ -228,7 +314,8 @@ def run_binary_simulation(
     if interval <= 0:
         raise ValueError("sample_interval must be positive.")
     total_steps = int(binary_cfg["simulation_steps"])
-    samples = max(total_steps // interval, 0)
+    if total_steps < 0:
+        raise ValueError("simulation_steps must be non-negative.")
     filtered = _taggable_binary_config(parameter)
     tag = sim_tag_from_cfg(filtered)
     folder = ensure_output_folder(parameter, tag=tag)
@@ -246,14 +333,34 @@ def run_binary_simulation(
     if chunk_size > 0:
         chunk_dir = os.path.join(binary_folder, f"{resolved_output_name}_state_chunks")
         os.makedirs(chunk_dir, exist_ok=True)
+    log_step_states = bool(binary_cfg.get("log_step_states"))
+    decimate_factor = binary_cfg.get("log_decimate_factor")
+    if decimate_factor is not None:
+        decimate_factor = max(1, int(decimate_factor))
+    decimate_zero_phase = bool(binary_cfg.get("log_decimate_zero_phase", True))
+    decimate_ftype = str(binary_cfg.get("log_decimate_ftype", "iir"))
+    measured_steps = total_steps
+    if log_step_states and measured_steps > 0:
+        network.enable_step_logging(measured_steps)
+    else:
+        network.enable_step_logging(0)
     trace: List[np.ndarray] = []
+    sample_times: List[int] = []
     state_trace: List[np.ndarray] = [] if chunk_size == 0 else []
     names: List[str] = []
     pop_count = len(network.E_pops) + len(network.I_pops)
-    for _ in range(samples):
-        network.run(interval, batch_size=batch_size)
-        names, values = _sample_populations(network)
-        trace.append(values)
+    steps_done = 0
+    block_size = interval
+    while steps_done < total_steps:
+        block = min(block_size, total_steps - steps_done)
+        if block <= 0:
+            break
+        network.run(block, batch_size=batch_size)
+        steps_done += block
+        if not log_step_states:
+            names, values = _sample_populations(network)
+            trace.append(values)
+            sample_times.append(steps_done)
         state_snapshot = network.state.astype(np.uint8).copy()
         if chunk_size > 0:
             chunk_buffer.append(state_snapshot)
@@ -276,17 +383,58 @@ def run_binary_simulation(
 
     if not names:
         names = [pop.name for pop in network.E_pops + network.I_pops]
-    rates = np.vstack(trace) if trace else np.zeros((0, pop_count))
+    if log_step_states:
+        step_states = network.consume_step_log()
+        pops = network.E_pops + network.I_pops
+        if step_states.shape[0] and pops:
+            pop_count = len(pops)
+            per_step_rates = np.empty((step_states.shape[0], pop_count), dtype=np.float32)
+            for idx, pop in enumerate(pops):
+                start, end = int(pop.view[0]), int(pop.view[1])
+                if end <= start:
+                    per_step_rates[:, idx] = 0.0
+                else:
+                    slice_states = step_states[:, start:end]
+                    per_step_rates[:, idx] = slice_states.mean(axis=1)
+            factor = decimate_factor if decimate_factor else 1
+            factor = max(1, int(factor))
+            if factor > 1:
+                try:
+                    from scipy import signal
+                except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+                    raise ModuleNotFoundError(
+                        "log_step_states requires SciPy to decimate the recorded rates. "
+                        "Install it via 'pip install scipy'."
+                    ) from exc
+                rates = signal.decimate(
+                    per_step_rates,
+                    factor,
+                    axis=0,
+                    zero_phase=decimate_zero_phase,
+                    ftype=decimate_ftype,
+                )
+            else:
+                rates = per_step_rates
+        else:
+            rates = np.zeros((0, pop_count))
+        del step_states
+    else:
+        rates = np.vstack(trace) if trace else np.zeros((0, pop_count))
+        times = np.array(sample_times, dtype=int) if sample_times else np.zeros(0, dtype=int)
     mean_values = rates.mean(axis=0) if rates.size else np.zeros(pop_count)
     mean_rates = {name: float(value) for name, value in zip(names, mean_values)}
     if chunk_size > 0:
         states = np.zeros((0, network.N), dtype=np.uint8)
     else:
         states = np.vstack(state_trace) if state_trace else np.zeros((0, network.N), dtype=np.uint8)
+    if log_step_states:
+        time_axis = np.arange(rates.shape[0]) * (int(decimate_factor) if decimate_factor else 1)
+    else:
+        time_axis = times
     np.savez_compressed(
         os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         rates=rates,
-        times=np.arange(rates.shape[0]) * interval,
+        times=time_axis,
         names=np.array(names),
         neuron_states=states,
         warmup_steps=warmup_steps,
@@ -325,6 +473,13 @@ def run_binary_simulation(
             "enabled": chunk_size > 0,
             "chunk_size": chunk_size,
             "files": chunk_paths,
+        },
+        "step_logging": {
+            "enabled": log_step_states,
+            "logged_steps": measured_steps if log_step_states else 0,
+            "decimate_factor": int(decimate_factor) if (log_step_states and decimate_factor) else 1,
+            "decimate_ftype": decimate_ftype if log_step_states else None,
+            "decimate_zero_phase": decimate_zero_phase if log_step_states else None,
         },
     }
     summary_path = os.path.join(binary_folder, f"{resolved_output_name}_summary.yaml")
@@ -545,7 +700,7 @@ def main() -> None:
         return
     parameter = load_from_args(args)
     binary_cfg = _resolve_binary_config(parameter, args)
-    run_binary_simulation(parameter, binary_cfg,population_rate_inits=0.1*np.ones(2*parameter["Q"]))
+    run_binary_simulation(parameter, binary_cfg)
 
 
 if __name__ == "__main__":

@@ -286,6 +286,8 @@ def main() -> None:
     seen_seeds: List[int] = []
     assignment_cache: Dict[int, Dict[str, Any]] = {}
     focus_reference = os.path.abspath(fixpoints_path)
+    example_trace_path: str | None = None
+    example_seed: int | None = None
     for seed in seeds:
         label = base._format_seed_label(base_output, seed)
         trace_path = os.path.join(binary_dir, f"{label}.npz")
@@ -333,6 +335,9 @@ def main() -> None:
             excitatory_clusters = excit_count
             metadata["excitatory_clusters"] = excit_count
             metadata_changed = True
+        if example_trace_path is None and os.path.exists(trace_path):
+            example_trace_path = trace_path
+            example_seed = seed
     if metadata_changed:
         base._save_metadata(metadata_path, metadata)
     if not pooled_entries:
@@ -349,10 +354,21 @@ def main() -> None:
     focus_rates: Dict[int, Dict[str, List[float]]] = {}
     if excitatory_clusters:
         focus_rates = base._load_focus_fixpoints_from_bundle(bundle, excitatory_clusters, target_rep)
+    example_payload: Dict[str, Any] | None = None
+    if example_trace_path:
+        try:
+            example_payload = base._load_trace_payload(example_trace_path)
+        except Exception as exc:
+            print(f"Warning: could not load example trace {example_trace_path}: {exc}")
+            example_payload = None
     plt = base._prepare_matplotlib()
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig = plt.figure(figsize=(12, 9))
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.2, 1.0])
+    ax_hist = fig.add_subplot(grid[0, :])
+    ax_raster = fig.add_subplot(grid[1, 0])
+    ax_rates = fig.add_subplot(grid[1, 1])
     edges = np.linspace(0.0, 1.0, max(2, bins + 1), endpoint=True)
-    counts, _, _ = ax.hist(
+    counts, _, _ = ax_hist.hist(
         pooled_array,
         bins=edges,
         color="#7fb0ff",
@@ -372,7 +388,7 @@ def main() -> None:
             y_level = marker_base + idx * marker_step
             color = colors[idx % len(colors)]
             if stable_values:
-                ax.scatter(
+                ax_hist.scatter(
                     stable_values,
                     np.full(len(stable_values), y_level),
                     marker="v",
@@ -383,7 +399,7 @@ def main() -> None:
                     label=f"Focus count {focus_count} (stable)",
                 )
             if unstable_values:
-                ax.scatter(
+                ax_hist.scatter(
                     unstable_values,
                     np.full(len(unstable_values), y_level),
                     marker="v",
@@ -393,12 +409,24 @@ def main() -> None:
                     linewidths=1.0,
                     label=f"Focus count {focus_count} (unstable)",
                 )
-    ax.set_xlabel("Mean firing rate")
-    ax.set_ylabel("Bin frequency")
-    ax.set_title("Distribution of maximum excitatory rates (fixpoint initialization)")
-    ax.set_xlim(0.0, 1.0)
+    ax_hist.set_xlabel("Mean firing rate")
+    ax_hist.set_ylabel("Bin frequency")
+    ax_hist.set_title("Distribution of maximum excitatory rates (fixpoint initialization)")
+    ax_hist.set_xlim(0.0, 1.0)
     if focus_rates:
-        ax.legend()
+        ax_hist.legend()
+    if example_payload is not None:
+        excit_neurons = int(parameter.get("N_E", example_payload["states"].shape[1] if example_payload["states"].ndim == 2 else 0) or 0)
+        base._plot_onset_raster(ax_raster, example_payload["states"], example_payload["sample_interval"], excit_neurons)
+        base._plot_excitatory_rates(ax_rates, example_payload["times"], example_payload["rates"], example_payload["names"])
+        if example_seed is not None:
+            ax_raster.set_title(ax_raster.get_title() + f" (seed {example_seed})")
+            ax_rates.set_title(ax_rates.get_title() + f" (seed {example_seed})")
+    else:
+        ax_raster.text(0.5, 0.5, "No trace available for raster plot", ha="center", va="center", transform=ax_raster.transAxes)
+        ax_raster.set_axis_off()
+        ax_rates.text(0.5, 0.5, "No rate trace available", ha="center", va="center", transform=ax_rates.transAxes)
+        ax_rates.set_axis_off()
     fig.tight_layout()
     hist_path = os.path.join(analysis_dir, "max_rates_histogram.png")
     fig.savefig(hist_path, dpi=200)

@@ -311,6 +311,36 @@ class ClusteredEI_network(BaseBinaryNetwork):
         self._build_background()
         self._structure_created = True
 
+    def configure_cell_type_queue(
+        self,
+        *,
+        excitatory_repeat: int = 1,
+        inhibitory_repeat: int = 1,
+        chunk_size: int | None = None,
+    ) -> None:
+        """Configure the parent network's update queue using cell-type repeats."""
+        excit_repeat = max(1, int(excitatory_repeat))
+        inhib_repeat = max(1, int(inhibitory_repeat))
+        entries: List[np.ndarray] = []
+        for pop in self.E_pops:
+            start, end = int(pop.view[0]), int(pop.view[1])
+            base = np.arange(start, end, dtype=np.int64)
+            if excit_repeat > 1 and base.size:
+                base = np.repeat(base, excit_repeat)
+            if base.size:
+                entries.append(base)
+        for pop in self.I_pops:
+            start, end = int(pop.view[0]), int(pop.view[1])
+            base = np.arange(start, end, dtype=np.int64)
+            if inhib_repeat > 1 and base.size:
+                base = np.repeat(base, inhib_repeat)
+            if base.size:
+                entries.append(base)
+        if not entries:
+            raise RuntimeError("Cannot configure an update queue without neuron populations.")
+        pool = np.concatenate(entries) if len(entries) > 1 else entries[0]
+        self.configure_update_queue(pool, chunk_size=chunk_size)
+
     def initialize(self, autapse: bool = True):
         self._ensure_structure()
         super().initialize(autapse=autapse)

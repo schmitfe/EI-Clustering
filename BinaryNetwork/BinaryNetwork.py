@@ -16,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 
 
 @njit(cache=True)
-def _dense_batch_kernel(neurons, state, field, thresholds, weights):
+def _dense_batch_kernel(neurons, state, field, thresholds, weights, log_states, log_enabled, log_offset):
     """
     Update neurons in-place for dense weight matrices.
     Parameters
@@ -46,10 +46,12 @@ def _dense_batch_kernel(neurons, state, field, thresholds, weights):
             state[neuron] = new_state
             for target in range(neuron_count):
                 field[target] += delta * weights[target, neuron]
+        if log_enabled:
+            log_states[log_offset + idx, :] = state
 
 
 @njit(cache=True)
-def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indptr):
+def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indptr, log_states, log_enabled, log_offset):
     """
     Update neurons for sparse CSC weights.
     Parameters
@@ -73,6 +75,8 @@ def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indpt
             for ptr in range(start, end):
                 row = indices[ptr]
                 field[row] += delta * data[ptr]
+        if log_enabled:
+            log_states[log_offset + idx, :] = state
 
 
 class NetworkElement:
@@ -275,6 +279,14 @@ class BinaryNetwork:
         self._sparse_rows: List[np.ndarray] = []
         self._sparse_cols: List[np.ndarray] = []
         self._sparse_data: List[np.ndarray] = []
+        self._step_log_buffer: np.ndarray | None = None
+        self._step_log_index = 0
+        self._step_log_dummy = np.zeros((0, 0), dtype=np.int8)
+        self._update_queue_enabled = False
+        self._update_queue_pool = np.zeros(0, dtype=np.int64)
+        self._update_queue_buffer = np.zeros(0, dtype=np.int64)
+        self._update_queue_chunk = 0
+        self._update_queue_position = 0
 
     def add_population(self, population: Neuron):
         self.population.append(population)
@@ -400,14 +412,27 @@ class BinaryNetwork:
         return "dense" if dense_gb <= safety else "sparse"
 
     def _select_neurons(self, count: int) -> np.ndarray:
+        if count <= 0:
+            return np.zeros(0, dtype=np.int64)
+        if self._update_queue_enabled:
+            return self._draw_from_update_queue(count)
         return np.random.choice(self.N, size=count, p=self.update_prob)
 
-    def _update_batch_dense(self, neurons: np.ndarray):
+    def _update_batch_dense(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
         if neurons.size == 0:
             return
-        _dense_batch_kernel(neurons, self.state, self.field, self.thresholds, self.weights_dense)
+        _dense_batch_kernel(
+            neurons,
+            self.state,
+            self.field,
+            self.thresholds,
+            self.weights_dense,
+            log_states,
+            log_enabled,
+            log_offset,
+        )
 
-    def _update_batch_sparse(self, neurons: np.ndarray):
+    def _update_batch_sparse(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
         if neurons.size == 0:
             return
         _sparse_batch_kernel(
@@ -418,6 +443,9 @@ class BinaryNetwork:
             self.weights_csc.data,
             self.weights_csc.indices,
             self.weights_csc.indptr,
+            log_states,
+            log_enabled,
+            log_offset,
         )
 
     def update(self):
@@ -426,10 +454,22 @@ class BinaryNetwork:
 
     def _process_batch(self, neurons: Sequence[int]):
         neurons = np.asarray(neurons, dtype=np.int64)
-        if self.weight_mode == "dense":
-            self._update_batch_dense(neurons)
+        log_enabled = self._step_log_buffer is not None
+        log_offset = self._step_log_index
+        if log_enabled and self._step_log_buffer is not None:
+            if log_offset + neurons.size > self._step_log_buffer.shape[0]:
+                raise RuntimeError(
+                    "Step logging buffer exhausted. Increase allocated steps when enabling step logging."
+                )
+            log_buffer = self._step_log_buffer
         else:
-            self._update_batch_sparse(neurons)
+            log_buffer = self._step_log_dummy
+        if self.weight_mode == "dense":
+            self._update_batch_dense(neurons, log_buffer, log_enabled, log_offset)
+        else:
+            self._update_batch_sparse(neurons, log_buffer, log_enabled, log_offset)
+        if log_enabled:
+            self._step_log_index += neurons.size
         self.sim_steps += neurons.size
 
     def run(self, steps=1000, batch_size=1):
@@ -443,6 +483,86 @@ class BinaryNetwork:
             neurons = self._select_neurons(current_batch)
             self._process_batch(neurons)
             steps_done += current_batch
+
+    def enable_step_logging(self, steps: int):
+        steps = int(max(0, steps))
+        if steps == 0:
+            self._step_log_buffer = None
+            self._step_log_index = 0
+            return
+        self._step_log_buffer = np.zeros((steps, self.N), dtype=np.int8)
+        self._step_log_index = 0
+
+    def consume_step_log(self) -> np.ndarray:
+        if self._step_log_buffer is None:
+            return np.zeros((0, self.N), dtype=np.int8)
+        filled = min(self._step_log_index, self._step_log_buffer.shape[0])
+        data = self._step_log_buffer[:filled].copy()
+        self._step_log_buffer = None
+        self._step_log_index = 0
+        return data
+
+    def configure_update_queue(
+        self,
+        pool_indices: Sequence[int] | np.ndarray | None,
+        *,
+        chunk_size: int | None = None,
+    ):
+        if pool_indices is None:
+            self._update_queue_enabled = False
+            self._update_queue_pool = np.zeros(0, dtype=np.int64)
+            self._update_queue_buffer = np.zeros(0, dtype=np.int64)
+            self._update_queue_chunk = 0
+            self._update_queue_position = 0
+            return
+        pool = np.asarray(pool_indices, dtype=np.int64)
+        if pool.ndim != 1:
+            raise ValueError("pool_indices must form a flat sequence of neuron indexes.")
+        if pool.size == 0:
+            raise ValueError("pool_indices must contain at least one neuron index.")
+        if np.any(pool < 0) or np.any(pool >= self.N):
+            raise ValueError("pool_indices must contain valid neuron indexes.")
+        self._update_queue_pool = pool
+        max_chunk = pool.size
+        if chunk_size is None or chunk_size <= 0 or chunk_size > max_chunk:
+            chunk = max_chunk
+        else:
+            chunk = int(chunk_size)
+        self._update_queue_chunk = chunk
+        self._update_queue_buffer = np.empty(chunk, dtype=np.int64)
+        self._update_queue_position = chunk
+        self._update_queue_enabled = True
+
+    def _refill_update_queue(self):
+        if not self._update_queue_enabled or self._update_queue_chunk <= 0:
+            raise RuntimeError("Update queue is not configured.")
+        selection = np.random.choice(
+            self._update_queue_pool,
+            size=self._update_queue_chunk,
+            replace=False,
+        )
+        self._update_queue_buffer[:] = selection
+        self._update_queue_position = 0
+
+    def _draw_from_update_queue(self, count: int) -> np.ndarray:
+        if count <= 0:
+            return np.zeros(0, dtype=np.int64)
+        if self._update_queue_chunk <= 0:
+            raise RuntimeError("Update queue is not configured.")
+        result = np.empty(count, dtype=np.int64)
+        filled = 0
+        while filled < count:
+            remaining = self._update_queue_chunk - self._update_queue_position
+            if remaining <= 0:
+                self._refill_update_queue()
+                remaining = self._update_queue_chunk
+            take = min(remaining, count - filled)
+            start = self._update_queue_position
+            end = start + take
+            result[filled:filled + take] = self._update_queue_buffer[start:end]
+            self._update_queue_position = end
+            filled += take
+        return result
 
 
 def _build_demo_network(weight_mode: str) -> BinaryNetwork:
