@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import math
 import os
 import sys
@@ -72,6 +73,24 @@ def parse_args() -> argparse.Namespace:
         help="Total number of network instances to consider (default: %(default)s).",
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Number of worker processes (N_jobs) used to parallelize per-seed work (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--job-count",
+        type=int,
+        default=1,
+        help="Total number of distributed jobs when running via SLURM (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--job-index",
+        type=int,
+        default=0,
+        help="Zero-based index of this job among the --job-count partitions (default: %(default)s).",
+    )
+    parser.add_argument(
         "--bin-size",
         type=int,
         default=50,
@@ -110,6 +129,12 @@ def parse_args() -> argparse.Namespace:
         default="stable",
         help="Select only stable, unstable, or any fixpoints for initialization (default: %(default)s).",
     )
+    parser.add_argument(
+        "--active-count-method",
+        choices=("gap", "sign"),
+        default="gap",
+        help="Strategy for counting active clusters from rates (default: %(default)s).",
+    )
     return parser.parse_args()
 
 
@@ -118,6 +143,18 @@ def _prepare_analysis_folder(parameter: Dict[str, Any], base_folder: str | None)
     analysis_dir = os.path.join(binary_dir, LEGACY_ANALYSIS_SUBDIR)
     os.makedirs(analysis_dir, exist_ok=True)
     return folder, binary_dir, analysis_dir
+
+
+def _shard_seed_list(seeds: Sequence[int], job_count: int, job_index: int) -> List[int]:
+    job_count = int(job_count)
+    if job_count <= 0:
+        raise ValueError("--job-count must be positive.")
+    job_index = int(job_index)
+    if job_index < 0 or job_index >= job_count:
+        raise ValueError("--job-index must satisfy 0 <= job_index < job_count.")
+    if job_count == 1:
+        return list(seeds)
+    return [seed for idx, seed in enumerate(seeds) if idx % job_count == job_index]
 
 
 def _normalize_focus_list(values: Sequence[int] | None) -> List[int] | None:
@@ -206,7 +243,7 @@ def _candidate_for_seed(seed_value: int, candidates: Sequence[Dict[str, Any]]) -
     return candidates[idx]
 
 
-def _active_cluster_count_from_means(values: Sequence[float], tolerance: float = ACTIVE_GAP_TOLERANCE) -> int:
+def _active_cluster_count_gap(values: np.ndarray, tolerance: float) -> int:
     arr = np.asarray(values, dtype=float).ravel()
     if arr.size == 0:
         return 0
@@ -220,6 +257,38 @@ def _active_cluster_count_from_means(values: Sequence[float], tolerance: float =
     if max_gap <= tolerance:
         return int(arr_sorted.size)
     return max(1, min(arr_sorted.size, int(np.argmax(gaps) + 1)))
+
+
+def _active_cluster_count_sign(values: np.ndarray, tolerance: float) -> int:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 0:
+        return 0
+    mean_val = float(np.mean(arr))
+    centered = arr - mean_val
+    threshold = max(0.0, float(tolerance))
+    if threshold > 0.0:
+        active_mask = centered > threshold
+    else:
+        active_mask = centered > 0.0
+    count = int(np.count_nonzero(active_mask))
+    return max(0, min(arr.size, count))
+
+
+def _active_cluster_count_from_means(
+    values: Sequence[float],
+    *,
+    method: str = "gap",
+    tolerance: float = ACTIVE_GAP_TOLERANCE,
+) -> int:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 0:
+        return 0
+    mode = (method or "gap").lower()
+    if mode == "sign":
+        return _active_cluster_count_sign(arr, tolerance)
+    if mode != "gap":
+        raise ValueError(f"Unknown active-count method '{method}'.")
+    return _active_cluster_count_gap(arr, tolerance)
 
 
 def _candidate_max_excit_rate(candidate: Dict[str, Any], excitatory_count: int) -> float:
@@ -269,6 +338,139 @@ def _focus_payload_from_candidates(
         key = "stable" if stability == "stable" else "unstable"
         bucket[key] = [float(max_rate)]
     return payload
+
+
+def _focus_expectations_from_payload(focus_rates: Dict[int, Dict[str, List[float]]]) -> Dict[int, float]:
+    expectations: Dict[int, float] = {}
+    for focus, payload in focus_rates.items():
+        stable_vals = payload.get("stable", [])
+        unstable_vals = payload.get("unstable", [])
+        selected = stable_vals if stable_vals else unstable_vals
+        if not selected:
+            continue
+        expectations[int(focus)] = float(np.mean(selected))
+    return expectations
+
+
+def _build_focus_color_map(plt_module, focus_rates: Dict[int, Any]) -> Dict[int, Any]:
+    if not focus_rates:
+        return {}
+    focus_keys = sorted(int(key) for key in focus_rates)
+    colors = plt_module.cm.tab10(np.linspace(0, 1, max(1, len(focus_keys))))
+    return {focus: colors[idx % len(colors)] for idx, focus in enumerate(focus_keys)}
+
+
+def _maxima_by_active_cluster(
+    active_records: Sequence[Dict[str, Any]],
+    seed_results: Dict[int, Dict[str, Any]],
+) -> Dict[int, List[float]]:
+    maxima_by_cluster: Dict[int, List[float]] = {}
+    for record in active_records:
+        seed = int(record.get("seed", -1))
+        final_active = record.get("final_active_clusters")
+        if final_active is None:
+            continue
+        per_seed = seed_results.get(seed)
+        if not per_seed:
+            continue
+        maxima = per_seed.get("maxima")
+        if maxima is None:
+            continue
+        values = np.asarray(maxima, dtype=float).ravel()
+        if values.size == 0:
+            continue
+        maxima_by_cluster.setdefault(int(final_active), []).extend(values.tolist())
+    return maxima_by_cluster
+
+
+def _plot_active_cluster_histograms(
+    analysis_dir: str,
+    maxima_by_cluster: Dict[int, Sequence[float]],
+    bin_count: int,
+    focus_expectations: Dict[int, float],
+    plt_module,
+    *,
+    focus_colors: Dict[int, Any],
+) -> Tuple[str | None, str | None]:
+    if not maxima_by_cluster:
+        return None, None
+    cluster_keys = sorted(maxima_by_cluster)
+    if not cluster_keys:
+        return None, None
+    cols = min(3, max(1, len(cluster_keys)))
+    rows = int(math.ceil(len(cluster_keys) / cols))
+    fig, axes = plt_module.subplots(
+        rows,
+        cols,
+        figsize=(6 * cols, 4.5 * rows),
+        squeeze=False,
+        sharex=True,
+        sharey=False,
+    )
+    axes_flat = axes.reshape(-1)
+    bin_count = max(1, int(bin_count))
+    bin_edges = np.linspace(0.0, 1.0, bin_count + 1, endpoint=True)
+    fallback_colors = plt_module.cm.tab10(np.linspace(0, 1, max(1, len(cluster_keys))))
+    counts_payload: Dict[int, np.ndarray] = {}
+    for idx, cluster_count in enumerate(cluster_keys):
+        ax = axes_flat[idx]
+        values = np.asarray(maxima_by_cluster[cluster_count], dtype=float)
+        color = focus_colors.get(int(cluster_count))
+        if color is None:
+            color = fallback_colors[idx % len(fallback_colors)]
+        hist, _ = np.histogram(values, bins=bin_edges)
+        counts_payload[int(cluster_count)] = hist
+        mean_val = float(np.mean(values)) if values.size else None
+        median_val = float(np.median(values)) if values.size else None
+        ax.hist(
+            values,
+            bins=bin_edges,
+            color=color,
+            alpha=0.8,
+            label=f"{cluster_count} active clusters",
+        )
+        expectation = focus_expectations.get(int(cluster_count))
+        if expectation is not None:
+            ax.axvline(
+                expectation,
+                color=color,
+                linestyle="--",
+                linewidth=1.8,
+                label=f"Mean-field expectation ({expectation:.3f})",
+            )
+        if mean_val is not None:
+            ax.axvline(
+                mean_val,
+                color=color,
+                linestyle="-.",
+                linewidth=1.2,
+                label=f"Empirical mean ({mean_val:.3f})",
+            )
+        if median_val is not None:
+            ax.axvline(
+                median_val,
+                color=color,
+                linestyle=":",
+                linewidth=1.2,
+                label=f"Empirical median ({median_val:.3f})",
+            )
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(bottom=0.0)
+        ax.set_xlabel("Mean firing rate")
+        ax.set_ylabel("Bin count")
+        ax.set_title(f"{cluster_count} active clusters (samples: {len(values)})")
+        ax.legend()
+    for ax in axes_flat[len(cluster_keys):]:
+        ax.set_visible(False)
+    fig.tight_layout()
+    hist_path = os.path.join(analysis_dir, "active_cluster_histograms.png")
+    fig.savefig(hist_path, dpi=200)
+    plt_module.close(fig)
+    counts_path = os.path.join(analysis_dir, "active_cluster_hist_counts.npz")
+    payload = {"bin_edges": bin_edges}
+    payload.update({f"clusters_{count}": counts for count, counts in counts_payload.items()})
+    np.savez_compressed(counts_path, **payload)
+    return hist_path, counts_path
 
 
 def _tail_means_from_trace(
@@ -523,6 +725,79 @@ def _run_legacy_binary_simulation(
     return trace_path
 
 
+def _process_seed_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    seed = int(task["seed"])
+    trace_path = str(task["trace_path"])
+    maxima_path = str(task["maxima_path"])
+    result: Dict[str, Any] = {
+        "seed": seed,
+        "trace_path": trace_path,
+        "trace_generated": False,
+        "states_recorded": False,
+        "maxima": None,
+        "excitatory_clusters": None,
+        "logs": [],
+        "error": None,
+    }
+    try:
+        trace_exists = os.path.exists(trace_path)
+        if task.get("needs_simulation"):
+            run_cfg = dict(task["binary_cfg"])
+            run_cfg["seed"] = seed
+            focus = task.get("candidate_focus")
+            stability = task.get("candidate_stability")
+            focus_desc = f"focus {focus}" if focus is not None else "focus ?"
+            stability_desc = stability if stability else "unknown stability"
+            result["logs"].append(
+                f"Simulating legacy binary network for seed {seed} using fixpoint {task.get('candidate_id', 'unknown')} "
+                f"({focus_desc}, {stability_desc})."
+            )
+            trace_path = _run_legacy_binary_simulation(
+                task["parameter"],
+                run_cfg,
+                task["binary_dir"],
+                task["label"],
+                task["init_rates"],
+                seed=seed,
+                capture_spikes=bool(task.get("capture_spikes")),
+            )
+            result["trace_path"] = trace_path
+            result["trace_generated"] = True
+            if task.get("capture_spikes"):
+                result["states_recorded"] = True
+            trace_exists = True
+        if not trace_exists:
+            result["logs"].append(f"Skipping seed {seed}: trace {trace_path} is missing.")
+            return result
+        maxima = None
+        excit_count: int | None = None
+        if (not task.get("overwrite_analysis")) and os.path.exists(maxima_path):
+            cached, cached_excit = base._load_maxima_file(maxima_path, int(task["bin_size"]))
+            if cached is not None:
+                maxima = cached
+                excit_count = cached_excit
+            else:
+                result["logs"].append(
+                    f"Recomputing maxima for seed {seed}: bin size mismatch or corrupt cache."
+                )
+        if maxima is None:
+            maxima, excit_count = base._compute_maxima_from_trace(trace_path, int(task["bin_size"]))
+            base._save_maxima_file(maxima_path, maxima, seed, int(task["bin_size"]), trace_path, int(excit_count))
+        result["maxima"] = maxima
+        result["excitatory_clusters"] = int(excit_count) if excit_count is not None else None
+    except Exception as exc:  # pragma: no cover - worker safety
+        result["error"] = f"{exc.__class__.__name__}: {exc}"
+    return result
+
+
+def _emit_worker_logs(result: Dict[str, Any]) -> None:
+    for message in result.get("logs") or []:
+        print(message)
+    error = result.get("error")
+    if error:
+        print(f"Seed {result.get('seed')}: {error}")
+
+
 def main() -> None:
     args = parse_args()
     parameter, folder_hint, fixpoints_path = base._resolve_simulation_source(
@@ -541,6 +816,7 @@ def main() -> None:
     bin_size = max(1, int(args.bin_size))
     bins = max(1, int(args.bins))
     total_simulations = max(0, int(args.simulations))
+    active_count_method = str(args.active_count_method or "gap").lower()
     folder, binary_dir, analysis_dir = _prepare_analysis_folder(parameter, folder_hint)
     metadata_path = os.path.join(analysis_dir, "metadata.yaml")
     metadata = base._load_metadata(metadata_path) if os.path.exists(metadata_path) else {}
@@ -608,6 +884,15 @@ def main() -> None:
     else:
         stability_filter = stored_stability
     metadata["fixpoints_file"] = os.path.abspath(fixpoints_path)
+    stored_active_method = str(metadata.get("active_count_method") or "").lower() or None
+    if stored_active_method is None:
+        metadata["active_count_method"] = active_count_method
+        metadata_changed = True
+    elif stored_active_method != active_count_method:
+        raise ValueError(
+            f"Analysis folder already uses active-count method '{stored_active_method}'. "
+            f"Requested '{active_count_method}' would mix incompatible runs."
+        )
     if metadata_changed:
         base._save_metadata(metadata_path, metadata)
         metadata_changed = False
@@ -619,69 +904,109 @@ def main() -> None:
     raw_candidates = _load_fixpoint_candidates(bundle, focus_filter, stability_filter, pop_vector_length, target_rep)
     candidates = _deduplicate_candidates_by_focus(raw_candidates, Q_value)
     seeds = [int(base_seed) + idx for idx in range(total_simulations)]
+    worker_jobs = int(args.jobs)
+    if worker_jobs <= 0:
+        raise ValueError("--jobs must be a positive integer.")
+    job_count = int(args.job_count)
+    if job_count <= 0:
+        raise ValueError("--job-count must be a positive integer.")
+    job_index = int(args.job_index)
+    assigned_seeds = _shard_seed_list(seeds, job_count, job_index)
+    if not assigned_seeds:
+        print(
+            f"Job index {job_index} / {job_count} has no seeds to process "
+            f"(requested simulations: {len(seeds)})."
+        )
+        return
     pooled_entries: List[float] = []
     seen_seeds: List[int] = []
     assignment_cache: Dict[int, Dict[str, Any]] = {}
     focus_reference = os.path.abspath(fixpoints_path)
     example_trace_path: str | None = None
     example_seed: int | None = None
-    need_spike_example = True
     example_states_available = False
     confusion_matrix = np.zeros((Q_value + 1, Q_value + 1), dtype=np.int64)
     active_cluster_records: List[Dict[str, Any]] = []
-    for seed in seeds:
+    tasks: List[Dict[str, Any]] = []
+    capture_assigned = False
+    active_count_kwargs = {
+        "method": active_count_method,
+        "tolerance": ACTIVE_GAP_TOLERANCE,
+    }
+    for seed in assigned_seeds:
         label = base._format_seed_label(base_output, seed)
         trace_path = os.path.join(binary_dir, f"{label}.npz")
         maxima_path = os.path.join(analysis_dir, f"{label}_maxima.npz")
         candidate = _candidate_for_seed(seed, candidates)
         assignment_cache[int(seed)] = candidate
         trace_exists = os.path.exists(trace_path)
-        if not args.analysis_only and (args.overwrite_simulation or not trace_exists):
-            run_cfg = dict(binary_cfg)
-            run_cfg["seed"] = seed
-            capture_spikes = need_spike_example
-            print(
-                f"Simulating legacy binary network for seed {seed} using fixpoint {candidate['id']} "
-                f"(focus {candidate['focus_count']}, {candidate['stability']})."
-            )
-            trace_path = _run_legacy_binary_simulation(
-                parameter,
-                run_cfg,
-                binary_dir,
-                label,
-                candidate["rates"],
-                seed=seed,
-                capture_spikes=capture_spikes,
-            )
-            if capture_spikes:
-                need_spike_example = False
-                example_states_available = True
-            trace_exists = True
-        if not trace_exists:
-            print(f"Skipping seed {seed}: trace {trace_path} is missing.")
+        needs_simulation = (not args.analysis_only) and (args.overwrite_simulation or not trace_exists)
+        capture_spikes = False
+        if needs_simulation and not capture_assigned:
+            capture_spikes = True
+            capture_assigned = True
+        tasks.append(
+            {
+                "seed": int(seed),
+                "label": label,
+                "trace_path": trace_path,
+                "maxima_path": maxima_path,
+                "parameter": parameter,
+                "binary_cfg": binary_cfg,
+                "binary_dir": binary_dir,
+                "bin_size": bin_size,
+                "needs_simulation": needs_simulation,
+                "capture_spikes": capture_spikes,
+                "overwrite_analysis": bool(args.overwrite_analysis),
+                "candidate_id": candidate.get("id"),
+                "candidate_focus": candidate.get("focus_count"),
+                "candidate_stability": candidate.get("stability"),
+                "init_rates": tuple(float(value) for value in candidate["rates"]),
+            }
+        )
+    seed_results: Dict[int, Dict[str, Any]] = {}
+
+    def _record_result(result: Dict[str, Any]) -> None:
+        if not result:
+            return
+        seed_results[int(result.get("seed"))] = result
+        _emit_worker_logs(result)
+
+    if tasks:
+        if worker_jobs == 1:
+            for task in tasks:
+                _record_result(_process_seed_task(task))
+        else:
+            max_workers = min(worker_jobs, len(tasks))
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
+                future_to_seed = {pool.submit(_process_seed_task, task): task["seed"] for task in tasks}
+                for future in concurrent.futures.as_completed(future_to_seed):
+                    seed = future_to_seed[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # pragma: no cover - worker crash
+                        print(f"Seed {seed}: worker crashed with {exc.__class__.__name__}: {exc}")
+                        continue
+                    _record_result(result)
+    processed_all_seeds = len(assigned_seeds) == len(seeds)
+    for task in tasks:
+        seed = task["seed"]
+        result = seed_results.get(seed)
+        if not result:
             continue
-        maxima: List[float] | None = None
-        excit_count: int | None = None
-        if not args.overwrite_analysis and os.path.exists(maxima_path):
-            cached, cached_excit = base._load_maxima_file(maxima_path, bin_size)
-            if cached is not None:
-                maxima = cached
-                excit_count = cached_excit
-            else:
-                print(f"Recomputing maxima for seed {seed}: bin size mismatch or corrupt cache.")
+        maxima = result.get("maxima")
         if maxima is None:
-            try:
-                maxima, excit_count = base._compute_maxima_from_trace(trace_path, bin_size)
-            except ValueError as exc:
-                print(f"Skipping seed {seed}: {exc}")
-                continue
-            base._save_maxima_file(maxima_path, maxima, seed, bin_size, trace_path, excit_count)
-        pooled_entries.extend(maxima)
+            continue
+        pooled_entries.extend(list(maxima))
         seen_seeds.append(seed)
+        excit_count = result.get("excitatory_clusters")
         if excitatory_clusters is None and excit_count is not None:
             excitatory_clusters = excit_count
             metadata["excitatory_clusters"] = excit_count
             metadata_changed = True
+        if result.get("states_recorded"):
+            example_states_available = True
+        trace_path = result.get("trace_path") or task["trace_path"]
         if os.path.exists(trace_path):
             if example_trace_path is None:
                 example_trace_path = trace_path
@@ -695,9 +1020,14 @@ def main() -> None:
                         example_states_available = True
                 except Exception:
                     pass
+        candidate = assignment_cache.get(seed)
+        if candidate is None:
+            candidate = _candidate_for_seed(seed, candidates)
+            assignment_cache[int(seed)] = candidate
         focus_active = int(candidate.get("focus_count", 0) or 0)
         initial_active_estimate = _active_cluster_count_from_means(
-            np.asarray(candidate["rates"][:Q_value], dtype=float)
+            np.asarray(candidate["rates"][:Q_value], dtype=float),
+            **active_count_kwargs,
         )
         tail_means = None
         tail_window = 0
@@ -707,7 +1037,7 @@ def main() -> None:
         except Exception as exc:
             print(f"Could not compute active cluster statistics for seed {seed}: {exc}")
         if tail_means is not None:
-            final_active = _active_cluster_count_from_means(tail_means)
+            final_active = _active_cluster_count_from_means(tail_means, **active_count_kwargs)
             init_idx = max(0, min(Q_value, int(focus_active)))
             final_idx = max(0, min(Q_value, int(final_active)))
             confusion_matrix[init_idx, final_idx] += 1
@@ -731,6 +1061,13 @@ def main() -> None:
     if not pooled_entries:
         print("No maxima were collected. Ensure simulations ran successfully.")
         return
+    if not processed_all_seeds:
+        print(
+            f"Processed {len(assigned_seeds)} seeds out of {len(seeds)} total in shard {job_index + 1}/{job_count}. "
+            "Skipping pooled summary; re-run once with --analysis-only (without sharding) after all jobs finish to "
+            "build the combined histogram."
+        )
+        return
     pooled_array = np.asarray(pooled_entries, dtype=float)
     pooled_path = os.path.join(analysis_dir, "pooled_maxima.npz")
     np.savez_compressed(
@@ -749,7 +1086,9 @@ def main() -> None:
         except Exception as exc:  # pragma: no cover - plotting helper
             print(f"Warning: could not load example trace {example_trace_path}: {exc}")
             example_payload = None
+    focus_expectations = _focus_expectations_from_payload(focus_rates)
     plt = base._prepare_matplotlib()
+    focus_color_map = _build_focus_color_map(plt, focus_rates)
     fig = plt.figure(figsize=(14, 9))
     grid = fig.add_gridspec(2, 3, height_ratios=[1.2, 1.0])
     ax_hist = fig.add_subplot(grid[0, :])
@@ -768,14 +1107,16 @@ def main() -> None:
     if focus_rates:
         marker_base = max_count * 1.05
         marker_step = max(max_count * 0.08, 0.05)
-        colors = plt.cm.tab10(np.linspace(0, 1, max(1, len(focus_rates))))
+        fallback_colors = plt.cm.tab10(np.linspace(0, 1, max(1, len(focus_rates))))
         for idx, (focus_count, payload) in enumerate(sorted(focus_rates.items())):
             stable_values = payload.get("stable", [])
             unstable_values = payload.get("unstable", [])
             if not stable_values and not unstable_values:
                 continue
             y_level = marker_base + idx * marker_step
-            color = colors[idx % len(colors)]
+            color = focus_color_map.get(int(focus_count))
+            if color is None:
+                color = fallback_colors[idx % len(fallback_colors)]
             if stable_values:
                 ax_hist.scatter(
                     stable_values,
@@ -840,6 +1181,18 @@ def main() -> None:
     hist_path = os.path.join(analysis_dir, "max_rates_histogram.png")
     fig.savefig(hist_path, dpi=200)
     plt.close(fig)
+    active_hist_path: str | None = None
+    active_counts_path: str | None = None
+    maxima_by_cluster = _maxima_by_active_cluster(active_cluster_records, seed_results)
+    if maxima_by_cluster:
+        active_hist_path, active_counts_path = _plot_active_cluster_histograms(
+            analysis_dir,
+            maxima_by_cluster,
+            bins,
+            focus_expectations,
+            plt,
+            focus_colors=focus_color_map,
+        )
     init_records = []
     for seed in seen_seeds:
         entry = assignment_cache.get(seed)
@@ -868,12 +1221,19 @@ def main() -> None:
         "bin_size": bin_size,
         "init_fixpoints": init_records,
         "active_tail_fraction": ACTIVE_TAIL_FRACTION,
+        "active_count_method": active_count_method,
         "active_cluster_stats": active_cluster_records,
         "confusion_matrix": confusion_matrix.tolist(),
+        "active_cluster_histogram_file": os.path.basename(active_hist_path) if active_hist_path else None,
+        "active_cluster_counts_file": os.path.basename(active_counts_path) if active_counts_path else None,
     }
     write_yaml_config(summary, os.path.join(analysis_dir, "analysis_summary.yaml"))
     print(f"Stored pooled maxima at {pooled_path}")
     print(f"Saved histogram to {hist_path}")
+    if active_hist_path:
+        print(f"Saved per-cluster histograms to {active_hist_path}")
+    if active_counts_path:
+        print(f"Stored per-cluster bin counts at {active_counts_path}")
 
 
 if __name__ == "__main__":
