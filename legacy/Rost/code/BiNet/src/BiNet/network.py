@@ -191,6 +191,25 @@ class _BaseNetwork(object):
                 output = np.array(output).T
         return output
 
+    def compute_fields_from_states(self, states, external_input=None):
+        """Compute subthreshold fields for recorded states."""
+        state_block = np.asarray(states, dtype=float)
+        if state_block.ndim == 1:
+            state_block = state_block[:, None]
+        if state_block.shape[0] != self.N:
+            raise ValueError("states must have length equal to network size")
+        if external_input is None:
+            external_block = np.zeros((self.input_weights.shape[1], state_block.shape[1]))
+        else:
+            external_block = np.asarray(external_input, dtype=float)
+            if external_block.ndim == 1:
+                external_block = external_block[:, None]
+        if external_block.shape[0] != self.input_weights.shape[1]:
+            raise ValueError("external_input dimension mismatch.")
+        syn_input = self.weights.dot(state_block)
+        ext_input = self.input_weights.dot(external_block)
+        return syn_input + ext_input - self.T[:, None]
+
 class BalancedNetwork(_BaseNetwork):
     def __init__(self,Ns,ps,Ts,n_updates=1,update_ratios=[1,2],update_mode = 'random',delta_j=None,delta_T = None,g=1):
         """ implements a balanced network of excitatory and inhibitory units. 
@@ -244,6 +263,5 @@ class BalancedNetwork(_BaseNetwork):
     def _get_next_updates(self):
         return self.update_queue.next()
         
-
 
 

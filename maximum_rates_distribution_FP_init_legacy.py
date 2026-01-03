@@ -538,7 +538,7 @@ def _legacy_cluster_sizes(parameter: Dict[str, Any]) -> Tuple[int, int]:
     return N_E // Q_value, N_I // Q_value
 
 
-def _initial_state_vector(parameter: Dict[str, Any], rates: Sequence[float]) -> np.ndarray:
+def _initial_state_vector(parameter: Dict[str, Any], rates: Sequence[float], *, permutation_seed: int | None = None) -> np.ndarray:
     Q_value = int(parameter.get("Q", 0) or 0)
     values = np.asarray(rates, dtype=float).ravel()
     if values.size != 2 * Q_value:
@@ -546,6 +546,11 @@ def _initial_state_vector(parameter: Dict[str, Any], rates: Sequence[float]) -> 
     excit_size, inhib_size = _legacy_cluster_sizes(parameter)
     excit_probs = np.clip(values[:Q_value], 0.0, 1.0)
     inhib_probs = np.clip(values[Q_value:], 0.0, 1.0)
+    if Q_value > 1 and permutation_seed is not None:
+        rng = np.random.default_rng(int(permutation_seed))
+        perm = rng.permutation(Q_value)
+        excit_probs = excit_probs[perm]
+        inhib_probs = inhib_probs[perm]
     excit_vector = np.repeat(excit_probs, excit_size)
     inhib_vector = np.repeat(inhib_probs, inhib_size)
     return np.concatenate([excit_vector, inhib_vector]).astype(np.float32)
@@ -558,6 +563,7 @@ def _build_legacy_parameters(
     init_rates: Sequence[float],
     *,
     capture_spikes: bool = False,
+    cluster_seed: int | None = None,
 ) -> Dict[str, Any]:
     required = ("N_E", "N_I", "Q", "V_th", "g", "p0_ee", "p0_ie", "p0_ei", "p0_ii", "tau_e")
     for key in required:
@@ -582,7 +588,8 @@ def _build_legacy_parameters(
     jep = R_Eplus
     jip = 1.0 + R_j * (jep - 1.0)
     jplus = np.array([[jep, jip], [jip, jip]], dtype=float)
-    init_vector = _initial_state_vector(parameter, init_rates)
+    permutation_seed = seed if cluster_seed is None else int(seed) + int(cluster_seed)
+    init_vector = _initial_state_vector(parameter, init_rates, permutation_seed=permutation_seed)
     warmup_steps = int(binary_cfg.get("warmup_steps", 0) or 0)
     simulation_steps = int(binary_cfg.get("simulation_steps", 0) or 0)
     total_steps = warmup_steps + simulation_steps
@@ -633,6 +640,7 @@ def _build_legacy_parameters(
         "smooth_rates": None,
         "downsample": None,
     }
+    legacy_params["state_record_stride"] = int(total_updates)
     if capture_spikes:
         legacy_params["return_mean_cluster_rates"] = False
         legacy_params["return_max_cluster_rates"] = False
@@ -653,6 +661,8 @@ def _run_legacy_binary_simulation(
     *,
     seed: int,
     capture_spikes: bool = False,
+    capture_state_dynamics: bool = False,
+    cluster_seed: int | None = None,
 ) -> str:
     legacy_params = _build_legacy_parameters(
         parameter,
@@ -660,16 +670,43 @@ def _run_legacy_binary_simulation(
         seed,
         population_rate_inits,
         capture_spikes=capture_spikes,
+        cluster_seed=cluster_seed,
     )
+    state_stride = int(legacy_params.get("state_record_stride", 1) or 1)
+    if capture_state_dynamics:
+        if capture_spikes:
+            raise ValueError("Cannot capture spikes and state dynamics simultaneously.")
+        legacy_params["return_mean_cluster_rates"] = False
+        legacy_params["return_max_cluster_rates"] = False
+        legacy_params["return_cluster_rates_and_spiketimes"] = False
+        legacy_params["return_state_dynamics"] = True
     raw_output = legacy_simulate(legacy_params)
+    if not isinstance(raw_output, dict):
+        raise RuntimeError("Legacy simulation did not return a structured payload.")
+    rates_array = np.asarray(raw_output.get("cluster_rates"), dtype=float)
+    if rates_array.size == 0:
+        raise ValueError("Legacy simulation did not return cluster rate traces.")
     spike_payload = None
+    neuron_states = np.zeros((0, 0), dtype=np.uint8)
+    state_times = np.zeros((0,), dtype=np.int64)
+    subthreshold_fields = np.zeros((0, 0), dtype=np.float32)
     if capture_spikes:
-        if not isinstance(raw_output, (tuple, list)) or len(raw_output) < 2:
-            raise RuntimeError("Legacy simulation did not return spike times.")
-        rates_array = np.asarray(raw_output[0], dtype=float)
-        spike_payload = np.asarray(raw_output[1], dtype=float)
-    else:
-        rates_array = np.asarray(raw_output, dtype=float)
+        spike_payload = np.asarray(raw_output.get("spike_times"), dtype=float)
+        if spike_payload.size == 0:
+            raise RuntimeError("Legacy simulation did not provide spike times.")
+    if capture_state_dynamics:
+        sampled_states = np.asarray(raw_output.get("sampled_states"), dtype=float)
+        sampled_fields = np.asarray(raw_output.get("sampled_fields"), dtype=float)
+        state_indices = np.asarray(raw_output.get("state_indices"), dtype=np.int64).ravel()
+        if sampled_states.size == 0 or sampled_fields.size == 0:
+            raise RuntimeError("Legacy simulation did not provide sampled state dynamics.")
+        if sampled_states.ndim == 3:
+            sampled_states = sampled_states[0]
+        if sampled_fields.ndim == 3:
+            sampled_fields = sampled_fields[0]
+        neuron_states = sampled_states.T.astype(np.uint8, copy=False)
+        subthreshold_fields = sampled_fields.T.astype(np.float32, copy=False)
+        state_times = state_indices.astype(np.int64) + 1
     if rates_array.ndim == 3:
         # trials x clusters x time
         cluster_rates = rates_array[0]
@@ -703,8 +740,7 @@ def _run_legacy_binary_simulation(
         names = [f"E{idx + 1}" for idx in range(Q_value)] + [f"I{idx + 1}" for idx in range(Q_value)]
     else:
         names = [f"C{idx + 1}" for idx in range(rates.shape[1])]
-    neuron_states = np.zeros((0, 0), dtype=np.uint8)
-    if capture_spikes and spike_payload is not None:
+    if not capture_state_dynamics and capture_spikes and spike_payload is not None:
         total_neurons = int(parameter.get("N_E", 0) or 0) + int(parameter.get("N_I", 0) or 0)
         neuron_states = _build_spike_state_array(
             spike_payload,
@@ -721,6 +757,9 @@ def _run_legacy_binary_simulation(
         times=times.astype(np.float32),
         sample_interval=np.array(int(sample_interval), dtype=np.int64),
         neuron_states=neuron_states,
+        neuron_state_interval=np.array(int(state_stride), dtype=np.int64),
+        neuron_state_times=state_times.astype(np.int64),
+        subthreshold_fields=subthreshold_fields,
     )
     return trace_path
 

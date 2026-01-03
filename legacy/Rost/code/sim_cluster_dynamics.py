@@ -8,6 +8,14 @@ from time import time as clock
 from scipy.signal import decimate, convolve2d
 
 
+def _compute_state_sample_indices(length, stride):
+    stride = max(1, int(stride))
+    if length <= 0:
+        return pylab.zeros(0, dtype=int)
+    start = min(stride - 1, max(length - 1, 0))
+    return pylab.arange(start, length, stride)
+
+
 def simulate(original_params):
     params = deepcopy(original_params)
     try:
@@ -36,142 +44,144 @@ def simulate(original_params):
     elif params['spec_func'] == 'EI_jplus':
         spec_func = weights.EI_jplus_cluster_specs
 
-    return_mean_cluster_rates = params.get('return_mean_cluster_rates',False)
-    return_max_cluster_rates = params.get('return_max_cluster_rates',False)
-    return_cluster_rates_and_spiketimes = params.get('return_cluster_rates_and_spiketimes',False)
-    smooth_rates = params.get('smooth_rates',None) # std of gaussian smoothing kernel in ms
-    
-    downsample = params.get('downsample',None)
+    return_mean_cluster_rates = bool(params.get('return_mean_cluster_rates', False))
+    return_max_cluster_rates = bool(params.get('return_max_cluster_rates', False))
+    return_cluster_rates_and_spiketimes = bool(params.get('return_cluster_rates_and_spiketimes', False))
+    return_state_dynamics = bool(params.get('return_state_dynamics', False))
+    smooth_rates = params.get('smooth_rates', None)  # std of gaussian smoothing kernel in ms
+    downsample = params.get('downsample', None)
+    state_record_stride = int(params.get('state_record_stride', 1) or 1)
 
     net = network.BalancedNetwork(**params['network_args'])
-    
-    spec_args= params['spec_args']
-    for k in ['Ns','ps','Ts','g']:
+
+    spec_args = params['spec_args']
+    for k in ['Ns', 'ps', 'Ts', 'g']:
         spec_args[k] = params['network_args'][k]
-    spec_args['taus'] = net.taus/net.taus[0]*params['effective_tau']
+    spec_args['taus'] = net.taus / net.taus[0] * params['effective_tau']
     if simulation_type == 'new':
         spec_args['kappa'] = kappa
 
-    cNs,cps,cjs,cTs,ctaus = spec_func(**spec_args)
+    cNs, cps, cjs, cTs, ctaus = spec_func(**spec_args)
 
-    w = weights.generate_weight_matrix(cNs,cps,cjs,delta_j=None, connection_type=connection_type)
+    w = weights.generate_weight_matrix(cNs, cps, cjs, delta_j=None, connection_type=connection_type)
     net.set_weights(w)
-    
-    w_in = pylab.ones((net.N,2))
-    w_in[:net.Ns[0],0] = params['jxs'][0]
-    w_in[net.Ns[0]:,0] = params['jxs'][1]
-    stim_clusters = list(range(len(cNs)-2))
+
+    w_in = pylab.ones((net.N, 2))
+    w_in[:net.Ns[0], 0] = params['jxs'][0]
+    w_in[net.Ns[0]:, 0] = params['jxs'][1]
+    stim_clusters = list(range(len(cNs) - 2))
     pylab.shuffle(stim_clusters)
     stim_clusters = stim_clusters[:params['stim_clusters']]
-    n_bins = [0]+pylab.cumsum(cNs).tolist()
+    n_bins = [0] + pylab.cumsum(cNs).tolist()
     for stim_cluster in stim_clusters:
-        inds = list(range(n_bins[stim_cluster],n_bins[stim_cluster+1]))
-        w_in[inds,1] = params['jxs'][0]
+        inds = list(range(n_bins[stim_cluster], n_bins[stim_cluster + 1]))
+        w_in[inds, 1] = params['jxs'][0]
 
     net.set_input_weights(w_in)
     net.initialise_state(params['init'])
 
-    input = pylab.ones((2,int(params['input_length']*net.taus[0])))*params['mx']
-    input[1,:] *= 0
+    input = pylab.ones((2, int(params['input_length'] * net.taus[0]))) * params['mx']
+    input[1, :] *= 0
+    input[1, int(params['stim_start'] * net.taus[0]):int(params['stim_end'] * net.taus[0])] = params['stim_level']
 
-    input[1,int(params['stim_start']*net.taus[0]):int(params['stim_end']*net.taus[0])] = params['stim_level']
-
-
-
+    kernel = None
     if smooth_rates is not None:
         tau_samples = net.taus[0]
         if downsample is not None:
             tau_samples /= int(downsample)
         tau_ms = params['effective_tau']
-        dt = tau_ms/float(tau_samples)
-        
-        kernel = spiketools.gaussian_kernel(sigma=smooth_rates,dt=dt,nstd=2.)[None,:]
-        kernel/= kernel.sum()
-    
-    if return_mean_cluster_rates or return_max_cluster_rates:
-        
-            
-        output = []
-        for t in range(params['trials']):
-            all_states = net.forward(input,return_state=True)
-           
+        dt = tau_ms / float(tau_samples)
+        kernel = spiketools.gaussian_kernel(sigma=smooth_rates, dt=dt, nstd=2.)[None, :]
+        kernel /= kernel.sum()
+
+    needs_cluster_rates = any(
+        (
+            return_mean_cluster_rates,
+            return_max_cluster_rates,
+            return_cluster_rates_and_spiketimes,
+            return_state_dynamics,
+        )
+    )
+    result = {}
+    if needs_cluster_rates:
+        cluster_outputs = []
+        sampled_states = []
+        sampled_fields = []
+        state_indices = None
+        spiketimes = pylab.zeros((3, 0))
+        for trial in range(params['trials']):
+            if return_cluster_rates_and_spiketimes:
+                net.update_record = []
+            all_states = net.forward(
+                input,
+                return_state=True,
+                record_subthreshold=False,
+                record_updates=return_cluster_rates_and_spiketimes,
+            )
+            if return_cluster_rates_and_spiketimes:
+                updates = pylab.zeros_like(all_states)
+                for step, update in enumerate(net.update_record):
+                    updates[update, step] = 1
+                spikes = (updates > 0) * (all_states > 0)
+                units, times = pylab.where(spikes)
+                if len(units):
+                    new_spiketimes = pylab.concatenate(
+                        (times[None, :], pylab.ones((1, len(units))) * trial, units[None, :]), axis=0
+                    )
+                    spiketimes = pylab.append(spiketimes, new_spiketimes, axis=1)
+                net.update_record = []
             cluster_states = []
-            for i in range(len(n_bins)-1):
-                cluster_states.append(all_states[n_bins[i]:n_bins[i+1]].mean(axis=0))
+            for i in range(len(n_bins) - 1):
+                cluster_states.append(all_states[n_bins[i]:n_bins[i + 1]].mean(axis=0))
+            cluster_states = pylab.array(cluster_states)
             if downsample is not None:
                 downsample_factor = int(downsample)
-                cluster_states = decimate(pylab.array(cluster_states), downsample_factor,axis=1)
-            if smooth_rates is not None:
-                cluster_states = convolve2d(cluster_states,kernel,'same')
-                half_width = kernel.shape[1]//2
-                cluster_states[:,:half_width] = pylab.nan
-                cluster_states[:,-half_width:] = pylab.nan
-
-
-            output.append(cluster_states)
-        output = pylab.array(output)
-
+                cluster_states = decimate(cluster_states, downsample_factor, axis=1)
+            if kernel is not None:
+                cluster_states = convolve2d(cluster_states, kernel, 'same')
+                half_width = kernel.shape[1] // 2
+                if half_width > 0:
+                    cluster_states[:, :half_width] = pylab.nan
+                    cluster_states[:, -half_width:] = pylab.nan
+            cluster_outputs.append(cluster_states)
+            if return_state_dynamics:
+                indices = _compute_state_sample_indices(all_states.shape[1], state_record_stride)
+                if indices.size == 0 and all_states.shape[1] > 0:
+                    indices = pylab.array([all_states.shape[1] - 1], dtype=int)
+                state_indices = indices
+                state_slice = all_states[:, indices]
+                sampled_states.append(state_slice)
+                input_slice = input[:, indices]
+                fields = net.compute_fields_from_states(state_slice, input_slice)
+                sampled_fields.append(fields)
+        cluster_outputs = pylab.array(cluster_outputs)
+        result["cluster_rates"] = cluster_outputs
         if return_mean_cluster_rates:
-            if 'return_kernel' in params.keys() and params['return_kernel']:
-                try:
-                    return output,kernel
-                except:
-                    return output
-            return output
-        else:
-            excitatory_output = output[:,:params['spec_args']['Q']]
-            
-            max_output = excitatory_output.max(axis = 2)
-            
-            return max_output
-    
-    
+            result["mean_cluster_rates"] = cluster_outputs
+        if params.get('return_kernel') and kernel is not None:
+            result["kernel"] = kernel
+        if return_max_cluster_rates:
+            excitatory_output = cluster_outputs[:, :params['spec_args']['Q']]
+            result["max_cluster_rates"] = excitatory_output.max(axis=2)
+        if return_cluster_rates_and_spiketimes:
+            result["spike_times"] = spiketimes
+        if return_state_dynamics:
+            result["sampled_states"] = pylab.array(sampled_states)
+            result["sampled_fields"] = pylab.array(sampled_fields)
+            result["state_indices"] = state_indices if state_indices is not None else pylab.zeros(0, dtype=int)
+        return result
 
-    elif return_cluster_rates_and_spiketimes:
-        output = []
-        spiketimes = pylab.zeros((3,0))
-        for t in range(params['trials']):
-            all_states = net.forward(input,return_state=True,record_updates = True)
-            updates = pylab.zeros_like(all_states)
-            for i,update in enumerate(net.update_record):
-                updates[update,i] = 1
-            spikes = (updates>0)*(all_states>0)
-            units,times = pylab.where(spikes)
-            new_spiketimes = pylab.concatenate((times[None,:],pylab.ones((1,len(units)))*t,units[None,:]),axis=0)
-            spiketimes = pylab.append(spiketimes, new_spiketimes,axis=1)
-            
-            net.update_record = []
-
-            cluster_states = []
-            for i in range(len(n_bins)-1):
-                cluster_states.append(all_states[n_bins[i]:n_bins[i+1]].mean(axis=0))
-            if downsample is not None:
-                downsample_factor = int(downsample)
-                cluster_states = decimate(pylab.array(cluster_states), downsample_factor,axis=1)
-            if smooth_rates is not None:
-                cluster_states = convolve2d(cluster_states,kernel,'same')
-            output.append(cluster_states)
-        return pylab.array(output),spiketimes
-    
-
-
-    else:
-        output = [net.forward(input,return_spiketimes = True) for t in range(params['trials'])]
-        units = pylab.arange(net.N)
-
-        all_spiketimes = pylab.ones((3,0))
-        for trial,spiketimes in enumerate(output):
-            trial_spiketimes = pylab.zeros((3,spiketimes.shape[1]))
-            trial_spiketimes[0] = spiketimes[0]
-            trial_spiketimes[1,:] = trial
-            trial_spiketimes[2] = spiketimes[1]
-            all_spiketimes = pylab.append(all_spiketimes,trial_spiketimes, axis=1)
-
-
-        # convert to ms
-        all_spiketimes[0] *= params['effective_tau']/float(net.taus[0])
-
-        return all_spiketimes
+    output = [net.forward(input, return_spiketimes=True) for _ in range(params['trials'])]
+    all_spiketimes = pylab.ones((3, 0))
+    for trial, spiketimes in enumerate(output):
+        trial_spiketimes = pylab.zeros((3, spiketimes.shape[1]))
+        trial_spiketimes[0] = spiketimes[0]
+        trial_spiketimes[1, :] = trial
+        trial_spiketimes[2] = spiketimes[1]
+        all_spiketimes = pylab.append(all_spiketimes, trial_spiketimes, axis=1)
+    all_spiketimes[0] *= params['effective_tau'] / float(net.taus[0])
+    result["spike_times"] = all_spiketimes
+    return result
 
 def analyse(params):
     try:

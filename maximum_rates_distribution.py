@@ -259,12 +259,22 @@ def _load_trace_payload(trace_path: str) -> Dict[str, Any]:
         times = np.asarray(data.get("times"), dtype=float) if "times" in data else np.arange(rates.shape[0])
         states = np.asarray(data.get("neuron_states"), dtype=np.uint8) if "neuron_states" in data else np.zeros((0, 0), dtype=np.uint8)
         sample_interval = int(np.asarray(data.get("sample_interval", 1)).item())
+        state_interval = int(np.asarray(data.get("neuron_state_interval", 0)).item())
+        state_times = np.asarray(data.get("neuron_state_times"), dtype=np.int64) if "neuron_state_times" in data else np.zeros((0,), dtype=np.int64)
+        subthreshold = (
+            np.asarray(data.get("subthreshold_fields"), dtype=np.float32)
+            if "subthreshold_fields" in data
+            else np.zeros((0, 0), dtype=np.float32)
+        )
     return {
         "rates": rates,
         "names": names,
         "times": times,
         "states": states,
         "sample_interval": sample_interval,
+        "state_interval": state_interval,
+        "state_times": state_times,
+        "subthreshold_fields": subthreshold,
     }
 
 
