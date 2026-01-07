@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass, replace
-from itertools import cycle
 from pathlib import Path
 from typing import Dict, Iterator, List, Sequence
 
@@ -50,6 +49,8 @@ class RasterPanelSpec:
     window_duration: float = RASTER_WINDOW_DURATION
     cluster_indices: Sequence[int] | None = None
     cluster_count: int = 20
+    marker_size: float = 1.0
+    label_font_size: float = 7.0
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,13 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_FIGURE_HEIGHT_MM,
         help="Overall figure height in millimeters (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--raster-neuron-step",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Only plot every Nth neuron in the raster panels (default: %(default)s).",
     )
     return parser.parse_args()
 
@@ -434,12 +442,20 @@ def _finalize_events(times_list: List[np.ndarray], neurons_list: List[np.ndarray
     return np.concatenate(times_list), np.concatenate(neurons_list)
 
 
-def plot_onset_raster(ax: Axes, panel: PanelData, window: TimeWindow) -> None:
+def plot_onset_raster(ax: Axes, panel: PanelData, window: TimeWindow, neuron_step: int = 1) -> None:
     times, neurons = _collect_onset_events(panel.payload.state_source, panel.payload.sample_interval, window)
     if times.size == 0 or neurons.size == 0:
         ax.text(0.5, 0.5, "No neuron onset events", ha="center", va="center", transform=ax.transAxes)
         ax.set_axis_off()
         return
+    neuron_step = max(1, int(neuron_step))
+    if neuron_step > 1:
+        step_mask = (neurons % neuron_step) == 0
+        if step_mask.any():
+            times = times[step_mask]
+            neurons = neurons[step_mask]
+    marker_size = max(0.1, float(panel.spec.marker_size))
+    label_font_size = max(1.0, float(panel.spec.label_font_size))
     neuron_count = panel.payload.state_source.neuron_count
     if neuron_count <= 0:
         neuron_count = int(panel.parameter.get("N_E", 0)) + int(panel.parameter.get("N_I", 0))
@@ -447,9 +463,9 @@ def plot_onset_raster(ax: Axes, panel: PanelData, window: TimeWindow) -> None:
     excit_mask = neurons < excit_limit
     inhib_mask = neurons >= excit_limit
     if excit_mask.any():
-        ax.scatter(times[excit_mask], neurons[excit_mask], s=6, marker=".", color="black")
+        ax.scatter(times[excit_mask], neurons[excit_mask], s=marker_size, marker=".", color="black")
     if inhib_mask.any():
-        ax.scatter(times[inhib_mask], neurons[inhib_mask], s=6, marker=".", color="#8B0000")
+        ax.scatter(times[inhib_mask], neurons[inhib_mask], s=marker_size, marker=".", color="#8B0000")
     ax.set_xlim(window.start, window.end)
     ax.set_ylim(-0.5, neuron_count - 0.5)
     ax.tick_params(axis="y", left=False, labelleft=False)
@@ -465,7 +481,7 @@ def plot_onset_raster(ax: Axes, panel: PanelData, window: TimeWindow) -> None:
         color="black",
         va="center",
         ha="right",
-        fontsize=7,
+        fontsize=label_font_size,
         rotation=90,
     )
     ax.text(
@@ -475,7 +491,7 @@ def plot_onset_raster(ax: Axes, panel: PanelData, window: TimeWindow) -> None:
         color="#8B0000",
         va="center",
         ha="right",
-        fontsize=7,
+        fontsize=label_font_size,
         rotation=90,
     )
 
@@ -497,7 +513,6 @@ def plot_cluster_activity(
     ax: Axes,
     panel: PanelData,
     window: TimeWindow,
-    colors: Sequence[str],
     *,
     ylabel: str | None = None,
 ) -> None:
@@ -511,12 +526,16 @@ def plot_cluster_activity(
     mask = mask_window(times, window)
     time_view = times[mask] if mask.any() else times
     rate_view = rates[mask] if mask.any() else rates
-    color_cycle = cycle(colors)
-    for idx, color in zip(cluster_indices, color_cycle):
+    cmap = plt.get_cmap("Greys")
+    if len(cluster_indices) <= 1:
+        shade_values = [0.6]
+    else:
+        shade_values = np.linspace(0.2, 0.85, len(cluster_indices))
+    for idx, shade in zip(cluster_indices, shade_values):
         if idx >= rate_view.shape[1]:
             continue
         label = panel.payload.names[idx]
-        ax.plot(time_view, rate_view[:, idx], color=color, linewidth=1.2, label=label)
+        ax.plot(time_view, rate_view[:, idx], color=cmap(shade), linewidth=1.2, label=label)
     ax.set_xlim(window.start, window.end)
     ax.set_ylim(0.0, 1.0)
     if ylabel:
@@ -711,13 +730,13 @@ def main() -> None:
         if panel is None:
             continue
         window = TimeWindow(start=float(panel.spec.window_start), duration=float(panel.spec.window_duration))
-        plot_onset_raster(axes.raster, panel, window)
+        plot_onset_raster(axes.raster, panel, window, neuron_step=args.raster_neuron_step)
         ylabel = r"$\bar{m_c}$" if label == "b1" else None
-        plot_cluster_activity(axes.rates, panel, window, plot_cfg.line_colors, ylabel=ylabel)
+        plot_cluster_activity(axes.rates, panel, window, ylabel=ylabel)
         if label == "b1":
-            axes.raster.set_title(r"$\kappa=0$", fontweight="bold")
+            axes.raster.set_title(r"$\boldsymbol{\kappa=0}$")
         elif label == "b2":
-            axes.raster.set_title(r"$\kappa=1$", fontweight="bold")
+            axes.raster.set_title(r"$\boldsymbol{\kappa=1}$")
         annotate_panel(axes.raster, label, plot_cfg)
     reference_panel = panels[0]
     plot_contrast_curves(
