@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 import os
 import pickle
+from functools import lru_cache
 from types import SimpleNamespace
-from typing import Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,6 +22,9 @@ from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg
 
 PROB_KEYS = ("p0_ee", "p0_ei", "p0_ie", "p0_ii")
 MARKER_STRIDE = 1
+BRANCH_GROUP_TOL = 1e-6
+BRANCH_MAX_JUMP = 0.3
+BRANCH_MAX_MISSING_STEPS = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +38,16 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=[0.3, 0.1],
         help="Average connectivity values defining the row order (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--row-parameter",
+        action="append",
+        default=[],
+        metavar="ROW:key=value",
+        help=(
+            "Row-specific parameter override (0-based row index). "
+            "Example: --row-parameter 0:p0_ee=0.15 --row-parameter 1:connection_type=poisson"
+        ),
     )
     parser.add_argument(
         "--columns",
@@ -138,6 +152,45 @@ def _scale_probabilities(parameter: Mapping[str, float], target_avg: float) -> D
     return scaled
 
 
+def _coerce_override_value(raw: str) -> Any:
+    text = raw.strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in {"none", "null"}:
+        return None
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    try:
+        return int(text)
+    except ValueError:
+        try:
+            return float(text)
+        except ValueError:
+            return text
+
+
+def _parse_row_parameter_overrides(entries: Sequence[str] | None) -> Dict[int, Dict[str, Any]]:
+    overrides: Dict[int, Dict[str, Any]] = {}
+    if not entries:
+        return overrides
+    for entry in entries:
+        if not entry:
+            continue
+        if ":" not in entry:
+            raise ValueError(f"Missing ':' separator in row override '{entry}'.")
+        row_part, assignment = entry.split(":", 1)
+        if "=" not in assignment:
+            raise ValueError(f"Missing '=' in row override '{entry}'.")
+        key_part, value_part = assignment.split("=", 1)
+        row_idx = int(row_part.strip())
+        key = key_part.strip()
+        if not key:
+            raise ValueError(f"Missing parameter key in row override '{entry}'.")
+        overrides.setdefault(row_idx, {})[key] = _coerce_override_value(value_part)
+    return overrides
+
+
 def _coerce_focus_block(fixpoints: Mapping, focus_count: int):
     if not fixpoints:
         return {}
@@ -163,6 +216,117 @@ def _collect_fixpoint_points(fixpoints: Mapping, focus_count: int) -> List[Tuple
             entries.append((float(r_value), float(point), stability))
     entries.sort(key=lambda item: (item[0], item[1]))
     return entries
+
+
+def _match_branch_values(previous: Sequence[float], current: Sequence[float]) -> Dict[int, int]:
+    """
+    Return an assignment mapping indices of `previous` values to indices of `current`
+    values, minimizing the total absolute jump and matching as many pairs as possible.
+    """
+    prev_vals = tuple(float(val) for val in previous)
+    curr_vals = tuple(float(val) for val in current)
+    n_prev = len(prev_vals)
+    n_curr = len(curr_vals)
+    target = min(n_prev, n_curr)
+    if target == 0:
+        return {}
+
+    @lru_cache(None)
+    def helper(idx: int, mask: int, matches_left: int) -> Tuple[float, Tuple[Tuple[int, int], ...]]:
+        if matches_left == 0:
+            return 0.0, ()
+        if idx >= n_prev or n_prev - idx < matches_left:
+            return float("inf"), ()
+        best_cost, best_pairs = helper(idx + 1, mask, matches_left)
+        for curr_idx in range(n_curr):
+            if mask & (1 << curr_idx):
+                continue
+            next_cost, next_pairs = helper(idx + 1, mask | (1 << curr_idx), matches_left - 1)
+            total_cost = next_cost + abs(curr_vals[curr_idx] - prev_vals[idx])
+            if total_cost < best_cost:
+                best_cost = total_cost
+                best_pairs = next_pairs + ((idx, curr_idx),)
+        return best_cost, best_pairs
+
+    _, pairs = helper(0, 0, target)
+    return {prev_idx: curr_idx for prev_idx, curr_idx in pairs}
+
+
+def _segment_branches(
+    points: Sequence[Tuple[float, float]],
+    *,
+    tol: float = BRANCH_GROUP_TOL,
+    max_jump: float = BRANCH_MAX_JUMP,
+) -> List[List[Tuple[float, float]]]:
+    if not points:
+        return []
+    sorted_points = sorted((float(x), float(y)) for x, y in points)
+    grouped: List[Tuple[float, List[float]]] = []
+    for x, y in sorted_points:
+        if not grouped or abs(x - grouped[-1][0]) > tol:
+            grouped.append((x, [y]))
+        else:
+            grouped[-1][1].append(y)
+
+    unique_xs = [entry[0] for entry in grouped]
+    typical_step = None
+    if len(unique_xs) >= 2:
+        diffs = [unique_xs[i + 1] - unique_xs[i] for i in range(len(unique_xs) - 1)]
+        diffs = [diff for diff in diffs if diff > tol]
+        if diffs:
+            typical_step = float(np.median(diffs))
+    gap_threshold = None
+    if typical_step and typical_step > 0:
+        gap_threshold = typical_step * (BRANCH_MAX_MISSING_STEPS + 1)
+
+    branches: List[Dict[str, object]] = []
+
+    def _start_branch(x_val: float, y_val: float) -> None:
+        branches.append(
+            {
+                "points": [(x_val, y_val)],
+                "last_x": x_val,
+                "last_y": y_val,
+                "active": True,
+            }
+        )
+
+    first_x, first_vals = grouped[0]
+    for y in sorted(first_vals):
+        _start_branch(first_x, y)
+
+    for x, y_values in grouped[1:]:
+        ordered_y = sorted(y_values)
+        active_indices = [idx for idx, branch in enumerate(branches) if branch["active"]]
+        if not active_indices:
+            for y in ordered_y:
+                _start_branch(x, y)
+            continue
+        previous_vals = [branches[idx]["last_y"] for idx in active_indices]
+        assignments = _match_branch_values(previous_vals, ordered_y)
+        assigned_curr = set()
+        for local_idx, branch_idx in enumerate(active_indices):
+            branch = branches[branch_idx]
+            curr_idx = assignments.get(local_idx)
+            if curr_idx is None:
+                branch["active"] = False
+                continue
+            x_gap = x - branch["last_x"]
+            if gap_threshold is not None and x_gap > gap_threshold + tol:
+                branch["active"] = False
+                continue
+            y_val = ordered_y[curr_idx]
+            if abs(y_val - branch["last_y"]) > max_jump:
+                branch["active"] = False
+                continue
+            branch["points"].append((x, y_val))
+            branch["last_x"] = x
+            branch["last_y"] = y_val
+            assigned_curr.add(curr_idx)
+        for idx, y_val in enumerate(ordered_y):
+            if idx not in assigned_curr:
+                _start_branch(x, y_val)
+    return [branch["points"] for branch in branches if branch["points"]]
 
 
 def _sparsify_points(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
@@ -240,6 +404,8 @@ def plot_panel(
     config: PlotConfig,
     letter: str,
     color_map: Dict[int, str],
+    label_coords: Tuple[float, float],
+    label_align: Tuple[str, str],
 ) -> None:
     fixpoints = summary.get("fixpoints", {})
     marker_points = _collect_fixpoint_points(fixpoints, marker_focus)
@@ -269,18 +435,22 @@ def plot_panel(
         stable_points = [(x, y) for x, y, status in points if status == "stable"]
         if not stable_points:
             continue
-        xs, ys = zip(*stable_points)
         color = color_map.get(focus_count, config.palette.get("line", "#2ca02c"))
-        ax.plot(xs, ys, color=color, linewidth=1.5)
-    label_x, label_y = config.panel_label_coords
-    label_ha, label_va = config.panel_label_align
+        segments = _segment_branches(stable_points)
+        if not segments:
+            xs, ys = zip(*stable_points)
+            ax.plot(xs, ys, color=color, linewidth=1.5)
+            continue
+        for segment in segments:
+            xs, ys = zip(*segment)
+            ax.plot(xs, ys, color=color, linewidth=1.5)
     panel_label = ax.text(
-        label_x,
-        label_y,
+        label_coords[0],
+        label_coords[1],
         f"{letter})",
         transform=ax.transAxes,
-        ha=label_ha,
-        va=label_va,
+        ha=label_align[0],
+        va=label_align[1],
         fontweight="bold",
         clip_on=False,
     )
@@ -290,6 +460,10 @@ def plot_panel(
 def main() -> None:
     args = parse_args()
     base_parameter = load_from_args(args)
+    try:
+        row_parameter_overrides = _parse_row_parameter_overrides(args.row_parameter)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid --row-parameter value: {exc}") from exc
     config = DEFAULT_PLOT_CONFIG
     config.apply()
     output_dir = os.path.dirname(args.output)
@@ -314,17 +488,28 @@ def main() -> None:
     letters = [chr(ord("a") + idx) for idx in range(n_rows * n_cols)]
     for r_idx, avg_conn in enumerate(row_order):
         scaled_parameter = _scale_probabilities(base_parameter, avg_conn)
-        actual_avg = _mean_connectivity(scaled_parameter) or avg_conn
+        row_parameter = dict(scaled_parameter)
+        overrides = row_parameter_overrides.get(r_idx)
+        if overrides:
+            row_parameter.update(overrides)
+        row_avg_value = _mean_connectivity(row_parameter)
+        actual_avg = row_avg_value if row_avg_value is not None else avg_conn
         for c_idx, kappa in enumerate(col_order):
             ax = axes[r_idx, c_idx]
             letter = letters[r_idx * n_cols + c_idx]
-            parameter = dict(scaled_parameter)
+            parameter = dict(row_parameter)
             parameter["kappa"] = float(kappa)
             summary_path = _ensure_fixpoint_summary(args, parameter, focus_counts)
             summary = _load_summary(summary_path)
             meta_param = summary.get("metadata", {}).get("analysis_parameter", {})
             if meta_param.get("connection_type"):
                 connection_type = meta_param.get("connection_type")
+            if c_idx == 0:
+                label_coords = config.panel_label_coords
+                label_align = config.panel_label_align
+            else:
+                label_coords = config.panel_label_above_coords
+                label_align = config.panel_label_above_align
             plot_panel(
                 ax,
                 summary=summary,
@@ -333,6 +518,8 @@ def main() -> None:
                 config=config,
                 letter=letter,
                 color_map=color_map,
+                label_coords=label_coords,
+                label_align=label_align,
             )
             if r_idx == n_rows - 1:
                 ax.set_xlabel(r"$R_{E+}$", labelpad=2)
@@ -340,9 +527,9 @@ def main() -> None:
                 ax.set_ylabel(r"$v_{\mathrm{out}}$", labelpad=2)
                 ax.yaxis.set_label_coords(-0.07, 0.5)
                 row_label = ax.text(
-                    -0.08,
+                    -0.15,
                     0.5,
-                    rf"$\bar{{p}} = {actual_avg:.2f}$",
+                    rf"$\boldsymbol{{\bar{{p}}}} \boldsymbol{{=}} {actual_avg:.2f}$",
                     transform=ax.transAxes,
                     rotation=90,
                     va="center",
@@ -352,13 +539,17 @@ def main() -> None:
                 )
                 row_label.set_in_layout(False)
             if r_idx == 0:
-                ax.set_title(rf"$\kappa = {kappa:.2f}$")
-            ticks = [tick for tick in ax.get_yticks() if abs(tick - 0.5) > 1e-6]
+                ax.set_title(rf"$\boldsymbol{{\kappa}} \boldsymbol{{=}} {kappa:.2f}$")
+            ticks = [
+                tick
+                for tick in ax.get_yticks()
+                if all(abs(tick - val) > 1e-6 for val in (0.25, 0.5, 0.75))
+            ]
             ax.set_yticks(ticks)
             if args.x_min is not None or args.x_max is not None:
                 ax.set_xlim(left=args.x_min, right=args.x_max)
             ax.set_ylim(bottom=args.y_min, top=args.y_max)
-    fig.tight_layout(rect=[0.03, 0.02, 0.995, 0.98])
+    fig.tight_layout(rect=[0.03, 0.01, 0.995, 0.98], h_pad=1.0, w_pad=0.3)
     fig.savefig(args.output, dpi=600)
     if args.write_pdf:
         pdf_path = os.path.splitext(args.output)[0] + ".pdf"

@@ -468,12 +468,8 @@ def main() -> None:
         overrides=args.overwrite,
     )
     target_rep = parameter.get("R_Eplus")
-    if target_rep is None:
-        raise ValueError(
-            "Parameter set must define R_Eplus to align fixpoints with the simulated network. "
-            "Use -O R_Eplus=<value> if it is missing."
-        )
-    target_rep = float(target_rep)
+    if target_rep is not None:
+        target_rep = float(target_rep)
     binary_cfg = _resolve_binary_config(parameter, args)
     bin_size = max(1, int(args.bin_size))
     bins = max(1, int(args.bins))
@@ -493,6 +489,27 @@ def main() -> None:
     if existing_base is None:
         metadata["base_output_name"] = base_output
         metadata_changed = True
+    stored_rep = metadata.get("R_Eplus")
+    if stored_rep is not None:
+        try:
+            stored_rep = float(stored_rep)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Metadata R_Eplus for {analysis_dir} is invalid: {stored_rep}") from exc
+    if target_rep is None:
+        if stored_rep is None:
+            raise ValueError(
+                "Parameter set must define R_Eplus or the analysis metadata must record it. "
+                "Use -O R_Eplus=<value> if it is missing."
+            )
+        target_rep = stored_rep
+    else:
+        if stored_rep is not None and abs(stored_rep - target_rep) > 1e-9:
+            raise ValueError(
+                f"Analysis folder already recorded R_Eplus={stored_rep}. Requested {target_rep} incompatible."
+            )
+        if stored_rep is None:
+            metadata["R_Eplus"] = target_rep
+            metadata_changed = True
     if metadata.get("bin_size") != bin_size:
         metadata["bin_size"] = bin_size
         metadata_changed = True

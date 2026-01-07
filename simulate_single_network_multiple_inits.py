@@ -341,6 +341,17 @@ def _standardized_columns(data: np.ndarray, indices: Sequence[int]) -> Tuple[np.
     return subset, mapping, valid
 
 
+def _centered_columns(data: np.ndarray, indices: Sequence[int]) -> Tuple[np.ndarray, Dict[int, int]]:
+    if not indices:
+        return np.zeros((data.shape[0], 0), dtype=np.float32), {}
+    unique = np.unique(np.asarray(indices, dtype=np.int64))
+    subset = data[:, unique].astype(np.float32, copy=True)
+    means = subset.mean(axis=0)
+    subset -= means
+    mapping = {int(unique[idx]): int(idx) for idx in range(unique.size)}
+    return subset, mapping
+
+
 def _compute_pairwise_correlations(
     data: np.ndarray,
     pairs: Sequence[Tuple[int, int]],
@@ -360,9 +371,33 @@ def _compute_pairwise_correlations(
         if not (valid_mask[first] and valid_mask[second]):
             continue
         vec = subset[:, first] * subset[:, second]
+        # Standardized columns => corr = mean(z_i * z_j)
         corr = float(np.mean(vec))
         corr_values.append(corr)
     return np.asarray(corr_values, dtype=np.float32)
+
+
+def _compute_pairwise_covariances(
+    data: np.ndarray,
+    pairs: Sequence[Tuple[int, int]],
+) -> np.ndarray:
+    if not pairs or data.size == 0:
+        return np.zeros((0,), dtype=np.float32)
+    flat_indices = [idx for pair in pairs for idx in pair]
+    subset, mapping = _centered_columns(data, flat_indices)
+    if subset.size == 0:
+        return np.zeros((0,), dtype=np.float32)
+    cov_values: List[float] = []
+    for i, j in pairs:
+        first = mapping.get(i)
+        second = mapping.get(j)
+        if first is None or second is None:
+            continue
+        vec = subset[:, first] * subset[:, second]
+        # Centered columns => cov = mean((x_i - mu_i) * (x_j - mu_j)) = corr * std_i * std_j
+        cov = float(np.mean(vec))
+        cov_values.append(cov)
+    return np.asarray(cov_values, dtype=np.float32)
 
 
 def _cluster_pair_correlation_stats(
@@ -502,6 +537,10 @@ def _analyze_trace(
         "field_excit_between": np.zeros((0,), dtype=np.float32),
         "field_inhib_within": np.zeros((0,), dtype=np.float32),
         "field_inhib_between": np.zeros((0,), dtype=np.float32),
+        "field_excit_within_cov": np.zeros((0,), dtype=np.float32),
+        "field_excit_between_cov": np.zeros((0,), dtype=np.float32),
+        "field_inhib_within_cov": np.zeros((0,), dtype=np.float32),
+        "field_inhib_between_cov": np.zeros((0,), dtype=np.float32),
     }
     if states_ds.size:
         within_pairs = _pair_index_sample(assembly_ids, max_pairs=max_pairs, within=True, rng=rng, allowed_mask=excit_mask)
@@ -513,14 +552,26 @@ def _analyze_trace(
         correlations["state_inhib_within"] = _compute_pairwise_correlations(states_ds, inhib_within)
         correlations["state_inhib_between"] = _compute_pairwise_correlations(states_ds, inhib_between)
     if fields_ds.size:
-        within_pairs = _pair_index_sample(assembly_ids, max_pairs=max_pairs, within=True, rng=rng, allowed_mask=excit_mask)
-        between_pairs = _pair_index_sample(assembly_ids, max_pairs=max_pairs, within=False, rng=rng, allowed_mask=excit_mask)
-        correlations["field_excit_within"] = _compute_pairwise_correlations(fields_ds, within_pairs)
-        correlations["field_excit_between"] = _compute_pairwise_correlations(fields_ds, between_pairs)
-        inhib_within = _pair_index_sample(assembly_ids, max_pairs=max_pairs, within=True, rng=rng, allowed_mask=inhib_mask)
-        inhib_between = _pair_index_sample(assembly_ids, max_pairs=max_pairs, within=False, rng=rng, allowed_mask=inhib_mask)
-        correlations["field_inhib_within"] = _compute_pairwise_correlations(fields_ds, inhib_within)
-        correlations["field_inhib_between"] = _compute_pairwise_correlations(fields_ds, inhib_between)
+        excit_within_pairs = _pair_index_sample(
+            assembly_ids, max_pairs=max_pairs, within=True, rng=rng, allowed_mask=excit_mask
+        )
+        excit_between_pairs = _pair_index_sample(
+            assembly_ids, max_pairs=max_pairs, within=False, rng=rng, allowed_mask=excit_mask
+        )
+        correlations["field_excit_within"] = _compute_pairwise_correlations(fields_ds, excit_within_pairs)
+        correlations["field_excit_between"] = _compute_pairwise_correlations(fields_ds, excit_between_pairs)
+        correlations["field_excit_within_cov"] = _compute_pairwise_covariances(fields_ds, excit_within_pairs)
+        correlations["field_excit_between_cov"] = _compute_pairwise_covariances(fields_ds, excit_between_pairs)
+        inhib_within_pairs = _pair_index_sample(
+            assembly_ids, max_pairs=max_pairs, within=True, rng=rng, allowed_mask=inhib_mask
+        )
+        inhib_between_pairs = _pair_index_sample(
+            assembly_ids, max_pairs=max_pairs, within=False, rng=rng, allowed_mask=inhib_mask
+        )
+        correlations["field_inhib_within"] = _compute_pairwise_correlations(fields_ds, inhib_within_pairs)
+        correlations["field_inhib_between"] = _compute_pairwise_correlations(fields_ds, inhib_between_pairs)
+        correlations["field_inhib_within_cov"] = _compute_pairwise_covariances(fields_ds, inhib_within_pairs)
+        correlations["field_inhib_between_cov"] = _compute_pairwise_covariances(fields_ds, inhib_between_pairs)
     target_for_variance = fields_ds if fields_ds.size else states_ds
     variance_stats = _compute_variance_decomposition(target_for_variance, assembly_ids, assembly_names)
     cluster_indices = list(range(len(assembly_names)))
@@ -658,6 +709,10 @@ def _collect_results(results: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "field_excit_between",
         "field_inhib_within",
         "field_inhib_between",
+        "field_excit_within_cov",
+        "field_excit_between_cov",
+        "field_inhib_within_cov",
+        "field_inhib_between_cov",
     )
     vector_keys = ("mu_emp", "var_total", "var_temporal", "var_quenched")
     matrix_keys = ("state_cluster_mean", "state_cluster_median", "field_cluster_mean", "field_cluster_median")
@@ -724,6 +779,7 @@ def _prepare_metadata(
     stability_filter: str,
     seed_network: int,
     binary_cfg: Dict[str, Any],
+    target_rep: float | None,
 ) -> Dict[str, Any]:
     metadata_path = os.path.join(analysis_dir, "metadata.yaml")
     metadata = base._load_metadata(metadata_path) if os.path.exists(metadata_path) else {}
@@ -787,6 +843,26 @@ def _prepare_metadata(
     metadata["warmup_steps"] = warmup
     metadata["record_steps"] = record
     metadata["base_seed"] = int(seed_network)
+    stored_rep = metadata.get("R_Eplus")
+    if target_rep is not None:
+        rep_value = float(target_rep)
+        if stored_rep is not None:
+            try:
+                stored_value = float(stored_rep)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Metadata R_Eplus for {analysis_dir} is invalid: {stored_rep}") from exc
+            if abs(stored_value - rep_value) > 1e-9:
+                raise ValueError(
+                    f"Analysis folder already recorded R_Eplus={stored_value}, requested {rep_value} incompatible."
+                )
+        if stored_rep is None:
+            metadata["R_Eplus"] = rep_value
+            changed = True
+    elif stored_rep is not None:
+        try:
+            metadata["R_Eplus"] = float(stored_rep)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Metadata R_Eplus for {analysis_dir} is invalid: {stored_rep}") from exc
     if changed:
         base._save_metadata(metadata_path, metadata)
     return metadata
@@ -917,7 +993,7 @@ def _scatter_points(ax, values: np.ndarray, position: float, color: str, rng: np
     )
 
 
-def _plot_violin_panel(ax, within: np.ndarray, between: np.ndarray, title: str) -> None:
+def _plot_violin_panel(ax, within: np.ndarray, between: np.ndarray, title: str, ylabel: str = "Correlation") -> None:
     labels = ["Within cluster", "Across clusters"]
     datasets = [np.asarray(within, dtype=float), np.asarray(between, dtype=float)]
     if datasets[0].size == 0 or datasets[1].size == 0:
@@ -930,7 +1006,7 @@ def _plot_violin_panel(ax, within: np.ndarray, between: np.ndarray, title: str) 
     ax.set_xticks([1, 2])
     ax.set_xticklabels(labels, rotation=10)
     ax.set_title(title)
-    ax.set_ylabel("Correlation")
+    ax.set_ylabel(ylabel)
     rng = np.random.default_rng(42)
     colors = ["#1f77b4", "#ff7f0e"]
     for idx, (values, color) in enumerate(zip(datasets, colors), start=1):
@@ -960,6 +1036,24 @@ def _plot_state_field_correlations(
     fig, axes = plt_module.subplots(1, 2, figsize=(10, 4), sharey=True)
     for ax, (title, within, between) in zip(axes, datasets):
         _plot_violin_panel(ax, within, between, title)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
+    plt_module.close(fig)
+
+
+def _plot_state_field_covariances(
+    path: str,
+    field_within_cov: np.ndarray,
+    field_between_cov: np.ndarray,
+    plt_module,
+) -> None:
+    within = np.asarray(field_within_cov, dtype=float)
+    between = np.asarray(field_between_cov, dtype=float)
+    if within.size == 0 or between.size == 0:
+        _plot_placeholder(path, "No field covariance data available", plt_module)
+        return
+    fig, ax = plt_module.subplots(figsize=(5, 4))
+    _plot_violin_panel(ax, within, between, "Subthreshold covariances", ylabel="Covariance")
     fig.tight_layout()
     fig.savefig(path, dpi=200)
     plt_module.close(fig)
@@ -1052,9 +1146,8 @@ def main() -> None:
         overrides=args.overwrite,
     )
     target_rep = parameter.get("R_Eplus")
-    if target_rep is None:
-        raise ValueError("Parameter set must define R_Eplus to align fixpoints with the simulated network.")
-    target_rep = float(target_rep)
+    if target_rep is not None:
+        target_rep = float(target_rep)
     bundle = base._load_fixpoint_bundle(fixpoints_path)
     binary_cfg = _resolve_binary_cfg(parameter, args)
     seed_network = args.seed_network
@@ -1070,7 +1163,16 @@ def main() -> None:
         stability_filter=args.stability_filter,
         seed_network=seed_network,
         binary_cfg=binary_cfg,
+        target_rep=target_rep,
     )
+    if target_rep is None:
+        stored_rep = metadata.get("R_Eplus")
+        if stored_rep is None:
+            raise ValueError(
+                "Parameter set lacks R_Eplus and analysis metadata does not record it. "
+                "Use -O R_Eplus=<value> to specify the sweep."
+            )
+        target_rep = float(stored_rep)
     assembly_ids, assembly_names = _assembly_membership(parameter)
     focus_filter = _normalize_focus_list(args.focus_counts) or metadata.get("focus_counts")
     pop_length = 2 * int(parameter.get("Q", 0) or 0)
@@ -1112,6 +1214,12 @@ def main() -> None:
         summary.get("state_excit_between", np.zeros((0,), dtype=np.float32)),
         summary.get("field_excit_within", np.zeros((0,), dtype=np.float32)),
         summary.get("field_excit_between", np.zeros((0,), dtype=np.float32)),
+        plt,
+    )
+    _plot_state_field_covariances(
+        os.path.join(analysis_dir, "violin_field_covariances.png"),
+        summary.get("field_excit_within_cov", np.zeros((0,), dtype=np.float32)),
+        summary.get("field_excit_between_cov", np.zeros((0,), dtype=np.float32)),
         plt,
     )
     _plot_variance_compare(

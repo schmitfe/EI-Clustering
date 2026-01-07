@@ -41,8 +41,10 @@ class PlotConfig:
         _cmyk_to_rgb_hex(0.0, 0.4, 0.8, 0.2),
         _cmyk_to_rgb_hex(0.6, 0.0, 0.1, 0.2),
     )
-    panel_label_coords: tuple[float, float] = (-0.08, 1.02)
+    panel_label_coords: tuple[float, float] = (-0.12, 1.02)
     panel_label_align: tuple[str, str] = ("right", "bottom")
+    panel_label_above_coords: tuple[float, float] = (0.0, 1.02)
+    panel_label_above_align: tuple[str, str] = ("center", "bottom")
 
     def apply(self) -> None:
         """Apply matplotlib styling for consistent publication-ready figures."""
