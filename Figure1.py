@@ -588,6 +588,8 @@ def plot_contrast_curves(ax: Axes, q_value: float, rep_value: float, colors: Seq
     density_color = "#7A6BC6"
     ax_weight = ax
     ax_density = ax_weight.twinx()
+    ax_density.spines["left"].set_visible(False)
+    ax_weight.spines["right"].set_visible(False)
     ax_weight.plot(kappa, weight_contrast, color=weight_color, linewidth=1.5)
     ax_density.plot(kappa, density_contrast, color=density_color, linewidth=1.5)
     ax_weight.set_xlabel(r"$\kappa$", labelpad=1.0)
@@ -713,9 +715,9 @@ def main() -> None:
         ylabel = r"$\bar{m_c}$" if label == "b1" else None
         plot_cluster_activity(axes.rates, panel, window, plot_cfg.line_colors, ylabel=ylabel)
         if label == "b1":
-            axes.raster.set_title(r"$\kappa=0$")
+            axes.raster.set_title(r"$\kappa=0$", fontweight="bold")
         elif label == "b2":
-            axes.raster.set_title(r"$\kappa=1$")
+            axes.raster.set_title(r"$\kappa=1$", fontweight="bold")
         annotate_panel(axes.raster, label, plot_cfg)
     reference_panel = panels[0]
     plot_contrast_curves(
