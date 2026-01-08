@@ -49,7 +49,7 @@ class RasterPanelSpec:
     window_duration: float = RASTER_WINDOW_DURATION
     cluster_indices: Sequence[int] | None = None
     cluster_count: int = 20
-    marker_size: float = 1.0
+    marker_size: float = 0.75
     label_font_size: float = 7.0
 
 
@@ -463,9 +463,26 @@ def plot_onset_raster(ax: Axes, panel: PanelData, window: TimeWindow, neuron_ste
     excit_mask = neurons < excit_limit
     inhib_mask = neurons >= excit_limit
     if excit_mask.any():
-        ax.scatter(times[excit_mask], neurons[excit_mask], s=marker_size, marker=".", color="black")
+        ax.scatter(
+            times[excit_mask],
+            neurons[excit_mask],
+            s=marker_size ** 2,  # scatter uses area (points^2)
+            c="black",
+            marker="o",
+            linewidths=0,  # no edge
+            edgecolors="none",
+        )
+
     if inhib_mask.any():
-        ax.scatter(times[inhib_mask], neurons[inhib_mask], s=marker_size, marker=".", color="#8B0000")
+        ax.scatter(
+            times[inhib_mask],
+            neurons[inhib_mask],
+            s=marker_size ** 2,
+            c="#8B0000",
+            marker="o",
+            linewidths=0,
+            edgecolors="none",
+        )
     ax.set_xlim(window.start, window.end)
     ax.set_ylim(-0.5, neuron_count - 0.5)
     ax.tick_params(axis="y", left=False, labelleft=False)
@@ -537,7 +554,7 @@ def plot_cluster_activity(
         label = panel.payload.names[idx]
         ax.plot(time_view, rate_view[:, idx], color=cmap(shade), linewidth=1.2, label=label)
     ax.set_xlim(window.start, window.end)
-    ax.set_ylim(0.0, 1.0)
+    ax.set_ylim(0.0, 0.55)
     if ylabel:
         ax.set_ylabel(ylabel)
     else:
@@ -662,11 +679,11 @@ def build_figure_layout(plot_cfg: PlotConfig, figure_height_mm: float) -> tuple[
     )
     configured.apply()
     fig = plt.figure(constrained_layout=False)
-    height_ratios = [1.7, 0.6, 0.6, 0.4]
-    grid = fig.add_gridspec(4, 2, height_ratios=height_ratios, hspace=0.4, wspace=0.25)
+    height_ratios = [1.7, 0.6, 0.6, 0.35]
+    grid = fig.add_gridspec(4, 2, height_ratios=height_ratios, hspace=0.275, wspace=0.25)
     ax_image = fig.add_subplot(grid[0, :])
-    left_grid = grid[1:3, 0].subgridspec(2, 1, height_ratios=[0.65, 0.35], hspace=0.05)
-    right_grid = grid[1:3, 1].subgridspec(2, 1, height_ratios=[0.65, 0.35], hspace=0.05)
+    left_grid = grid[1:3, 0].subgridspec(2, 1, height_ratios=[0.7, 0.3], hspace=0.05)
+    right_grid = grid[1:3, 1].subgridspec(2, 1, height_ratios=[0.7, 0.3], hspace=0.05)
     ax_b1_raster = fig.add_subplot(left_grid[0])
     ax_b1_rates = fig.add_subplot(left_grid[1], sharex=ax_b1_raster)
     ax_b2_raster = fig.add_subplot(right_grid[0])

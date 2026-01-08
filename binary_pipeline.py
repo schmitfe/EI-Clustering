@@ -142,6 +142,21 @@ def _sample_populations(network: ClusteredEI_network) -> Tuple[List[str], np.nda
     return names, values
 
 
+def _population_rates_from_step_states(step_states: np.ndarray, pops: Sequence) -> np.ndarray:
+    if step_states.size == 0 or not pops:
+        return np.zeros((0, len(pops)), dtype=np.float32)
+    pop_count = len(pops)
+    per_step_rates = np.empty((step_states.shape[0], pop_count), dtype=np.float32)
+    for idx, pop in enumerate(pops):
+        start, end = int(pop.view[0]), int(pop.view[1])
+        if end <= start:
+            per_step_rates[:, idx] = 0.0
+            continue
+        slice_states = step_states[:, start:end]
+        per_step_rates[:, idx] = slice_states.mean(axis=1)
+    return per_step_rates
+
+
 def _apply_population_rate_initialization(
     network: ClusteredEI_network,
     rates: Sequence[float],
@@ -339,25 +354,32 @@ def run_binary_simulation(
         decimate_factor = max(1, int(decimate_factor))
     decimate_zero_phase = bool(binary_cfg.get("log_decimate_zero_phase", True))
     decimate_ftype = str(binary_cfg.get("log_decimate_ftype", "iir"))
-    measured_steps = total_steps
-    if log_step_states and measured_steps > 0:
-        network.enable_step_logging(measured_steps)
-    else:
-        network.enable_step_logging(0)
+    network.enable_step_logging(0)
     trace: List[np.ndarray] = []
     sample_times: List[int] = []
     state_trace: List[np.ndarray] = [] if chunk_size == 0 else []
     names: List[str] = []
-    pop_count = len(network.E_pops) + len(network.I_pops)
+    pops = network.E_pops + network.I_pops
+    pop_count = len(pops)
+    logged_steps = 0
+    log_rate_chunks: List[np.ndarray] = []
     steps_done = 0
     block_size = interval
     while steps_done < total_steps:
         block = min(block_size, total_steps - steps_done)
         if block <= 0:
             break
+        if log_step_states:
+            network.enable_step_logging(block)
         network.run(block, batch_size=batch_size)
         steps_done += block
-        if not log_step_states:
+        if log_step_states:
+            step_states = network.consume_step_log()
+            if step_states.size:
+                chunk_rates = _population_rates_from_step_states(step_states, pops)
+                log_rate_chunks.append(chunk_rates)
+                logged_steps += step_states.shape[0]
+        else:
             names, values = _sample_populations(network)
             trace.append(values)
             sample_times.append(steps_done)
@@ -382,42 +404,31 @@ def run_binary_simulation(
         chunk_buffer.clear()
 
     if not names:
-        names = [pop.name for pop in network.E_pops + network.I_pops]
+        names = [pop.name for pop in pops]
     if log_step_states:
-        step_states = network.consume_step_log()
-        pops = network.E_pops + network.I_pops
-        if step_states.shape[0] and pops:
-            pop_count = len(pops)
-            per_step_rates = np.empty((step_states.shape[0], pop_count), dtype=np.float32)
-            for idx, pop in enumerate(pops):
-                start, end = int(pop.view[0]), int(pop.view[1])
-                if end <= start:
-                    per_step_rates[:, idx] = 0.0
-                else:
-                    slice_states = step_states[:, start:end]
-                    per_step_rates[:, idx] = slice_states.mean(axis=1)
-            factor = decimate_factor if decimate_factor else 1
-            factor = max(1, int(factor))
-            if factor > 1:
-                try:
-                    from scipy import signal
-                except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
-                    raise ModuleNotFoundError(
-                        "log_step_states requires SciPy to decimate the recorded rates. "
-                        "Install it via 'pip install scipy'."
-                    ) from exc
-                rates = signal.decimate(
-                    per_step_rates,
-                    factor,
-                    axis=0,
-                    zero_phase=decimate_zero_phase,
-                    ftype=decimate_ftype,
-                )
-            else:
-                rates = per_step_rates
+        if log_rate_chunks:
+            per_step_rates = np.concatenate(log_rate_chunks, axis=0)
         else:
-            rates = np.zeros((0, pop_count))
-        del step_states
+            per_step_rates = np.zeros((0, pop_count), dtype=np.float32)
+        factor = decimate_factor if decimate_factor else 1
+        factor = max(1, int(factor))
+        if factor > 1 and per_step_rates.shape[0]:
+            try:
+                from scipy import signal
+            except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+                raise ModuleNotFoundError(
+                    "log_step_states requires SciPy to decimate the recorded rates. "
+                    "Install it via 'pip install scipy'."
+                ) from exc
+            rates = signal.decimate(
+                per_step_rates,
+                factor,
+                axis=0,
+                zero_phase=decimate_zero_phase,
+                ftype=decimate_ftype,
+            )
+        else:
+            rates = per_step_rates
     else:
         rates = np.vstack(trace) if trace else np.zeros((0, pop_count))
         times = np.array(sample_times, dtype=int) if sample_times else np.zeros(0, dtype=int)
@@ -476,7 +487,7 @@ def run_binary_simulation(
         },
         "step_logging": {
             "enabled": log_step_states,
-            "logged_steps": measured_steps if log_step_states else 0,
+            "logged_steps": logged_steps if log_step_states else 0,
             "decimate_factor": int(decimate_factor) if (log_step_states and decimate_factor) else 1,
             "decimate_ftype": decimate_ftype if log_step_states else None,
             "decimate_zero_phase": decimate_zero_phase if log_step_states else None,
