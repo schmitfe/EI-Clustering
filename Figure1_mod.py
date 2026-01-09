@@ -31,7 +31,8 @@ from plotting import (
 
 REPO_ROOT = Path(__file__).resolve().parent
 FIGURES_DIR = REPO_ROOT / "Figures"
-EXTERNAL_IMAGE_PATH = FIGURES_DIR / "external" / "Network-Clustering_wide.jpeg"
+EXTERNAL_IMAGE_PATH = FIGURES_DIR / "external" / "Network_single.jpg"
+EXTERNAL_IMAGE_PATH2 = FIGURES_DIR / "external" / "Legend.jpg"
 OUTPUT_PREFIX = FIGURES_DIR / "Figure1"
 
 BASE_RASTER_OVERRIDES: tuple[str, ...] = (
@@ -114,7 +115,7 @@ class StateSource:
 
 RASTER_PANELS: list[RasterPanelSpec] = [
     RasterPanelSpec(
-        label="b1",
+        label="c1",
         config_name="default_simulation",
         overrides=BASE_RASTER_OVERRIDES,
         output_name="figure1_b1",
@@ -123,7 +124,7 @@ RASTER_PANELS: list[RasterPanelSpec] = [
         cluster_count=20,
     ),
     RasterPanelSpec(
-        label="b2",
+        label="c2",
         config_name="default_simulation",
         overrides=BASE_RASTER_OVERRIDES,
         output_name="figure1_b2",
@@ -155,7 +156,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         metavar="label:path=value",
-        help="Panel-specific override using the panel label (e.g., b1:kappa=0).",
+        help="Panel-specific override using the panel label (e.g., c1:kappa=0).",
     )
     parser.add_argument(
         "--panel-window",
@@ -648,26 +649,29 @@ def main() -> None:
     ]
     validate_panels(panels)
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
-    fig = plt.figure(figsize=(13, 10), constrained_layout=True)
-    grid = fig.add_gridspec(4, 2, height_ratios=[1.5, 0.6, 0.6, 0.35], hspace=0.01, wspace=0.25)
+    fig = plt.figure(figsize=(13, 9), constrained_layout=True)
+    grid = fig.add_gridspec(4, 2, height_ratios=[1.2, 0.35, 0.6, 0.6], hspace=0.00, wspace=0.25)
     ax_image = fig.add_subplot(grid[0, :])
-    left_grid = grid[1:3, 0].subgridspec(2, 1, height_ratios=[0.7, 0.2], hspace=0.015)
-    right_grid = grid[1:3, 1].subgridspec(2, 1, height_ratios=[0.7, 0.2], hspace=0.015)
-    ax_b1_raster = fig.add_subplot(left_grid[0])
-    ax_b1_rates = fig.add_subplot(left_grid[1], sharex=ax_b1_raster)
-    ax_b2_raster = fig.add_subplot(right_grid[0])
-    ax_b2_rates = fig.add_subplot(right_grid[1], sharex=ax_b2_raster)
-    contrast_grid = grid[3, :].subgridspec(
-        1, 3,
-        width_ratios=[0.075, 1.0, 0.075]  # <-- increase 0.08 for more side whitespace
+    left_grid = grid[2:4, 0].subgridspec(2, 1, height_ratios=[0.7, 0.2], hspace=0.015)
+    right_grid = grid[2:4, 1].subgridspec(2, 1, height_ratios=[0.7, 0.2], hspace=0.015)
+    ax_c1_raster = fig.add_subplot(left_grid[0])
+    ax_c1_rates = fig.add_subplot(left_grid[1], sharex=ax_c1_raster)
+    ax_c2_raster = fig.add_subplot(right_grid[0])
+    ax_c2_rates = fig.add_subplot(right_grid[1], sharex=ax_c2_raster)
+    contrast_grid = grid[1, :].subgridspec(
+        1, 4,
+        width_ratios=[0.025,0.375, 0.5, 0.125],  # <-- increase 0.08 for more side whitespace
+        hspace = 0.00, wspace = 0.05
     )
-    ax_contrast = fig.add_subplot(contrast_grid[0, 1])
+    ax_contrast = fig.add_subplot(contrast_grid[0, 2])
+    ax_legend = fig.add_subplot(contrast_grid[0, 1])
     add_image_ax(ax_image, str(EXTERNAL_IMAGE_PATH), fc=font_cfg)
+    add_image_ax(ax_legend, str(EXTERNAL_IMAGE_PATH2), fc=font_cfg)
     add_panel_label(ax_image, "a", font_cfg, x=PANEL_LABEL_COORDS[0], y=PANEL_LABEL_COORDS[1])
     panel_lookup = {panel.spec.label: panel for panel in panels}
     axis_pairs = {
-        "b1": (ax_b1_raster, ax_b1_rates),
-        "b2": (ax_b2_raster, ax_b2_rates),
+        "c1": (ax_c1_raster, ax_c1_rates),
+        "c2": (ax_c2_raster, ax_c2_rates),
     }
     for label, (raster_ax, rate_ax) in axis_pairs.items():
         panel = panel_lookup.get(label)
@@ -675,11 +679,11 @@ def main() -> None:
             continue
         window = TimeWindow(start=float(panel.spec.window_start), duration=float(panel.spec.window_duration))
         plot_raster_panel(raster_ax, panel, window, neuron_step=args.raster_neuron_step, font_cfg=font_cfg)
-        ylabel = r"$\bar{m_c}$" if label == "b1" else None
+        ylabel = r"$\bar{m_c}$" if label == "c1" else None
         plot_cluster_activity(rate_ax, panel, window, ylabel=ylabel)
         style_axes(raster_ax, font_cfg, set_xlabel=False, set_ylabel=False)
         style_axes(rate_ax, font_cfg)
-        if label == "b1":
+        if label == "c1":
             raster_ax.set_title(r"$\kappa=0$", fontsize=font_cfg.title)
         else:
             raster_ax.set_title(r"$\kappa=1$", fontsize=font_cfg.title)
@@ -691,7 +695,7 @@ def main() -> None:
         float(reference_panel.parameter.get("R_Eplus", 0.0)),
         font_cfg,
     )
-    add_panel_label(ax_contrast, "c", font_cfg, x=PANEL_LABEL_COORDS[0], y=PANEL_LABEL_COORDS[1]*1.05)
+    add_panel_label(ax_contrast, "b", font_cfg, x=1.5*PANEL_LABEL_COORDS[0], y=PANEL_LABEL_COORDS[1]*1.05)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     ax_contrast.set_xlabel(r"$\kappa$", labelpad=-12.0)
     fig.savefig(f"{OUTPUT_PREFIX}.png", dpi=600)
