@@ -7,6 +7,7 @@ from functools import lru_cache
 from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -39,6 +40,8 @@ LINE_COLORS = (
     _cmyk_to_rgb_hex(0.6, 0.0, 0.1, 0.2),
 )
 DEFAULT_LINE_COLOR = LINE_COLORS[0]
+COLORBAR_WIDTH_RATIO = 0.04
+LISTED_CATEGORICAL_LIMIT = 32
 PANEL_LABEL_COORDS = (-0.12, 1.02)
 PANEL_LABEL_ALIGN = ("right", "bottom")
 PANEL_LABEL_ABOVE_COORDS = (0.0, 1.02)
@@ -116,6 +119,15 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=None,
         help="Other focus counts rendered as stable lines (omit to disable).",
+    )
+    parser.add_argument(
+        "--line-colormap",
+        type=str,
+        default=None,
+        help=(
+            "Matplotlib colormap name for line focus colors; use categorical "
+            "maps like 'tab10' or continuous maps like 'viridis' (default: legacy palette)."
+        ),
     )
     parser.add_argument(
         "--extra-focus-counts",
@@ -378,12 +390,105 @@ def _summary_path(parameter: Mapping[str, float]) -> str:
     )
 
 
-def _prepare_line_color_map(focus_counts: Sequence[int], palette: Sequence[str]) -> Dict[int, str]:
+def _cycle_palette(palette: Sequence[str], count: int) -> List[str]:
+    if count <= 0:
+        return []
+    if not palette:
+        raise ValueError("Cannot cycle an empty palette.")
+    repeats = (count + len(palette) - 1) // len(palette)
+    return list(palette * repeats)[:count]
+
+
+def _sample_cmap_colors(colormap: str, count: int) -> List[str]:
+    if count <= 0:
+        return []
+    try:
+        cmap = plt.get_cmap(colormap)
+    except ValueError as exc:
+        raise SystemExit(f"Unknown matplotlib colormap '{colormap}'.") from exc
+    categorical_colors = getattr(cmap, "colors", None)
+    use_categorical = (
+        isinstance(cmap, mcolors.ListedColormap)
+        and categorical_colors is not None
+        and len(categorical_colors) <= LISTED_CATEGORICAL_LIMIT
+    )
+    if use_categorical:
+        base_colors = list(categorical_colors)
+        repeats = (count + len(base_colors) - 1) // len(base_colors)
+        selected = (base_colors * repeats)[:count]
+    else:
+        if count == 1:
+            positions = [0.5]
+        else:
+            positions = np.linspace(0.0, 1.0, count)
+        selected = [cmap(float(pos)) for pos in positions]
+    return [mcolors.to_hex(color) for color in selected]
+
+
+def _prepare_line_color_map(
+    focus_counts: Sequence[int],
+    *,
+    colormap: str | None,
+) -> Tuple[Dict[int, str], List[Tuple[int, str]]]:
     mapping: Dict[int, str] = {}
-    for idx, focus_count in enumerate(sorted(set(int(fc) for fc in focus_counts))):
-        color = palette[idx % len(palette)]
+    entries: List[Tuple[int, str]] = []
+    ordered_counts = sorted(set(int(fc) for fc in focus_counts))
+    if not ordered_counts:
+        return mapping, entries
+    if colormap:
+        colors = _sample_cmap_colors(colormap, len(ordered_counts))
+    else:
+        colors = _cycle_palette(LINE_COLORS, len(ordered_counts))
+    for focus_count, color in zip(ordered_counts, colors):
         mapping[int(focus_count)] = color
-    return mapping
+        entries.append((int(focus_count), color))
+    return mapping, entries
+
+
+def _focus_count_boundaries(focus_counts: Sequence[int]) -> List[float]:
+    if not focus_counts:
+        return []
+    ordered = sorted(focus_counts)
+    if len(ordered) == 1:
+        fc = float(ordered[0])
+        return [fc - 0.5, fc + 0.5]
+    boundaries = [float(ordered[0]) - 0.5]
+    for prev_val, next_val in zip(ordered[:-1], ordered[1:]):
+        boundaries.append((float(prev_val) + float(next_val)) / 2.0)
+    boundaries.append(float(ordered[-1]) + 0.5)
+    return boundaries
+
+
+def _draw_focus_count_colorbar(
+    fig: plt.Figure,
+    axis: plt.Axes,
+    entries: Sequence[Tuple[int, str]],
+    font_cfg: FontCfg,
+) -> None:
+    if not entries:
+        axis.set_axis_off()
+        return
+    focus_counts = [fc for fc, _ in entries]
+    colors = [color for _, color in entries]
+    cmap = mcolors.ListedColormap(colors)
+    boundaries = _focus_count_boundaries(focus_counts)
+    norm = mcolors.BoundaryNorm(boundaries, cmap.N)
+    scalar = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    scalar.set_array([])
+    colorbar = fig.colorbar(
+        scalar,
+        cax=axis,
+        ticks=focus_counts,
+        boundaries=boundaries,
+    )
+    colorbar.ax.tick_params(labelsize=font_cfg.tick)
+    colorbar.ax.set_ylabel(
+        "# active clusters",
+        fontsize=font_cfg.label,
+        rotation=-90,
+        va="bottom",
+        labelpad=10,
+    )
 
 
 def _ensure_fixpoint_summary(
@@ -508,8 +613,8 @@ def main() -> None:
     margin_ratio = 0.1
     grid = fig.add_gridspec(
         n_rows,
-        n_cols + 1,
-        width_ratios=[margin_ratio] + [1.0] * n_cols,
+        n_cols + 2,
+        width_ratios=[margin_ratio] + [1.0] * n_cols + [COLORBAR_WIDTH_RATIO],
         wspace=0.05,
         hspace=0.05,
     )
@@ -522,7 +627,10 @@ def main() -> None:
             if shared_ax is None:
                 shared_ax = ax
     all_focus_counts = list(args.line_focus_counts or [])
-    color_map = _prepare_line_color_map(all_focus_counts, LINE_COLORS)
+    color_map, colorbar_entries = _prepare_line_color_map(
+        all_focus_counts,
+        colormap=args.line_colormap,
+    )
     letters = [chr(ord("a") + idx) for idx in range(n_rows * n_cols)]
     for r_idx, avg_conn in enumerate(row_order):
         scaled_parameter = _scale_probabilities(base_parameter, avg_conn)
@@ -591,6 +699,8 @@ def main() -> None:
             style_axes(ax, font_cfg)
             for ax in axes[:,0]:
                 ax.set_ylabel(r"$v_{\mathrm{out}}$", labelpad=+20)
+    colorbar_ax = fig.add_subplot(grid[:, -1])
+    _draw_focus_count_colorbar(fig, colorbar_ax, colorbar_entries, font_cfg)
     save_kwargs = {"dpi": 600}
     fig.savefig(args.output, **save_kwargs)
     if args.write_pdf:
