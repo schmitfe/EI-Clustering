@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
+from plotting import FontCfg, style_axes
 from ei_pipeline import (
     _key_to_r_eplus,
     _taggable_configuration,
@@ -17,8 +18,31 @@ from ei_pipeline import (
     run_analysis,
     run_simulation,
 )
-from plot_config import DEFAULT_PLOT_CONFIG, PlotConfig
 from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg
+
+plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
+
+def _cmyk_to_rgb_hex(c: float, m: float, y: float, k: float) -> str:
+    r = 1.0 - min(1.0, c + k)
+    g = 1.0 - min(1.0, m + k)
+    b = 1.0 - min(1.0, y + k)
+    return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
+
+
+FOCUS_STABLE_COLOR = _cmyk_to_rgb_hex(0.0, 0.0, 0.0, 1.0)
+FOCUS_UNSTABLE_COLOR = _cmyk_to_rgb_hex(0.0, 0.0, 0.0, 1.0)
+LINE_COLORS = (
+    _cmyk_to_rgb_hex(0.8, 0.1, 0.0, 0.1),
+    _cmyk_to_rgb_hex(0.0, 0.6, 0.2, 0.1),
+    _cmyk_to_rgb_hex(0.1, 0.2, 0.8, 0.1),
+    _cmyk_to_rgb_hex(0.0, 0.4, 0.8, 0.2),
+    _cmyk_to_rgb_hex(0.6, 0.0, 0.1, 0.2),
+)
+DEFAULT_LINE_COLOR = LINE_COLORS[0]
+PANEL_LABEL_COORDS = (-0.12, 1.02)
+PANEL_LABEL_ALIGN = ("right", "bottom")
+PANEL_LABEL_ABOVE_COORDS = (0.0, 1.02)
+PANEL_LABEL_ABOVE_ALIGN = ("center", "bottom")
 
 PROB_KEYS = ("p0_ee", "p0_ei", "p0_ie", "p0_ii")
 MARKER_STRIDE = 1
@@ -102,7 +126,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=str,
-        default=os.path.join("plots", "fixpoint_grid.png"),
+        default=os.path.join("Figures", "Figure2.png"),
         help="Destination for the generated figure (default: %(default)s).",
     )
     parser.add_argument(
@@ -401,11 +425,11 @@ def plot_panel(
     summary: Mapping,
     marker_focus: int,
     line_focus_counts: Sequence[int],
-    config: PlotConfig,
     letter: str,
     color_map: Dict[int, str],
     label_coords: Tuple[float, float],
     label_align: Tuple[str, str],
+    font_cfg: FontCfg,
 ) -> None:
     fixpoints = summary.get("fixpoints", {})
     marker_points = _collect_fixpoint_points(fixpoints, marker_focus)
@@ -419,7 +443,7 @@ def plot_panel(
             xs,
             ys,
             s=35,
-            color=config.palette.get("focus_stable", "#000000"),
+            color=FOCUS_STABLE_COLOR,
         )
     if unstable_marker:
         xs, ys = zip(*unstable_marker)
@@ -428,14 +452,14 @@ def plot_panel(
             ys,
             s=35,
             facecolors="none",
-            edgecolors=config.palette.get("focus_unstable", "#000000"),
+            edgecolors=FOCUS_UNSTABLE_COLOR,
         )
     for focus_count in line_focus_counts or []:
         points = _collect_fixpoint_points(fixpoints, focus_count)
         stable_points = [(x, y) for x, y, status in points if status == "stable"]
         if not stable_points:
             continue
-        color = color_map.get(focus_count, config.palette.get("line", "#2ca02c"))
+        color = color_map.get(focus_count, DEFAULT_LINE_COLOR)
         segments = _segment_branches(stable_points)
         if not segments:
             xs, ys = zip(*stable_points)
@@ -452,6 +476,7 @@ def plot_panel(
         ha=label_align[0],
         va=label_align[1],
         fontweight="bold",
+        fontsize=font_cfg.letter,
         clip_on=False,
     )
     panel_label.set_in_layout(False)
@@ -464,11 +489,11 @@ def main() -> None:
         row_parameter_overrides = _parse_row_parameter_overrides(args.row_parameter)
     except ValueError as exc:
         raise SystemExit(f"Invalid --row-parameter value: {exc}") from exc
-    config = DEFAULT_PLOT_CONFIG
-    config.apply()
     output_dir = os.path.dirname(args.output)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
+    font_cfg = FontCfg(base=12, scale=1.3).resolve()
+    fig = plt.figure(figsize=(13, 7), constrained_layout=True)
     row_order = [float(val) for val in args.rows]
     col_order = [float(val) for val in args.columns]
     connection_type = base_parameter.get("connection_type")
@@ -480,11 +505,11 @@ def main() -> None:
     focus_counts = sorted({max(1, int(fc)) for fc in focus_counts})
     n_rows = len(row_order)
     n_cols = len(col_order)
-    fig_height = config.figure_height or config.figure_width * n_rows / n_cols * 0.65
-    fig, axes = plt.subplots(n_rows, n_cols, sharex=True, sharey=True, figsize=(config.figure_width, fig_height))
-    axes = np.atleast_2d(axes)
+    width_ratios = np.ones(n_cols+1) / n_cols
+    width_ratios[0] = 0.025
+    axes = np.atleast_2d(fig.subplots(n_rows, n_cols+1, sharex=True, sharey=True, width_ratios=width_ratios))
     all_focus_counts = list(args.line_focus_counts or [])
-    color_map = _prepare_line_color_map(all_focus_counts, config.line_colors)
+    color_map = _prepare_line_color_map(all_focus_counts, LINE_COLORS)
     letters = [chr(ord("a") + idx) for idx in range(n_rows * n_cols)]
     for r_idx, avg_conn in enumerate(row_order):
         scaled_parameter = _scale_probabilities(base_parameter, avg_conn)
@@ -495,7 +520,7 @@ def main() -> None:
         row_avg_value = _mean_connectivity(row_parameter)
         actual_avg = row_avg_value if row_avg_value is not None else avg_conn
         for c_idx, kappa in enumerate(col_order):
-            ax = axes[r_idx, c_idx]
+            ax = axes[r_idx, c_idx+1]
             letter = letters[r_idx * n_cols + c_idx]
             parameter = dict(row_parameter)
             parameter["kappa"] = float(kappa)
@@ -505,25 +530,25 @@ def main() -> None:
             if meta_param.get("connection_type"):
                 connection_type = meta_param.get("connection_type")
             if c_idx == 0:
-                label_coords = config.panel_label_coords
-                label_align = config.panel_label_align
+                label_coords = PANEL_LABEL_COORDS
+                label_align = PANEL_LABEL_ALIGN
             else:
-                label_coords = config.panel_label_above_coords
-                label_align = config.panel_label_above_align
+                label_coords = PANEL_LABEL_ABOVE_COORDS
+                label_align = PANEL_LABEL_ABOVE_ALIGN
             plot_panel(
                 ax,
                 summary=summary,
                 marker_focus=args.marker_focus_count,
                 line_focus_counts=args.line_focus_counts or [],
-                config=config,
                 letter=letter,
                 color_map=color_map,
                 label_coords=label_coords,
                 label_align=label_align,
+                font_cfg=font_cfg,
             )
             if r_idx == n_rows - 1:
                 ax.set_xlabel(r"$R_{E+}$", labelpad=2)
-            if c_idx == 0:
+            if c_idx == 1:
                 ax.set_ylabel(r"$v_{\mathrm{out}}$", labelpad=2)
                 ax.yaxis.set_label_coords(-0.07, 0.5)
                 row_label = ax.text(
@@ -534,12 +559,12 @@ def main() -> None:
                     rotation=90,
                     va="center",
                     ha="center",
-                    fontsize=config.label_size,
+                    fontsize=font_cfg.label,
                     clip_on=False,
                 )
                 row_label.set_in_layout(False)
             if r_idx == 0:
-                ax.set_title(rf"$\boldsymbol{{\kappa}} \boldsymbol{{=}} {kappa:.2f}$")
+                ax.set_title(rf"$\kappa = {kappa:.2f}$", fontsize=font_cfg.title)
             ticks = [
                 tick
                 for tick in ax.get_yticks()
@@ -549,11 +574,11 @@ def main() -> None:
             if args.x_min is not None or args.x_max is not None:
                 ax.set_xlim(left=args.x_min, right=args.x_max)
             ax.set_ylim(bottom=args.y_min, top=args.y_max)
-    fig.tight_layout(rect=[0.03, 0.01, 0.995, 0.98], h_pad=1.0, w_pad=0.3)
+            style_axes(ax, font_cfg)
     fig.savefig(args.output, dpi=600)
     if args.write_pdf:
         pdf_path = os.path.splitext(args.output)[0] + ".pdf"
-        fig.savefig(pdf_path)
+        fig.savefig(pdf_path, dpi=600)
     plt.close(fig)
     print(f"Stored fixpoint grid figure at {args.output}")
 
