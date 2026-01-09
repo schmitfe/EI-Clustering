@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -439,12 +440,24 @@ def _finalize_events(times_list: List[np.ndarray], neurons_list: List[np.ndarray
     return np.concatenate(times_list), np.concatenate(neurons_list)
 
 
-def plot_raster_panel(ax: Axes, panel: PanelData, window: TimeWindow, neuron_step: int, font_cfg: FontCfg) -> None:
+def plot_raster_panel(
+    ax: Axes,
+    panel: PanelData,
+    window: TimeWindow,
+    neuron_step: int,
+    font_cfg: FontCfg,
+    *,
+    time_scale: float,
+) -> None:
     times, neurons = _collect_onset_events(panel.payload.state_source, panel.payload.sample_interval, window)
     if times.size == 0 or neurons.size == 0:
         ax.text(0.5, 0.5, "No neuron onset events", ha="center", va="center", transform=ax.transAxes)
         ax.set_axis_off()
         return
+    safe_scale = time_scale if time_scale > 0 else 1.0
+    scaled_times = times / safe_scale
+    window_start = window.start / safe_scale
+    window_end = window.end / safe_scale
     total_neurons = panel.payload.state_source.neuron_count
     if total_neurons <= 0:
         total_neurons = int(panel.parameter.get("N_E", 0)) + int(panel.parameter.get("N_I", 0))
@@ -465,17 +478,18 @@ def plot_raster_panel(ax: Axes, panel: PanelData, window: TimeWindow, neuron_ste
     existing = {id(text) for text in ax.texts}
     plot_spike_raster(
         ax=ax,
-        spike_times_ms=times,
+        spike_times_ms=scaled_times,
         spike_ids=neurons,
         n_exc=n_exc,
         n_inh=n_inh,
         stride=max(1, int(neuron_step)),
-        t_start=window.start,
-        t_end=window.end,
+        t_start=window_start,
+        t_end=window_end,
         marker=".",
         marker_size=max(0.5, float(panel.spec.marker_size)),
         labels=labels,
     )
+    ax.set_xlim(window_start, window_end)
     for text in ax.texts:
         if id(text) not in existing:
             label = text.get_text().strip().lower()
@@ -500,12 +514,26 @@ def _format_time_ticks(start: float, end: float, count: int = 4) -> tuple[np.nda
     return values, labels
 
 
+def _time_axis_scale(window: TimeWindow) -> tuple[float, str]:
+    max_value = max(window.start, window.end)
+    if max_value <= 0:
+        return 1.0, "Time [a.u.]"
+    exponent = int(math.floor(math.log10(max_value)))
+    if exponent < 3:
+        return 1.0, "Time [a.u.]"
+    scale_value = 10 ** exponent
+    label = f"Time [a.u.]/$10^{{{exponent}}}$"
+    return float(scale_value), label
+
+
 def plot_cluster_activity(
     ax: Axes,
     panel: PanelData,
     window: TimeWindow,
     *,
     ylabel: str | None = None,
+    time_scale: float,
+    time_label: str,
 ) -> None:
     rates = panel.payload.rates
     times = panel.payload.times
@@ -517,6 +545,8 @@ def plot_cluster_activity(
     mask = mask_window(times, window)
     time_view = times[mask] if mask.any() else times
     rate_view = rates[mask] if mask.any() else rates
+    safe_scale = time_scale if time_scale > 0 else 1.0
+    scaled_time_view = time_view / safe_scale
     cmap = plt.get_cmap("Greys")
     if len(cluster_indices) <= 1:
         shade_values = [0.6]
@@ -526,15 +556,17 @@ def plot_cluster_activity(
         if idx >= rate_view.shape[1]:
             continue
         label = panel.payload.names[idx]
-        ax.plot(time_view, rate_view[:, idx], color=cmap(shade), linewidth=1.2, label=label)
-    ax.set_xlim(window.start, window.end)
+        ax.plot(scaled_time_view, rate_view[:, idx], color=cmap(shade), linewidth=1.2, label=label)
+    window_start = window.start / safe_scale
+    window_end = window.end / safe_scale
+    ax.set_xlim(window_start, window_end)
     ax.set_ylim(0.0, 0.55)
     if ylabel:
         ax.set_ylabel(ylabel)
     else:
         ax.set_ylabel("")
-    ax.set_xlabel("Time [a.u.]")
-    ticks, labels = _format_time_ticks(window.start, window.end, 4)
+    ax.set_xlabel(time_label)
+    ticks, labels = _format_time_ticks(window_start, window_end, 4)
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
 
@@ -564,23 +596,23 @@ def plot_contrast_curves(ax: Axes, q_value: float, rep_value: float, font_cfg: F
     density_contrast[valid_density] = rep_inv_pow[valid_density] * (q_value - 1.0) / denom_density[valid_density]
     weight_color = "#7FA64B"
     density_color = "#7A6BC6"
-    ax_weight = ax
-    ax_density = ax_weight.twinx()
-    ax_density.spines["left"].set_visible(False)
-    ax_weight.spines["right"].set_visible(False)
-    ax_weight.plot(kappa, weight_contrast, color=weight_color, linewidth=1.5)
+    ax_density = ax
+    ax_weight = ax_density.twinx()
+    ax_weight.spines["left"].set_visible(False)
+    ax_density.spines["right"].set_visible(False)
     ax_density.plot(kappa, density_contrast, color=density_color, linewidth=1.5)
-    ax_weight.set_xlabel(r"$\kappa$", labelpad=-20.0)
-    ax_weight.set_ylabel(r"$w_{in}/w_{out}$", color=weight_color)
+    ax_weight.plot(kappa, weight_contrast, color=weight_color, linewidth=1.5)
+    ax_density.set_xlabel(r"$\kappa$", labelpad=-20.0)
     ax_density.set_ylabel(r"$p_{in}/p_{out}$", color=density_color)
-    ax_weight.tick_params(axis="y", colors=weight_color)
+    ax_weight.set_ylabel(r"$w_{in}/w_{out}$", color=weight_color)
     ax_density.tick_params(axis="y", colors=density_color)
-    ax_weight.spines["left"].set_color(weight_color)
-    ax_density.spines["right"].set_color(density_color)
-    ax_density.spines["right"].set_visible(True)
-    ax_weight.set_xlim(0.0, 1.0)
-    style_axes(ax_weight, font_cfg)
-    style_axes(ax_density, font_cfg, set_xlabel=False)
+    ax_weight.tick_params(axis="y", colors=weight_color)
+    ax_density.spines["left"].set_color(density_color)
+    ax_weight.spines["right"].set_color(weight_color)
+    ax_weight.spines["right"].set_visible(True)
+    ax_density.set_xlim(0.0, 1.0)
+    style_axes(ax_density, font_cfg)
+    style_axes(ax_weight, font_cfg, set_xlabel=False)
 
 
 def validate_panels(panels: Sequence[PanelData]) -> None:
@@ -678,9 +710,24 @@ def main() -> None:
         if panel is None:
             continue
         window = TimeWindow(start=float(panel.spec.window_start), duration=float(panel.spec.window_duration))
-        plot_raster_panel(raster_ax, panel, window, neuron_step=args.raster_neuron_step, font_cfg=font_cfg)
+        time_scale, time_label = _time_axis_scale(window)
+        plot_raster_panel(
+            raster_ax,
+            panel,
+            window,
+            neuron_step=args.raster_neuron_step,
+            font_cfg=font_cfg,
+            time_scale=time_scale,
+        )
         ylabel = r"$\bar{m_c}$" if label == "c1" else None
-        plot_cluster_activity(rate_ax, panel, window, ylabel=ylabel)
+        plot_cluster_activity(
+            rate_ax,
+            panel,
+            window,
+            ylabel=ylabel,
+            time_scale=time_scale,
+            time_label=time_label,
+        )
         style_axes(raster_ax, font_cfg, set_xlabel=False, set_ylabel=False)
         style_axes(rate_ax, font_cfg)
         if label == "c1":
