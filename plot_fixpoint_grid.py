@@ -41,6 +41,7 @@ LINE_COLORS = (
 )
 DEFAULT_LINE_COLOR = LINE_COLORS[0]
 COLORBAR_WIDTH_RATIO = 0.04
+COLORBAR_HEIGHT_FRACTION = 0.6
 LISTED_CATEGORICAL_LIMIT = 32
 PANEL_LABEL_COORDS = (-0.12, 1.02)
 PANEL_LABEL_ALIGN = ("right", "bottom")
@@ -468,6 +469,12 @@ def _draw_focus_count_colorbar(
     if not entries:
         axis.set_axis_off()
         return
+    axis.set_axis_off()
+    target_axis = axis
+    if 0.0 < COLORBAR_HEIGHT_FRACTION < 1.0:
+        inset_height = COLORBAR_HEIGHT_FRACTION
+        inset_y = (1.0 - inset_height) / 2.0
+        target_axis = axis.inset_axes([0.0, inset_y, 1.0, inset_height])
     focus_counts = [fc for fc, _ in entries]
     colors = [color for _, color in entries]
     cmap = mcolors.ListedColormap(colors)
@@ -477,7 +484,7 @@ def _draw_focus_count_colorbar(
     scalar.set_array([])
     colorbar = fig.colorbar(
         scalar,
-        cax=axis,
+        cax=target_axis,
         ticks=focus_counts,
         boundaries=boundaries,
     )
