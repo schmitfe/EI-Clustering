@@ -493,7 +493,7 @@ def main() -> None:
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
-    fig = plt.figure(figsize=(13, 7), constrained_layout=True)
+    fig = plt.figure(figsize=(13, 6), constrained_layout=True)
     row_order = [float(val) for val in args.rows]
     col_order = [float(val) for val in args.columns]
     connection_type = base_parameter.get("connection_type")
@@ -505,9 +505,22 @@ def main() -> None:
     focus_counts = sorted({max(1, int(fc)) for fc in focus_counts})
     n_rows = len(row_order)
     n_cols = len(col_order)
-    width_ratios = np.ones(n_cols+1) / n_cols
-    width_ratios[0] = 0.025
-    axes = np.atleast_2d(fig.subplots(n_rows, n_cols+1, sharex=True, sharey=True, width_ratios=width_ratios))
+    margin_ratio = 0.1
+    grid = fig.add_gridspec(
+        n_rows,
+        n_cols + 1,
+        width_ratios=[margin_ratio] + [1.0] * n_cols,
+        wspace=0.05,
+        hspace=0.05,
+    )
+    axes = np.empty((n_rows, n_cols), dtype=object)
+    shared_ax = None
+    for r_idx in range(n_rows):
+        for c_idx in range(n_cols):
+            ax = fig.add_subplot(grid[r_idx, c_idx + 1], sharex=shared_ax, sharey=shared_ax)
+            axes[r_idx, c_idx] = ax
+            if shared_ax is None:
+                shared_ax = ax
     all_focus_counts = list(args.line_focus_counts or [])
     color_map = _prepare_line_color_map(all_focus_counts, LINE_COLORS)
     letters = [chr(ord("a") + idx) for idx in range(n_rows * n_cols)]
@@ -520,7 +533,7 @@ def main() -> None:
         row_avg_value = _mean_connectivity(row_parameter)
         actual_avg = row_avg_value if row_avg_value is not None else avg_conn
         for c_idx, kappa in enumerate(col_order):
-            ax = axes[r_idx, c_idx+1]
+            ax = axes[r_idx, c_idx]
             letter = letters[r_idx * n_cols + c_idx]
             parameter = dict(row_parameter)
             parameter["kappa"] = float(kappa)
@@ -548,11 +561,11 @@ def main() -> None:
             )
             if r_idx == n_rows - 1:
                 ax.set_xlabel(r"$R_{E+}$", labelpad=2)
-            if c_idx == 1:
-                ax.set_ylabel(r"$v_{\mathrm{out}}$", labelpad=2)
-                ax.yaxis.set_label_coords(-0.07, 0.5)
+            if c_idx == 0:
+                ax.set_ylabel(r"$v_{\mathrm{out}}$")
+                ax.yaxis.set_label_coords(-0.025, 0.5)
                 row_label = ax.text(
-                    -0.15,
+                    -0.1,
                     0.5,
                     rf"$\boldsymbol{{\bar{{p}}}} \boldsymbol{{=}} {actual_avg:.2f}$",
                     transform=ax.transAxes,
@@ -574,11 +587,15 @@ def main() -> None:
             if args.x_min is not None or args.x_max is not None:
                 ax.set_xlim(left=args.x_min, right=args.x_max)
             ax.set_ylim(bottom=args.y_min, top=args.y_max)
+            ax.set_yticks([np.round(args.y_min), np.round(args.y_max)])
             style_axes(ax, font_cfg)
-    fig.savefig(args.output, dpi=600)
+            for ax in axes[:,0]:
+                ax.set_ylabel(r"$v_{\mathrm{out}}$", labelpad=+20)
+    save_kwargs = {"dpi": 600}
+    fig.savefig(args.output, **save_kwargs)
     if args.write_pdf:
         pdf_path = os.path.splitext(args.output)[0] + ".pdf"
-        fig.savefig(pdf_path, dpi=600)
+        fig.savefig(pdf_path, **save_kwargs)
     plt.close(fig)
     print(f"Stored fixpoint grid figure at {args.output}")
 
