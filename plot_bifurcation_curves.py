@@ -8,11 +8,14 @@ import pickle
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 import numpy as np
 
 from MeanField.ei_cluster_network import EIClusterNetwork
 from ei_pipeline import _filter_fixpoint_candidates, _taggable_configuration
+from plotting import FontCfg, style_axes, style_colorbar, style_legend
 from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg, write_yaml_config
 
 
@@ -83,20 +86,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--r-eplus-min",
         type=float,
-        default=0.5,
+        default=1.0,
         help="Lower bound of the R_Eplus bisection bracket (default: %(default)s).",
     )
     parser.add_argument(
         "--r-eplus-max",
         type=float,
-        default=8.0,
+        default=20.0,
         help="Upper bound of the R_Eplus bisection bracket (default: %(default)s).",
     )
     parser.add_argument(
         "--bisection-tol",
         type=float,
-        default=5e-3,
-        help="Tolerance for the bisection search (default: %(default)s).",
+        default=0.1,
+        help="Tolerance (minimum step size) for the bisection search (default: %(default)s).",
     )
     parser.add_argument(
         "--max-iterations",
@@ -128,8 +131,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=str,
-        default=None,
-        help="Custom output path for the generated figure.",
+        default=os.path.join("Figures", "Figure3.png"),
+        help="Custom output base path for the generated figure (PNG/PDF will be saved).",
     )
     parser.add_argument(
         "--cache-root",
@@ -482,9 +485,8 @@ def _task_entry(args: Tuple[float, float, float, Dict[str, Any], Dict[str, Any],
 
 
 def _default_output_path(connection_type: str, tag: str) -> str:
-    conn_label = str(connection_type).lower().replace(" ", "_")
-    os.makedirs("plots", exist_ok=True)
-    return os.path.join("plots", f"bifurcation_{conn_label}_{tag}.png")
+    os.makedirs("Figures", exist_ok=True)
+    return os.path.join("Figures", "Figure3.png")
 
 
 def _cache_paths(root: str, connection_type: str, tag: str) -> Tuple[str, str]:
@@ -492,6 +494,31 @@ def _cache_paths(root: str, connection_type: str, tag: str) -> Tuple[str, str]:
     folder = os.path.join(root, conn_label, tag)
     os.makedirs(folder, exist_ok=True)
     return folder, os.path.join(folder, "bifurcation_cache.pkl")
+
+
+def _prepare_output_paths(path: str) -> Tuple[str, str]:
+    base, ext = os.path.splitext(path)
+    root = base if ext else path
+    png_path = root + ".png"
+    pdf_path = root + ".pdf"
+    for dest in (png_path, pdf_path):
+        folder = os.path.dirname(dest)
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+    return png_path, pdf_path
+
+
+def _categorical_boundaries(values: Sequence[float]) -> List[float]:
+    ordered = sorted({float(v) for v in values})
+    if not ordered:
+        return []
+    if len(ordered) == 1:
+        return [ordered[0] - 0.5, ordered[0] + 0.5]
+    boundaries = [ordered[0] - (ordered[1] - ordered[0]) / 2.0]
+    for prev_val, next_val in zip(ordered[:-1], ordered[1:]):
+        boundaries.append((prev_val + next_val) / 2.0)
+    boundaries.append(ordered[-1] + (ordered[-1] - ordered[-2]) / 2.0)
+    return boundaries
 
 
 def _load_existing(cache_path: str) -> Dict[Tuple[float, float, float], Dict[str, Any]]:
@@ -581,12 +608,21 @@ def generate_plot(
     if not curves:
         print("No valid bifurcation points available for plotting.")
         return
-    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    font_cfg = FontCfg(base=12, scale=1.3).resolve()
+    fig = plt.figure(figsize=(13, 6), constrained_layout=True)
+    ax = fig.add_subplot(1, 1, 1)
     rj_values = sorted(curves.keys())
     kappa_values = sorted({kappa for lines in curves.values() for kappa in lines})
     markers = ["o", "s", "D", "^", "v", "<", ">", "P", "X"]
-    colors = plt.cm.viridis(np.linspace(0.1, 0.9, max(len(kappa_values), 2)))
-    line_handles = []
+    if kappa_values:
+        cmap = plt.cm.get_cmap("tab10", max(len(kappa_values), 2))
+        colors = cmap(np.linspace(0, 1, max(len(kappa_values), 2)))
+    else:
+        colors = []
+    kappa_colors = {
+        kappa: colors[idx % len(colors)] if colors else "#1f77b4"
+        for idx, kappa in enumerate(kappa_values)
+    }
     scatter_handles = []
     for r_idx, r_j in enumerate(rj_values):
         marker = markers[r_idx % len(markers)]
@@ -597,26 +633,35 @@ def generate_plot(
                 continue
             xs = [item[0] for item in data]
             ys = [item[1] for item in data]
-            color = colors[k_idx]
+            color = kappa_colors.get(kappa, "#1f77b4")
             ax.plot(ys, xs, marker=marker, color=color, label=None)
-    for k_idx, kappa in enumerate(kappa_values):
-        color = colors[k_idx]
-        handle = plt.Line2D([], [], color=color, label=f"kappa={kappa:.2f}")
-        line_handles.append(handle)
     for r_idx, r_j in enumerate(rj_values):
         marker = markers[r_idx % len(markers)]
         handle = plt.Line2D([], [], color="black", marker=marker, linestyle="None", label=f"R_j={r_j:.2f}")
         scatter_handles.append(handle)
-    ax.set_ylabel("Average connectivity")
-    ax.set_xlabel("Critical R_Eplus")
-    ax.set_title(f"Bifurcation boundary ({connection_type}, tag={tag})")
+    ax.set_ylabel(r"$\boldsymbol{\bar{p}}$")
+    ax.set_xlabel(r"$R_{E+}$")
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
-    combined_handles = line_handles + scatter_handles
-    ax.legend(combined_handles, [handle.get_label() for handle in combined_handles], loc="best")
-    fig.tight_layout()
-    fig.savefig(output_path)
+    if scatter_handles:
+        ax.legend(scatter_handles, [handle.get_label() for handle in scatter_handles], loc="best")
+        style_legend(ax, font_cfg)
+    style_axes(ax, font_cfg)
+    if kappa_values:
+        ordered_kappa = [float(val) for val in kappa_values]
+        cmap = mcolors.ListedColormap([kappa_colors[val] for val in ordered_kappa])
+        boundaries = _categorical_boundaries(ordered_kappa)
+        norm = mcolors.BoundaryNorm(boundaries, cmap.N)
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, pad=0.025, ticks=ordered_kappa)
+        cbar.ax.set_ylabel(r"$\kappa$")
+        style_colorbar(cbar, font_cfg)
+    png_path, pdf_path = _prepare_output_paths(output_path)
+    save_kwargs = {"dpi": 600}
+    fig.savefig(png_path, **save_kwargs)
+    fig.savefig(pdf_path, **save_kwargs)
     plt.close(fig)
-    print(f"Stored figure at {output_path}")
+    print(f"Stored figures at {png_path} and {pdf_path}")
 
 
 def _prepare_parameter_for_entry(base_parameter: Mapping[str, Any], entry: Mapping[str, Any]) -> Dict[str, Any]:
