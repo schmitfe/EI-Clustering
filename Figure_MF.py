@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 
 from MeanField.ei_cluster_network import EIClusterNetwork
@@ -54,13 +55,14 @@ PANEL_LABEL_ABOVE_COORDS = (0.0, 1.02)
 PANEL_LABEL_ABOVE_ALIGN = ("center", "bottom")
 
 PROB_KEYS = ("p0_ee", "p0_ei", "p0_ie", "p0_ii")
-MARKER_STRIDE = 1
 BRANCH_GROUP_TOL = 1e-6
 BRANCH_MAX_JUMP = 0.3
 BRANCH_MAX_MISSING_STEPS = 2
 BIF_COLUMN_TOL = 1e-6
 MIN_PROBABILITY = 1e-6
 BIF_MARKERS = ("o", "s", "D", "^", "v", "<", ">", "P", "X")
+LINE_WIDTH = 2.0
+MARKER_STRIDE = 4
 
 
 def parse_args() -> argparse.Namespace:
@@ -474,11 +476,24 @@ def _segment_branches(
 
 
 def _sparsify_points(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-    if not points or len(points) <= MARKER_STRIDE or MARKER_STRIDE <= 1:
+    if not points or MARKER_STRIDE <= 1:
         return points
-    sampled = points[::MARKER_STRIDE]
-    if points[-1] not in sampled:
-        sampled.append(points[-1])
+    segments = _segment_branches(points)
+    if not segments:
+        segments = [points]
+    sampled: List[Tuple[float, float]] = []
+    for segment in segments:
+        branch = list(segment)
+        if not branch:
+            continue
+        branch_samples: List[Tuple[float, float]] = [branch[0]]
+        idx = MARKER_STRIDE
+        while idx < len(branch):
+            branch_samples.append(branch[idx])
+            idx += MARKER_STRIDE
+        if branch_samples[-1] != branch[-1]:
+            branch_samples.append(branch[-1])
+        sampled.extend(branch_samples)
     return sampled
 
 
@@ -1118,7 +1133,7 @@ def _plot_bifurcation_panel(
             ys,
             color=style.get("color", DEFAULT_LINE_COLOR),
             #marker=style.get("marker", "o"),
-            linewidth=1.5,
+            linewidth=LINE_WIDTH,
             markersize=4.0,
             label=style.get("label", rf"$R_j = {r_j:.2f}$"),
         )
@@ -1195,7 +1210,18 @@ def plot_bifurcation_row(
         for r_j, handle in handles.items():
             legend_handles.setdefault(r_j, handle)
         if idx == 0:
-            ax.set_ylabel(r"$\boldsymbol{\bar{p}}$ [%]")
+            ylabel = ax.text(
+                -0.18,
+                0.5,
+                r"$\boldsymbol{\bar{p}}$ [%]",
+                transform=ax.transAxes,
+                rotation=90,
+                va="center",
+                ha="center",
+                fontsize=font_cfg.label,
+                clip_on=False,
+            )
+            ylabel.set_in_layout(False)
         ax.set_xlabel(r"$R_{E+}$")
         style_axes(ax, font_cfg)
     if legend_handles:
@@ -1290,11 +1316,11 @@ def plot_panel(
         segments = _segment_branches(stable_points)
         if not segments:
             xs, ys = zip(*stable_points)
-            ax.plot(xs, ys, color=color, linewidth=1.5)
+            ax.plot(xs, ys, color=color, linewidth=LINE_WIDTH)
             continue
         for segment in segments:
             xs, ys = zip(*segment)
-            ax.plot(xs, ys, color=color, linewidth=1.5)
+            ax.plot(xs, ys, color=color, linewidth=LINE_WIDTH)
     panel_label = ax.text(
         label_coords[0],
         label_coords[1],
@@ -1474,6 +1500,38 @@ def main() -> None:
             ax.set_ylim(bottom=args.y_min, top=args.y_max)
             ax.set_yticks([np.round(args.y_min), np.round(args.y_max)])
             style_axes(ax, font_cfg)
+            if r_idx == 0 and c_idx == n_cols - 1:
+                marker_handles = [
+                    Line2D(
+                        [],
+                        [],
+                        marker="o",
+                        linestyle="",
+                        markersize=5,
+                        markerfacecolor=FOCUS_STABLE_COLOR,
+                        markeredgecolor=FOCUS_STABLE_COLOR,
+                    ),
+                    Line2D(
+                        [],
+                        [],
+                        marker="o",
+                        linestyle="",
+                        markersize=5,
+                        markerfacecolor="none",
+                        markeredgecolor=FOCUS_UNSTABLE_COLOR,
+                    ),
+                ]
+                ax.legend(
+                    marker_handles,
+                    ["stable", "unstable"],
+                    loc="upper right",
+                    frameon=False,
+                    ncol=2,
+                    columnspacing=0.8,
+                    handlelength=1.0,
+                    handletextpad=0.4,
+                )
+                style_legend(ax, font_cfg)
     bif_letter_offset = n_rows * n_cols
     if bif_axes:
         plot_bifurcation_row(
