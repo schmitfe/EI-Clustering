@@ -1221,6 +1221,7 @@ def plot_bifurcation_row(
     legend_handles: Dict[float, plt.Line2D] = {}
     y_limits = (0.0, BIF_Y_MAX_PERCENT)
     x_limits = (float(search_bounds[0]), float(search_bounds[1]))
+    lower_bound = float(search_bounds[0])
     for idx, (ax, kappa) in enumerate(zip(axes, col_order)):
         letter = letters[start_index + idx]
         column_data: Dict[float, List[Tuple[float, float, CacheKey]]] = {}
@@ -1248,27 +1249,28 @@ def plot_bifurcation_row(
             onset_x = float(entry["x"])
             avg_value = float(entry["avg"]) * 100.0
             label = str(entry.get("letter", ""))
-            ax.scatter(
-                [onset_x],
-                [avg_value],
-                marker=BIF_REFERENCE_MARKER,
-                s=BIF_REFERENCE_MARKER_SIZE,
-                facecolors=BIF_REFERENCE_MARKER_FACE,
-                edgecolors=BIF_REFERENCE_MARKER_EDGE,
-                linewidths=0.8,
-                zorder=5,
-            )
-            ax.annotate(
-                label,
-                (onset_x, avg_value),
-                xytext=BIF_REFERENCE_TEXT_OFFSET,
-                textcoords="offset points",
-                fontsize=font_cfg.label * BIF_REFERENCE_TEXT_SIZE_SCALE,
-                ha="left",
-                va="center",
-                color="black",
-                zorder=5,
-            )
+            if onset_x > lower_bound:
+                ax.scatter(
+                    [onset_x],
+                    [avg_value],
+                    marker=BIF_REFERENCE_MARKER,
+                    s=BIF_REFERENCE_MARKER_SIZE,
+                    facecolors=BIF_REFERENCE_MARKER_FACE,
+                    edgecolors=BIF_REFERENCE_MARKER_EDGE,
+                    linewidths=0.8,
+                    zorder=5,
+                )
+                ax.annotate(
+                    label,
+                    (onset_x, avg_value),
+                    xytext=BIF_REFERENCE_TEXT_OFFSET,
+                    textcoords="offset points",
+                    fontsize=font_cfg.label * BIF_REFERENCE_TEXT_SIZE_SCALE,
+                    ha="left",
+                    va="center",
+                    color="black",
+                    zorder=5,
+                )
         for r_j, handle in handles.items():
             legend_handles.setdefault(r_j, handle)
         if idx == 0:
@@ -1427,7 +1429,7 @@ def main() -> None:
     n_rows = len(row_order)
     n_cols = len(col_order)
     total_rows = n_rows + 1
-    fig = plt.figure(figsize=(13, 9), constrained_layout=True)
+    fig = plt.figure(figsize=(13, 8), constrained_layout=True)
     margin_ratio = 0.1
     height_ratios = [1.0] * n_rows + [0.9]
     grid = fig.add_gridspec(
