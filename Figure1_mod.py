@@ -59,7 +59,7 @@ class RasterPanelSpec:
     window_duration: float = RASTER_WINDOW_DURATION
     cluster_indices: Sequence[int] | None = None
     cluster_count: int = 20
-    marker_size: float = 0.75
+    marker_size: float = 3.
     label_font_size: float = 7.0
 
 
@@ -486,7 +486,7 @@ def plot_raster_panel(
         t_start=window_start,
         t_end=window_end,
         marker=".",
-        marker_size=max(0.5, float(panel.spec.marker_size)),
+        marker_size=max(2., float(panel.spec.marker_size)),
         labels=labels,
     )
     ax.set_xlim(window_start, window_end)
