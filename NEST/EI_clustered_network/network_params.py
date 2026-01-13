@@ -59,7 +59,7 @@ net_dict = {
     # Feed forward excitatory input [rheobase current]
     "I_th_E": 1.25,
     # Feed forward inhibitory input [rheobase current]
-    "I_th_I": 0.78,
+    "I_th_I": 0.82,
     # distribution of feed forward input,
     # I_th*[1-delta_I_../2, 1+delta_I_../2]
     "delta_I_xE": 0.0,  # excitatory
@@ -72,15 +72,15 @@ net_dict = {
     ############################################
     # number of excitatory neurons in the network
     # Neurons per cluster N_E/n_clusters
-    "N_E": 4000,
+    "N_E": 8000,
     # number of inhibitory neurons in the network
-    "N_I": 1000,
+    "N_I": 2000,
     # Number of clusters
     "n_clusters": 20,
     # connection probabilities
     # baseline_conn_prob[0, 0] E to E, baseline_conn_prob[0, 1] I to E,
     # baseline_conn_prob[1, 0] E to I, baseline_conn_prob[1, 1] I to I
-    "baseline_conn_prob": np.array([[0.2, 0.5], [0.5, 0.5]]),
+    "baseline_conn_prob": np.array([[0.2, 0.2], [0.2, 0.2]]),
     # inhibitory weight ratios - scaling like random balanced network
     "gei": 1.2,  # I to E
     "gie": 1.0,  # E to I
@@ -89,14 +89,14 @@ net_dict = {
     # - can be used to scale weights with network size
     "s": 1.0,
     # connection rule: pairwise_bernoulli, pairwise_poisson or fixed_indegree
-    "connection_rule": "pairwise_bernoulli",
+    "connection_rule": "pairwise_poisson",
     # interpolation factor between probability (0) and weight (1) clustering
-    "kappa": 1.0,
+    "kappa": 1.,
     # ratio excitatory to inhibitory clustering,
     # rj = 0 means no clustering, which resembles a clustered network
     # with a blanket of inhibition
     "rj": 0.82,
     # excitatory clustering factor,
     # rep = 1 means no clustering, reselmbles a balanced random network
-    "rep": 6.0,
+    "rep": 5.3,
 }

@@ -32,10 +32,10 @@ sim_dict = {
     # presimulation time (in ms)
     "warmup": 1000.0,
     # simulation time (in ms)
-    "simtime": 10000.0,
+    "simtime": 2000.0,
     # resolution of the simulation (in ms)
     "dt": 0.1,
-    "randseed": 55,
+    "randseed": 54,
     # Number of virtual processes
     "n_vp": 4,
 }
