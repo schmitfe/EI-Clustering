@@ -63,6 +63,21 @@ MIN_PROBABILITY = 1e-6
 BIF_MARKERS = ("o", "s", "D", "^", "v", "<", ">", "P", "X")
 LINE_WIDTH = 2.0
 MARKER_STRIDE = 4
+BIF_LINESTYLE_CYCLE = ("-", "--", ":", "-.")
+BIF_REFERENCE_ROWS = (0, 1)
+BIF_REFERENCE_MARKER = "^"
+BIF_REFERENCE_MARKER_SIZE = 40.0
+BIF_REFERENCE_MARKER_EDGE = "black"
+BIF_REFERENCE_MARKER_FACE = "white"
+BIF_REFERENCE_TEXT_OFFSET = (4, 4)
+BIF_REFERENCE_TEXT_SIZE_SCALE = 0.9
+BIF_REFERENCE_LINESTYLE = "--"
+BIF_REFERENCE_LINEWIDTH = 1.0
+BIF_REFERENCE_LINE_ALPHA = 0.5
+BIF_REFERENCE_LINE_COLOR = "#555555"
+BIF_Y_MAX_PERCENT = 35.0
+BIF_Y_TICKS_PERCENT = (0.0, 10.0, 20.0, 30.0)
+DEFAULT_BIF_AVG_CONNECTIVITY_TARGET = 0.35
 
 
 def parse_args() -> argparse.Namespace:
@@ -497,6 +512,30 @@ def _sparsify_points(points: List[Tuple[float, float]]) -> List[Tuple[float, flo
     return sampled
 
 
+def _find_upper_branch_onset(points: Sequence[Tuple[float, float]]) -> Optional[float]:
+    if not points:
+        return None
+    segments = _segment_branches(points)
+    if not segments:
+        segments = [sorted(points, key=lambda item: (float(item[0]), float(item[1])))]
+    best_branch: Optional[List[Tuple[float, float]]] = None
+    best_score: Optional[Tuple[float, float]] = None
+    for segment in segments:
+        if not segment:
+            continue
+        ordered = sorted(segment, key=lambda item: float(item[0]))
+        max_y = max(float(pt[1]) for pt in ordered)
+        onset_x = float(ordered[0][0])
+        score = (max_y, -onset_x)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_branch = ordered
+    if best_branch:
+        return float(best_branch[0][0])
+    fallback = min(points, key=lambda item: float(item[0]))
+    return float(fallback[0])
+
+
 def _load_summary(path: str) -> Dict:
     with open(path, "rb") as handle:
         return pickle.load(handle)
@@ -587,7 +626,7 @@ def _draw_focus_count_colorbar(
     axis: plt.Axes,
     entries: Sequence[Tuple[int, str]],
     font_cfg: FontCfg,
-) -> None:
+) -> Optional[float]:
     if not entries:
         axis.set_axis_off()
         return
@@ -1093,13 +1132,15 @@ def _build_rj_styles(rj_values: Sequence[float]) -> Dict[float, Dict[str, Any]]:
     ordered = [float(val) for val in sorted({float(v) for v in rj_values})]
     if not ordered:
         return {}
-    cmap = plt.get_cmap("tab10", max(len(ordered), 2))
-    colors = cmap(np.linspace(0, 1, max(len(ordered), 2)))
+    cmap = plt.get_cmap("Dark2")
+    sample_count = max(len(ordered), 2)
+    colors = cmap(np.linspace(0, 1, sample_count))
     styles: Dict[float, Dict[str, Any]] = {}
     for idx, r_j in enumerate(ordered):
         styles[r_j] = {
             "color": mcolors.to_hex(colors[idx % len(colors)]),
             "marker": BIF_MARKERS[idx % len(BIF_MARKERS)],
+            "linestyle": BIF_LINESTYLE_CYCLE[idx % len(BIF_LINESTYLE_CYCLE)],
             "label": rf"$R_j = {r_j:.2f}$",
         }
     return styles
@@ -1132,7 +1173,7 @@ def _plot_bifurcation_panel(
             xs,
             ys,
             color=style.get("color", DEFAULT_LINE_COLOR),
-            #marker=style.get("marker", "o"),
+            linestyle=style.get("linestyle", "-"),
             linewidth=LINE_WIDTH,
             markersize=4.0,
             label=style.get("label", rf"$R_j = {r_j:.2f}$"),
@@ -1171,20 +1212,14 @@ def plot_bifurcation_row(
     letters: Sequence[str],
     start_index: int,
     search_bounds: Tuple[float, float],
+    column_onsets: Optional[Mapping[int, Sequence[Mapping[str, Any]]]] = None,
 ) -> None:
     if not axes:
         return
     styles = _build_rj_styles(rj_values)
     ordered_rj = [float(val) for val in sorted({float(v) for v in rj_values})]
     legend_handles: Dict[float, plt.Line2D] = {}
-    all_means: List[float] = []
-    for lines in dataset.values():
-        for entries in lines.values():
-            all_means.extend(point[0] * 100.0 for point in entries)
-    if all_means:
-        y_limits = (max(0.0, min(all_means) - 5.0), min(100.0, max(all_means) + 5.0))
-    else:
-        y_limits = (0.0, 100.0)
+    y_limits = (0.0, BIF_Y_MAX_PERCENT)
     x_limits = (float(search_bounds[0]), float(search_bounds[1]))
     for idx, (ax, kappa) in enumerate(zip(axes, col_order)):
         letter = letters[start_index + idx]
@@ -1207,6 +1242,33 @@ def plot_bifurcation_row(
             x_limits=x_limits,
             y_limits=y_limits,
         )
+        annotations = list(column_onsets.get(idx, [])) if column_onsets else []
+        annotations.sort(key=lambda item: item.get("row_index", 0))
+        for entry in annotations:
+            onset_x = float(entry["x"])
+            avg_value = float(entry["avg"]) * 100.0
+            label = str(entry.get("letter", ""))
+            ax.scatter(
+                [onset_x],
+                [avg_value],
+                marker=BIF_REFERENCE_MARKER,
+                s=BIF_REFERENCE_MARKER_SIZE,
+                facecolors=BIF_REFERENCE_MARKER_FACE,
+                edgecolors=BIF_REFERENCE_MARKER_EDGE,
+                linewidths=0.8,
+                zorder=5,
+            )
+            ax.annotate(
+                label,
+                (onset_x, avg_value),
+                xytext=BIF_REFERENCE_TEXT_OFFSET,
+                textcoords="offset points",
+                fontsize=font_cfg.label * BIF_REFERENCE_TEXT_SIZE_SCALE,
+                ha="left",
+                va="center",
+                color="black",
+                zorder=5,
+            )
         for r_j, handle in handles.items():
             legend_handles.setdefault(r_j, handle)
         if idx == 0:
@@ -1223,6 +1285,7 @@ def plot_bifurcation_row(
             )
             ylabel.set_in_layout(False)
         ax.set_xlabel(r"$R_{E+}$")
+        ax.set_yticks(list(BIF_Y_TICKS_PERCENT))
         style_axes(ax, font_cfg)
     if legend_handles:
         last_ax = axes[-1]
@@ -1283,13 +1346,14 @@ def plot_panel(
     label_coords: Tuple[float, float],
     label_align: Tuple[str, str],
     font_cfg: FontCfg,
-) -> None:
+) -> Optional[float]:
     fixpoints = summary.get("fixpoints", {})
     marker_points = _collect_fixpoint_points(fixpoints, marker_focus)
-    stable_marker = [(x, y) for x, y, status in marker_points if status == "stable"]
-    unstable_marker = [(x, y) for x, y, status in marker_points if status != "stable"]
-    stable_marker = _sparsify_points(stable_marker)
-    unstable_marker = _sparsify_points(unstable_marker)
+    stable_points = [(x, y) for x, y, status in marker_points if status == "stable"]
+    unstable_points = [(x, y) for x, y, status in marker_points if status != "stable"]
+    onset_x = _find_upper_branch_onset(stable_points)
+    stable_marker = _sparsify_points(stable_points)
+    unstable_marker = _sparsify_points(unstable_points)
     if stable_marker:
         xs, ys = zip(*stable_marker)
         ax.scatter(
@@ -1333,6 +1397,7 @@ def plot_panel(
         clip_on=False,
     )
     panel_label.set_in_layout(False)
+    return onset_x
 
 
 def main() -> None:
@@ -1420,6 +1485,12 @@ def main() -> None:
             prob_scales = sorted(
                 {float(scale) for scale in list(prob_scales) + converted}
             )
+    elif base_avg_conn > 0:
+        target_scale = float(DEFAULT_BIF_AVG_CONNECTIVITY_TARGET) / float(base_avg_conn)
+        if math.isfinite(target_scale) and target_scale > 0:
+            prob_scales = sorted(
+                {float(scale) for scale in list(prob_scales) + [target_scale]}
+            )
     search = {
         "min": float(args.bif_r_eplus_min),
         "max": float(args.bif_r_eplus_max),
@@ -1443,6 +1514,8 @@ def main() -> None:
         sweep_kwargs=sweep_kwargs,
         search=search,
     )
+    column_onsets: Dict[int, List[Dict[str, Any]]] = {}
+    reference_row_set = {idx for idx in BIF_REFERENCE_ROWS if 0 <= idx < n_rows}
     for r_idx, avg_conn in enumerate(row_order):
         scaled_parameter = _scale_probabilities(base_parameter, avg_conn)
         row_parameter = dict(scaled_parameter)
@@ -1460,7 +1533,7 @@ def main() -> None:
             summary = _load_summary(summary_path)
             label_coords = PANEL_LABEL_ABOVE_COORDS
             label_align = PANEL_LABEL_ABOVE_ALIGN
-            plot_panel(
+            onset_x = plot_panel(
                 ax,
                 summary=summary,
                 marker_focus=args.marker_focus_count,
@@ -1471,6 +1544,23 @@ def main() -> None:
                 label_align=label_align,
                 font_cfg=font_cfg,
             )
+            if r_idx in reference_row_set and onset_x is not None:
+                ax.axvline(
+                    float(onset_x),
+                    linestyle=BIF_REFERENCE_LINESTYLE,
+                    linewidth=BIF_REFERENCE_LINEWIDTH,
+                    color=BIF_REFERENCE_LINE_COLOR,
+                    alpha=BIF_REFERENCE_LINE_ALPHA,
+                    zorder=0,
+                )
+                column_onsets.setdefault(c_idx, []).append(
+                    {
+                        "row_index": r_idx,
+                        "x": float(onset_x),
+                        "avg": float(actual_avg),
+                        "letter": letter,
+                    }
+                )
             if c_idx == 0:
                 ax.set_ylabel(r"$v_{\mathrm{out}}$")
                 ax.yaxis.set_label_coords(-0.025, 0.5)
@@ -1543,12 +1633,8 @@ def main() -> None:
             letters=letters,
             start_index=bif_letter_offset,
             search_bounds=(search["min"], search["max"]),
+            column_onsets=column_onsets,
         )
-        ticks = list(bif_axes[0].get_yticks())
-        if len(ticks) > 1:
-            trimmed = ticks[:-1]
-            for ax in bif_axes:
-                ax.set_yticks(trimmed)
     colorbar_rows = slice(0, max(1, n_rows))
     colorbar_ax = fig.add_subplot(grid[colorbar_rows, -1])
     _draw_focus_count_colorbar(fig, colorbar_ax, colorbar_entries, font_cfg)
