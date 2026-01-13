@@ -174,7 +174,7 @@ def plot_raster(
         t_start=0.0,
         t_end=simtime,
         labels=labels,
-        marker_size=1.0
+        marker_size=1.5
     )
     ax.set_xlim(0.0, simtime)
     ax.tick_params(axis="x", labelbottom=False)
