@@ -35,7 +35,7 @@ sim_dict = {
     "simtime": 2000.0,
     # resolution of the simulation (in ms)
     "dt": 0.1,
-    "randseed": 54,
+    "randseed": 52,
     # Number of virtual processes
     "n_vp": 4,
 }

@@ -57,9 +57,9 @@ net_dict = {
     # synaptic delay [ms]
     "delay": 0.1,
     # Feed forward excitatory input [rheobase current]
-    "I_th_E": 1.25,
+    "I_th_E": 3.25,
     # Feed forward inhibitory input [rheobase current]
-    "I_th_I": 0.82,
+    "I_th_I": 1.82,
     # distribution of feed forward input,
     # I_th*[1-delta_I_../2, 1+delta_I_../2]
     "delta_I_xE": 0.0,  # excitatory
@@ -95,8 +95,8 @@ net_dict = {
     # ratio excitatory to inhibitory clustering,
     # rj = 0 means no clustering, which resembles a clustered network
     # with a blanket of inhibition
-    "rj": 0.82,
+    "rj": 0.75,
     # excitatory clustering factor,
     # rep = 1 means no clustering, reselmbles a balanced random network
-    "rep": 5.3,
+    "rep": 4.7,
 }

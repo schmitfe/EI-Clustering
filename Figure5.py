@@ -279,9 +279,9 @@ def main() -> None:
         hspace=0.05,
         wspace=0.15,
         left=0.055,
-        right=0.99,
-        top=0.97,
-        bottom=0.08,
+        right=0.98,
+        top=0.94,
+        bottom=0.12,
     )
     raster_axes = []
     rate_axes = []
