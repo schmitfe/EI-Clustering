@@ -212,7 +212,7 @@ def _plot_correlation_figure(
     font_cfg: FontCfg,
     output_prefix: str,
 ) -> None:
-    fig, (ax_state, ax_field) = plt.subplots(2, 1, sharex=True, figsize=(13, 9))
+    fig, (ax_state, ax_field) = plt.subplots(1, 2, sharex=True, figsize=(13/2, 3.))
     within_color = "#4c72b0"
     across_color = "#dd8452"
     markers = ["o", "s", "^", "D", "P", "X"]

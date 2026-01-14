@@ -501,9 +501,9 @@ def main() -> None:
         style_axes(ax_raster, font_cfg, set_xlabel=False, set_ylabel=False)
         style_axes(ax_rates, font_cfg)
         style_axes(ax_hist, font_cfg)
-        add_panel_label(ax_raster, "a1", font_cfg, x=-0.12, y=1.04)
-        add_panel_label(ax_rates, "a2", font_cfg, x=-0.12, y=1.04)
-        add_panel_label(ax_hist, "b", font_cfg, x=-0.08, y=1.03)
+        add_panel_label(ax_raster, "a1", font_cfg, x=-0.15, y=1.04)
+        add_panel_label(ax_rates, "a2", font_cfg, x=-0.15, y=1.06)
+        add_panel_label(ax_hist, "b", font_cfg, x=-0.08, y=1.04)
         _save_figure(fig, args.output_prefix, r_value)
         plt.close(fig)
 
