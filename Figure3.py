@@ -237,24 +237,26 @@ def _restyle_raster_axis(ax: plt.Axes, font_cfg: FontCfg) -> None:
     if legend is not None:
         legend.remove()
     ax.text(
-        -0.065,
-        0.75,
+        -0.08,
+        0.78,
         "Exc.",
         transform=ax.transAxes,
         rotation=90,
         va="center",
         ha="right",
         fontsize=font_cfg.tick,
+        color="black",
     )
     ax.text(
-        -0.065,
-        0.25,
+        -0.08,
+        0.22,
         "Inh.",
         transform=ax.transAxes,
         rotation=90,
         va="center",
         ha="right",
         fontsize=font_cfg.tick,
+        color="#8B0000",
     )
 
 
@@ -342,37 +344,50 @@ def _plot_histogram(
     color_map, norm, tick_values, cmap = _focus_color_mapping(focus_counts, focus_rates.keys())
     fallback_color = "#444444"
     max_count = float(counts.max()) if counts.size else 1.0
-    marker_base = max_count * 1.05
-    marker_step = max(marker_base * 0.08, 0.05)
+    marker_level = max_count * 1.08
+    marker_size = 160.0
     has_stable = False
     has_unstable = False
-    for idx, focus in enumerate(sorted(focus_rates.keys())):
+    for focus in sorted(focus_rates.keys()):
         payload = focus_rates.get(focus, {})
-        y_level = marker_base + idx * marker_step
         color = color_map.get(int(focus), fallback_color)
         stable_vals = payload.get("stable", [])
         unstable_vals = payload.get("unstable", [])
+        best_value = None
+        best_stable = False
         if stable_vals:
+            best_value = max(stable_vals)
+            best_stable = True
+        if unstable_vals:
+            candidate = max(unstable_vals)
+            if best_value is None or candidate > best_value:
+                best_value = candidate
+                best_stable = False
+        if best_value is None:
+            continue
+        if best_stable:
             has_stable = True
             ax.scatter(
-                stable_vals,
-                np.full(len(stable_vals), y_level),
+                best_value,
+                marker_level,
                 marker="v",
-                s=90,
+                s=marker_size,
                 color=color,
                 edgecolor="black",
-                linewidths=0.5,
+                linewidths=0.8,
+                zorder=3,
             )
-        if unstable_vals:
+        else:
             has_unstable = True
             ax.scatter(
-                unstable_vals,
-                np.full(len(unstable_vals), y_level),
+                best_value,
+                marker_level,
                 marker="v",
-                s=90,
-                facecolors="none",
+                s=marker_size,
+                facecolors="white",
                 edgecolors=color,
-                linewidths=1.1,
+                linewidths=1.3,
+                zorder=3,
             )
         expectation = focus_expectations.get(int(focus))
         if expectation is not None:
@@ -485,7 +500,7 @@ def main() -> None:
                 print(f"Warning: could not load example trace {result.example_trace_path}: {exc}")
                 payload = None
         fig = plt.figure(figsize=(13, 5))
-        outer = fig.add_gridspec(1, 2, width_ratios=[1.2, 1.0], wspace=0.2, left=0.08, right=0.97, top=0.95, bottom=0.08)
+        outer = fig.add_gridspec(1, 2, width_ratios=[1.2, 1.0], wspace=0.2, left=0.1, right=0.97, top=0.94, bottom=0.13)
         left_grid = outer[0, 0].subgridspec(2, 1, height_ratios=[1.0, 0.6], hspace=0.08)
         ax_raster = fig.add_subplot(left_grid[0, 0])
         ax_rates = fig.add_subplot(left_grid[1, 0], sharex=ax_raster)
@@ -499,7 +514,7 @@ def main() -> None:
             rates_duration=args.rates_duration,
             font_cfg=font_cfg,
         )
-        ax_hist.set_xlabel(r"\max_{c}\,\overline{m_c}")
+        ax_hist.set_xlabel(r"$\max_{c}\,\overline{m_c}$")
         ax_hist.set_ylabel("Density")
         _plot_histogram(
             ax_hist,
@@ -514,10 +529,9 @@ def main() -> None:
         style_axes(ax_raster, font_cfg, set_xlabel=False, set_ylabel=False)
         style_axes(ax_rates, font_cfg)
         style_axes(ax_hist, font_cfg)
-        add_panel_label(ax_raster, "a1", font_cfg)
-        add_panel_label(ax_rates, "a2", font_cfg)
-        add_panel_label(ax_hist, "b", font_cfg)
-        fig.tight_layout()
+        add_panel_label(ax_raster, "a1", font_cfg, x=-0.12, y=1.04)
+        add_panel_label(ax_rates, "a2", font_cfg, x=-0.12, y=1.04)
+        add_panel_label(ax_hist, "b", font_cfg, x=-0.08, y=1.03)
         _save_figure(fig, args.output_prefix, r_value)
         plt.close(fig)
 
