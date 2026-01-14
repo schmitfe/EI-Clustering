@@ -16,7 +16,7 @@ from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
 import figure_helpers as helpers  # noqa: E402
-from plotting import FontCfg, add_panel_label, style_axes  # noqa: E402
+from plotting import BinaryStateSource, FontCfg, RasterLabels, add_panel_label, plot_binary_raster, style_axes  # noqa: E402
 from sim_config import add_override_arguments, load_from_args  # noqa: E402
 
 
@@ -105,7 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-prefix",
         type=str,
-        default="plots/Figure3",
+        default="Figures/Figure3",
         help="Prefix for the saved figure files (default: %(default)s.{png,pdf}).",
     )
     return parser.parse_args()
@@ -156,40 +156,6 @@ def _load_trace_payload(path: str) -> Dict[str, Any]:
     }
 
 
-def _plot_onset_raster(ax: plt.Axes, states: np.ndarray, sample_interval: int, excitatory_neurons: int) -> None:
-    if states.size == 0:
-        ax.text(0.5, 0.5, "No neuron state samples", ha="center", va="center", transform=ax.transAxes)
-        ax.set_xlabel("Time (steps)")
-        ax.set_ylabel("Neuron index")
-        return
-    steps, neuron_count = states.shape
-    sample_interval = max(1, int(sample_interval))
-    state_int = states.astype(np.int16, copy=False)
-    if steps <= 1:
-        ax.text(0.5, 0.5, "Insufficient samples", ha="center", va="center", transform=ax.transAxes)
-        ax.set_xlabel("Time (steps)")
-        ax.set_ylabel("Neuron index")
-        return
-    transitions = np.argwhere(np.diff(state_int, axis=0) == 1)
-    if transitions.size == 0:
-        ax.text(0.5, 0.5, "No onset transitions recorded", ha="center", va="center", transform=ax.transAxes)
-        ax.set_xlabel("Time (steps)")
-        ax.set_ylabel("Neuron index")
-        return
-    excitatory_limit = max(0, min(int(excitatory_neurons), neuron_count))
-    times = (transitions[:, 0] + 1) * sample_interval
-    neurons = transitions[:, 1]
-    excit_mask = neurons < excitatory_limit
-    inhib_mask = neurons >= excitatory_limit
-    if excit_mask.any():
-        ax.scatter(times[excit_mask], neurons[excit_mask], s=6, marker=".", color="black", label="Excitatory")
-    if inhib_mask.any():
-        ax.scatter(times[inhib_mask], neurons[inhib_mask], s=6, marker=".", color="#8B0000", label="Inhibitory")
-    ax.set_xlabel("Time (steps)")
-    ax.set_ylabel("Neuron index")
-    ax.set_ylim(-0.5, neuron_count - 0.5)
-
-
 def _plot_example_traces(
     ax_raster: plt.Axes,
     ax_rates: plt.Axes,
@@ -212,8 +178,47 @@ def _plot_example_traces(
     else:
         states_arr = np.asarray(states_raw)
     sample_interval = int(payload.get("sample_interval", 1))
-    _plot_onset_raster(ax_raster, states_arr, sample_interval, excit_neurons)
-    _restyle_raster_axis(ax_raster, font_cfg)
+    raster_window = (0.0, float(raster_duration)) if raster_duration is not None and raster_duration > 0 else None
+    labels = RasterLabels(
+        show=True,
+        excitatory="Exc.",
+        inhibitory="Inh.",
+        location="left",
+        kwargs={
+            "fontsize": font_cfg.tick,
+            "rotation": 90,
+            "ha": "right",
+            "va": "center",
+        },
+    )
+    state_source = BinaryStateSource.from_array(states_arr)
+    total_neurons = excit_neurons + int(parameter.get("N_I", 0) or 0)
+    existing = {id(text) for text in ax_raster.texts}
+    plot_binary_raster(
+        ax=ax_raster,
+        state_source=state_source,
+        sample_interval=sample_interval,
+        n_exc=excit_neurons,
+        total_neurons=total_neurons,
+        window=raster_window,
+        stride=1,
+        labels=labels,
+        marker=".",
+        marker_size=3.0,
+        empty_text="No neuron state samples",
+    )
+    for text in ax_raster.texts:
+        if id(text) not in existing:
+            label = text.get_text().strip().lower()
+            if label.startswith("inh"):
+                text.set_color("#8B0000")
+            elif label.startswith("exc"):
+                text.set_color("black")
+    ax_raster.set_title("")
+    ax_raster.set_xlabel("")
+    ax_raster.set_ylabel("")
+    ax_raster.tick_params(axis="x", labelbottom=False)
+    ax_raster.tick_params(axis="y", left=False, labelleft=False)
     times = np.asarray(payload.get("times")) if payload.get("times") is not None else np.arange(states_arr.shape[0])
     rates_raw = payload.get("rates")
     rates = np.asarray(rates_raw) if rates_raw is not None else np.zeros((0, 0), dtype=float)
@@ -223,41 +228,8 @@ def _plot_example_traces(
         ax_raster.set_xlim(0.0, raster_duration)
     if rates_duration is not None and rates_duration > 0:
         ax_rates.set_xlim(0.0, rates_duration)
-    ax_rates.set_ylabel(r"$\overline{m_c}$")
+    ax_rates.set_ylabel(r"$m_c$")
     ax_rates.set_xlabel("Time [a.u.]")
-
-
-def _restyle_raster_axis(ax: plt.Axes, font_cfg: FontCfg) -> None:
-    ax.set_title("")
-    ax.set_xlabel("")
-    ax.set_ylabel("")
-    ax.tick_params(axis="x", labelbottom=False)
-    ax.tick_params(axis="y", left=False, labelleft=False)
-    legend = ax.get_legend()
-    if legend is not None:
-        legend.remove()
-    ax.text(
-        -0.08,
-        0.78,
-        "Exc.",
-        transform=ax.transAxes,
-        rotation=90,
-        va="center",
-        ha="right",
-        fontsize=font_cfg.tick,
-        color="black",
-    )
-    ax.text(
-        -0.08,
-        0.22,
-        "Inh.",
-        transform=ax.transAxes,
-        rotation=90,
-        va="center",
-        ha="right",
-        fontsize=font_cfg.tick,
-        color="#8B0000",
-    )
 
 
 def _plot_grayscale_rates(ax: plt.Axes, times: np.ndarray, rates: np.ndarray, names: Sequence[str]) -> None:
@@ -424,7 +396,7 @@ def _plot_histogram(
                 label="unstable",
             ),
         ]
-        ax.legend(handles=handles, loc="upper right", fontsize=font_cfg.legend)
+        ax.legend(handles=handles, loc="upper right", fontsize=font_cfg.legend, frameon=False)
     else:
         legend = ax.get_legend()
         if legend is not None:
@@ -433,12 +405,12 @@ def _plot_histogram(
 
 def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
     encoded_r = f"{r_value:.2f}".replace(".", "_")
-    base = Path(output_prefix).with_name(f"{Path(output_prefix).name}_REplus{encoded_r}")
+    base = Path(output_prefix)#.with_name(f"{Path(output_prefix).name}_REplus{encoded_r}")
     base.parent.mkdir(parents=True, exist_ok=True)
     png_path = base.with_suffix(".png")
     pdf_path = base.with_suffix(".pdf")
-    fig.savefig(png_path, dpi=300)
-    fig.savefig(pdf_path)
+    fig.savefig(png_path, dpi=600)
+    fig.savefig(pdf_path, dpi=600)
     print(f"Stored Figure 3 panel at {png_path} and {pdf_path}")
 
 
@@ -514,7 +486,7 @@ def main() -> None:
             rates_duration=args.rates_duration,
             font_cfg=font_cfg,
         )
-        ax_hist.set_xlabel(r"$\max_{c}\,\overline{m_c}$")
+        ax_hist.set_xlabel(r"$\max_{c}\,m_c$")
         ax_hist.set_ylabel("Density")
         _plot_histogram(
             ax_hist,

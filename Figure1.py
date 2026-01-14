@@ -6,7 +6,7 @@ import math
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, Iterator, List, Sequence
+from typing import Dict, List, Sequence
 
 import matplotlib
 import numpy as np
@@ -21,11 +21,12 @@ from sim_config import deep_update, load_config, parse_overrides, sim_tag_from_c
 import yaml
 
 from plotting import (
+    BinaryStateSource,
     FontCfg,
     RasterLabels,
     add_image_ax,
     add_panel_label,
-    plot_spike_raster,
+    plot_binary_raster,
     style_axes,
 )
 
@@ -80,7 +81,7 @@ class TracePayload:
     names: List[str]
     sample_interval: int
     warmup_steps: int
-    state_source: "StateSource"
+    state_source: BinaryStateSource
 
 
 @dataclass
@@ -92,26 +93,6 @@ class PanelData:
     payload: TracePayload
     excitatory_neurons: int
     excitatory_population_indices: List[int]
-
-
-@dataclass
-class StateSource:
-    inline_states: np.ndarray | None
-    chunk_files: Sequence[Path]
-    neuron_count: int
-
-    def iter_chunks(self) -> Iterator[np.ndarray]:
-        if self.inline_states is not None and self.inline_states.size:
-            yield self.inline_states
-            return
-        if self.chunk_files:
-            for path in self.chunk_files:
-                if not path.exists():
-                    continue
-                chunk = np.load(path, allow_pickle=False, mmap_mode="r")
-                yield np.asarray(chunk, dtype=np.uint8)
-            return
-        return
 
 
 RASTER_PANELS: list[RasterPanelSpec] = [
@@ -306,7 +287,9 @@ def load_trace_summary(trace_path: Path) -> Dict[str, object]:
         return yaml.safe_load(handle) or {}
 
 
-def _build_state_source(data: np.lib.npyio.NpzFile, summary: Dict[str, object], trace_path: Path) -> StateSource:
+def _build_state_source(
+    data: np.lib.npyio.NpzFile, summary: Dict[str, object], trace_path: Path
+) -> BinaryStateSource:
     chunk_info = summary.get("state_chunks") or {}
     chunk_files: List[Path] = []
     inline_states: np.ndarray | None = None
@@ -320,7 +303,7 @@ def _build_state_source(data: np.lib.npyio.NpzFile, summary: Dict[str, object], 
         summary.get("neurons")
         or (inline_states.shape[1] if inline_states is not None and inline_states.ndim == 2 else 0)
     )
-    return StateSource(inline_states=inline_states, chunk_files=chunk_files, neuron_count=neuron_count)
+    return BinaryStateSource(inline_states=inline_states, chunk_files=chunk_files, neuron_count=neuron_count)
 
 
 def load_trace_payload(path: Path, summary: Dict[str, object]) -> TracePayload:
@@ -397,108 +380,6 @@ def select_clusters(panel: PanelData) -> List[int]:
         return selected
     count = min(panel.spec.cluster_count, len(panel.excitatory_population_indices))
     return panel.excitatory_population_indices[:count]
-
-
-def _collect_onset_events(state_source: StateSource, sample_interval: int, window: TimeWindow) -> tuple[np.ndarray, np.ndarray]:
-    if state_source.neuron_count <= 0:
-        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
-    sample_interval = max(1, int(sample_interval))
-    times_list: List[np.ndarray] = []
-    neurons_list: List[np.ndarray] = []
-    prev_state: np.ndarray | None = None
-    sample_index = 0
-    window_end = window.end
-    for chunk in state_source.iter_chunks():
-        chunk = np.asarray(chunk, dtype=np.uint8)
-        if chunk.ndim != 2 or chunk.shape[0] == 0:
-            continue
-        for row in chunk:
-            sample_index += 1
-            if prev_state is None:
-                prev_state = row.copy()
-                continue
-            transitions = (prev_state == 0) & (row == 1)
-            transition_time = (sample_index - 1) * sample_interval
-            prev_state = row.copy()
-            if transition_time > window_end:
-                return _finalize_events(times_list, neurons_list)
-            if not transitions.any():
-                continue
-            if transition_time < window.start:
-                continue
-            neurons = np.flatnonzero(transitions)
-            if neurons.size == 0:
-                continue
-            times_list.append(np.full(neurons.size, transition_time, dtype=np.float64))
-            neurons_list.append(neurons.astype(np.int64))
-    return _finalize_events(times_list, neurons_list)
-
-
-def _finalize_events(times_list: List[np.ndarray], neurons_list: List[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-    if not times_list:
-        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
-    return np.concatenate(times_list), np.concatenate(neurons_list)
-
-
-def plot_raster_panel(
-    ax: Axes,
-    panel: PanelData,
-    window: TimeWindow,
-    neuron_step: int,
-    font_cfg: FontCfg,
-    *,
-    time_scale: float,
-) -> None:
-    times, neurons = _collect_onset_events(panel.payload.state_source, panel.payload.sample_interval, window)
-    if times.size == 0 or neurons.size == 0:
-        ax.text(0.5, 0.5, "No neuron onset events", ha="center", va="center", transform=ax.transAxes)
-        ax.set_axis_off()
-        return
-    safe_scale = time_scale if time_scale > 0 else 1.0
-    scaled_times = times / safe_scale
-    window_start = window.start / safe_scale
-    window_end = window.end / safe_scale
-    total_neurons = panel.payload.state_source.neuron_count
-    if total_neurons <= 0:
-        total_neurons = int(panel.parameter.get("N_E", 0)) + int(panel.parameter.get("N_I", 0))
-    n_exc = max(0, min(panel.excitatory_neurons, total_neurons))
-    n_inh = max(0, total_neurons - n_exc)
-    labels = RasterLabels(
-        show=True,
-        excitatory="Exc.",
-        inhibitory="Inh.",
-        location="left",
-        kwargs={
-            "fontsize": font_cfg.tick,
-            "rotation": 90,
-            "ha": "right",
-            "va": "center",
-        },
-    )
-    existing = {id(text) for text in ax.texts}
-    plot_spike_raster(
-        ax=ax,
-        spike_times_ms=scaled_times,
-        spike_ids=neurons,
-        n_exc=n_exc,
-        n_inh=n_inh,
-        stride=max(1, int(neuron_step)),
-        t_start=window_start,
-        t_end=window_end,
-        marker=".",
-        marker_size=max(2., float(panel.spec.marker_size)),
-        labels=labels,
-    )
-    ax.set_xlim(window_start, window_end)
-    for text in ax.texts:
-        if id(text) not in existing:
-            label = text.get_text().strip().lower()
-            if label.startswith("inh"):
-                text.set_color("#8B0000")
-            elif label.startswith("exc"):
-                text.set_color("black")
-    ax.tick_params(axis="y", left=False, labelleft=False)
-    ax.tick_params(axis="x", labelbottom=False)
 
 
 def _format_time_ticks(start: float, end: float, count: int = 4) -> tuple[np.ndarray, List[str]]:
@@ -602,6 +483,14 @@ def plot_contrast_curves(ax: Axes, q_value: float, rep_value: float, font_cfg: F
     ax_density.spines["right"].set_visible(False)
     ax_density.plot(kappa, density_contrast, color=density_color, linewidth=1.5)
     ax_weight.plot(kappa, weight_contrast, color=weight_color, linewidth=1.5)
+    density_limit, density_ticks = _two_tick_limits(density_contrast)
+    weight_limit, weight_ticks = _two_tick_limits(weight_contrast)
+    ax_density.set_ylim(0.0, density_limit)
+    ax_weight.set_ylim(0.0, weight_limit)
+    ax_density.set_yticks(density_ticks)
+    ax_density.set_yticklabels([f"{int(tick)}" for tick in density_ticks])
+    ax_weight.set_yticks(weight_ticks)
+    ax_weight.set_yticklabels([f"{int(tick)}" for tick in weight_ticks])
     ax_density.set_xlabel(r"$\kappa$", labelpad=-20.0)
     ax_density.set_ylabel(r"$p_{in}/p_{out}$", color=density_color)
     ax_weight.set_ylabel(r"$w_{in}/w_{out}$", color=weight_color)
@@ -613,6 +502,23 @@ def plot_contrast_curves(ax: Axes, q_value: float, rep_value: float, font_cfg: F
     ax_density.set_xlim(0.0, 1.0)
     style_axes(ax_density, font_cfg)
     style_axes(ax_weight, font_cfg, set_xlabel=False)
+
+
+def _two_tick_limits(values: np.ndarray) -> tuple[float, list[int]]:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        max_val = 2.0
+    else:
+        max_val = float(arr.max())
+        if max_val <= 0.0:
+            max_val = 2.0
+    scale = int(math.ceil(max_val / 2.0)) * 2
+    if scale <= 0:
+        scale = 2
+    limit = scale * 1.05
+    ticks = [max(1, scale // 2), scale]
+    return limit, ticks
 
 
 def validate_panels(panels: Sequence[PanelData]) -> None:
@@ -711,15 +617,45 @@ def main() -> None:
             continue
         window = TimeWindow(start=float(panel.spec.window_start), duration=float(panel.spec.window_duration))
         time_scale, time_label = _time_axis_scale(window)
-        plot_raster_panel(
-            raster_ax,
-            panel,
-            window,
-            neuron_step=args.raster_neuron_step,
-            font_cfg=font_cfg,
-            time_scale=time_scale,
+        total_neurons = panel.payload.state_source.neuron_count
+        if total_neurons <= 0:
+            total_neurons = int(panel.parameter.get("N_E", 0)) + int(panel.parameter.get("N_I", 0))
+        labels = RasterLabels(
+            show=True,
+            excitatory="Exc.",
+            inhibitory="Inh.",
+            location="left",
+            kwargs={
+                "fontsize": font_cfg.tick,
+                "rotation": 90,
+                "ha": "right",
+                "va": "center",
+            },
         )
-        ylabel = r"$\bar{m_c}$" if label == "c1" else None
+        existing = {id(text) for text in raster_ax.texts}
+        plot_binary_raster(
+            ax=raster_ax,
+            state_source=panel.payload.state_source,
+            sample_interval=panel.payload.sample_interval,
+            n_exc=panel.excitatory_neurons,
+            total_neurons=total_neurons,
+            window=(window.start, window.end),
+            time_scale=time_scale,
+            stride=args.raster_neuron_step,
+            labels=labels,
+            marker=".",
+            marker_size=max(2.0, float(panel.spec.marker_size)),
+        )
+        for text in raster_ax.texts:
+            if id(text) not in existing:
+                text_label = text.get_text().strip().lower()
+                if text_label.startswith("inh"):
+                    text.set_color("#8B0000")
+                elif text_label.startswith("exc"):
+                    text.set_color("black")
+        raster_ax.tick_params(axis="y", left=False, labelleft=False)
+        raster_ax.tick_params(axis="x", labelbottom=False)
+        ylabel = r"$m_c$" if label == "c1" else None
         plot_cluster_activity(
             rate_ax,
             panel,

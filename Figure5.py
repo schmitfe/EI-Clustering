@@ -300,7 +300,7 @@ def main() -> None:
             neuron_stride=args.neuron_stride,
         )
         rate_time, cluster_rates = compute_cluster_rates(run["spiketimes"], run["net_dict"], run["sim_dict"])
-        ylabel = r"$\bar{\lambda}_C$ [Spikes/s]" if col_idx == 0 else None
+        ylabel = r"$\lambda_C$ [Spikes/s]" if col_idx == 0 else None
         plot_rate_traces(rate_ax, rate_time, cluster_rates, run["sim_dict"], ylabel)
         style_axes(raster_ax, font_cfg, set_xlabel=False, set_ylabel=False)
         style_axes(rate_ax, font_cfg)

@@ -1277,7 +1277,7 @@ def plot_bifurcation_row(
             ylabel = ax.text(
                 -0.18,
                 0.5,
-                r"$\boldsymbol{\bar{p}}$ [%]",
+                r"$\overline{p}$ [%]",
                 transform=ax.transAxes,
                 rotation=90,
                 va="center",
@@ -1570,7 +1570,7 @@ def main() -> None:
                 row_label = ax.text(
                     -0.18,
                     0.5,
-                    rf"$\boldsymbol{{\bar{{p}}}} \boldsymbol{{=}} {percentage:.0f}\,\%$",
+                    rf"$\overline{{p}}={percentage:.0f}\,\%$",
                     transform=ax.transAxes,
                     rotation=90,
                     va="center",
