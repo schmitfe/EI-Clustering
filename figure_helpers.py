@@ -8,10 +8,8 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 
+import binary_simulation_multi_init as binary_multi
 import ei_pipeline
-import maximum_rates_distribution as max_rates_base
-import maximum_rates_distribution_FP_init_legacy as legacy
-import simulate_single_network_multiple_inits as multi
 from MeanField.rate_system import ensure_output_folder
 from sim_config import sim_tag_from_cfg
 
@@ -89,7 +87,7 @@ def resolve_binary_config(parameter: Dict[str, Any], overrides: BinaryRunSetting
         seed=overrides.seed,
         output_name=overrides.output_name,
     )
-    return max_rates_base._resolve_binary_config(parameter, args)
+    return binary_multi._resolve_binary_config(parameter, args)
 
 
 def _filtered_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
@@ -146,7 +144,7 @@ def _legacy_candidate_selection(
     focus_counts: Sequence[int],
     stability_filter: str,
 ) -> Tuple[List[Dict[str, Any]], int]:
-    bundle = max_rates_base._load_fixpoint_bundle(bundle_path)
+    bundle = binary_multi._load_fixpoint_bundle(bundle_path)
     Q_value = int(parameter.get("Q", 0) or 0)
     if Q_value <= 0:
         raise ValueError("Parameter 'Q' must be positive for the legacy workflow.")
@@ -154,14 +152,14 @@ def _legacy_candidate_selection(
     R_Eplus = parameter.get("R_Eplus")
     if R_Eplus is None:
         raise ValueError("Parameter 'R_Eplus' must be set before running legacy simulations.")
-    raw_candidates = legacy._load_fixpoint_candidates(
+    raw_candidates = binary_multi._load_fixpoint_candidates(
         bundle,
         focus_counts,
         stability_filter,
         pop_vector,
         float(R_Eplus),
     )
-    candidates = legacy._deduplicate_candidates_by_focus(raw_candidates, Q_value)
+    candidates = binary_multi._deduplicate_candidates_by_focus(raw_candidates, Q_value)
     if not candidates:
         raise ValueError("No fixpoint candidates matched the requested filters.")
     return candidates, Q_value
@@ -183,7 +181,7 @@ def run_legacy_max_rate_analysis(
     overwrite_simulation: bool = False,
     overwrite_analysis: bool = False,
 ) -> LegacyMaxRateResult:
-    folder, binary_dir, analysis_dir = legacy._prepare_analysis_folder(parameter, folder_hint)
+    folder, binary_dir, analysis_dir = binary_multi._prepare_max_rate_folder(parameter, folder_hint)
     candidates, Q_value = _legacy_candidate_selection(parameter, bundle_path, focus_counts, stability_filter)
     seeds = [int(base_seed) + idx for idx in range(total_simulations)]
     if not seeds:
@@ -192,10 +190,10 @@ def run_legacy_max_rate_analysis(
     tasks: List[Dict[str, Any]] = []
     capture_assigned = False
     for seed in seeds:
-        label = max_rates_base._format_seed_label(base_output, seed)
+        label = binary_multi._format_seed_label(base_output, seed)
         trace_path = os.path.join(binary_dir, f"{label}.npz")
         maxima_path = os.path.join(analysis_dir, f"{label}_maxima.npz")
-        candidate = legacy._candidate_for_seed(seed, candidates)
+        candidate = binary_multi._candidate_for_seed(seed, candidates)
         trace_exists = os.path.exists(trace_path)
         needs_simulation = (not analysis_only) and (overwrite_simulation or not trace_exists)
         capture_spikes = False
@@ -224,16 +222,16 @@ def run_legacy_max_rate_analysis(
     results: List[Dict[str, Any]] = []
     if jobs <= 1:
         for task in tasks:
-            result = legacy._process_seed_task(task)
-            legacy._emit_worker_logs(result)
+            result = binary_multi._process_seed_task(task)
+            binary_multi._emit_worker_logs(result)
             results.append(result)
     else:
         max_workers = min(int(jobs), len(tasks))
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
-            future_map = {pool.submit(legacy._process_seed_task, task): task for task in tasks}
+            future_map = {pool.submit(binary_multi._process_seed_task, task): task for task in tasks}
             for future in concurrent.futures.as_completed(future_map):
                 result = future.result()
-                legacy._emit_worker_logs(result)
+                binary_multi._emit_worker_logs(result)
                 results.append(result)
     result_map = {entry.get("seed"): entry for entry in results}
     pooled_entries: List[float] = []
@@ -259,7 +257,7 @@ def run_legacy_max_rate_analysis(
                 example_seed = seed
                 states_available = bool(result.get("states_recorded"))
             elif not states_available:
-                payload = max_rates_base._load_trace_payload(trace_path)
+                payload = binary_multi._load_trace_payload(trace_path)
                 state_payload = np.asarray(payload.get("states"), dtype=np.uint8)
                 if state_payload.size:
                     example_trace_path = trace_path
@@ -268,8 +266,8 @@ def run_legacy_max_rate_analysis(
     if not pooled_entries:
         raise RuntimeError("No maxima were collected. Ensure the legacy simulations ran successfully.")
     excit_count_final = excitatory_clusters or Q_value
-    focus_rates = legacy._focus_payload_from_candidates(candidates, excit_count_final)
-    focus_expectations = legacy._focus_expectations_from_payload(focus_rates)
+    focus_rates = binary_multi._focus_payload_from_candidates(candidates, excit_count_final)
+    focus_expectations = binary_multi._focus_expectations_from_payload(focus_rates)
     pooled_array = np.asarray(pooled_entries, dtype=float)
     return LegacyMaxRateResult(
         pooled_maxima=pooled_array,
@@ -326,14 +324,14 @@ def run_multi_init_correlation(
     overwrite_simulation: bool = False,
     overwrite_analysis: bool = False,
 ) -> CorrelationRunResult:
-    folder, binary_dir, analysis_dir = multi._prepare_analysis_folder(parameter, folder_hint)
+    folder, binary_dir, analysis_dir = binary_multi._prepare_multi_init_folder(parameter, folder_hint)
     binary_cfg = dict(binary_cfg)
     binary_cfg["seed"] = int(seed_network)
     target_rep = parameter.get("R_Eplus")
     if target_rep is None:
         raise ValueError("Parameter 'R_Eplus' must be set before running the correlation workflow.")
     target_rep = float(target_rep)
-    metadata = multi._prepare_metadata(
+    metadata = binary_multi._prepare_metadata(
         analysis_dir,
         base_output=binary_cfg.get("output_name", "activity_trace"),
         fixpoints_path=bundle_path,
@@ -343,10 +341,10 @@ def run_multi_init_correlation(
         binary_cfg=binary_cfg,
         target_rep=target_rep,
     )
-    bundle = max_rates_base._load_fixpoint_bundle(bundle_path)
+    bundle = binary_multi._load_fixpoint_bundle(bundle_path)
     Q_value = int(parameter.get("Q", 0) or 0)
     pop_length = 2 * Q_value
-    candidates = multi._load_fixpoint_candidates(
+    candidates = binary_multi._load_fixpoint_candidates(
         bundle,
         focus_counts,
         stability_filter,
@@ -355,8 +353,8 @@ def run_multi_init_correlation(
     )
     if not candidates:
         raise ValueError("No fixpoints available for the correlation workflow.")
-    picks = multi._select_fixpoints(candidates, seed=seed_inits, count=max(0, int(n_inits)))
-    assembly_ids, assembly_names = multi._assembly_membership(parameter)
+    picks = binary_multi._select_fixpoints(candidates, seed=seed_inits, count=max(0, int(n_inits)))
+    assembly_ids, assembly_names = binary_multi._assembly_membership(parameter)
     worker_args = SimpleNamespace(
         analysis_only=analysis_only,
         overwrite_simulation=overwrite_simulation,
@@ -364,7 +362,7 @@ def run_multi_init_correlation(
         stride_sweeps_analysis=stride_analysis,
         max_pairs=max_pairs,
     )
-    tasks = multi._prepare_tasks(
+    tasks = binary_multi._prepare_tasks(
         picks,
         binary_dir=binary_dir,
         analysis_dir=analysis_dir,
@@ -376,14 +374,14 @@ def run_multi_init_correlation(
     )
     if not tasks:
         raise RuntimeError("No initialization tasks were prepared for the correlation workflow.")
-    results = multi._execute_tasks(tasks, max(1, int(jobs)))
+    results = binary_multi._execute_tasks(tasks, max(1, int(jobs)))
     for entry in results:
         idx = entry.get("index")
         for line in entry.get("logs", []):
             print(f"[init {idx:04d}] {line}")
         if not entry.get("success", False):
             print(f"[init {idx:04d}] Failed: {entry.get('error')}")
-    summary = multi._collect_results(results)
+    summary = binary_multi._collect_results(results)
     return CorrelationRunResult(summary=summary, analysis_dir=analysis_dir, trace_paths=summary.get("trace_paths", []))
 
 

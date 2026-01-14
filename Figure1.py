@@ -16,7 +16,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
-from binary_pipeline import ensure_binary_behavior_defaults, run_binary_simulation
+import binary_simulation_multi_init as binary_multi
+from binary_pipeline import ensure_binary_behavior_defaults
 from sim_config import deep_update, load_config, parse_overrides, sim_tag_from_cfg
 import yaml
 
@@ -28,6 +29,7 @@ from plotting import (
     add_panel_label,
     plot_binary_raster,
     style_axes,
+    _time_axis_scale,
 )
 
 
@@ -80,6 +82,7 @@ class TracePayload:
     times: np.ndarray
     names: List[str]
     sample_interval: int
+    state_interval: int
     warmup_steps: int
     state_source: BinaryStateSource
 
@@ -268,15 +271,40 @@ def expected_trace_path(parameter: Dict[str, object], output_name: str) -> Path:
     return binary_output_folder(parameter) / f"{output_name}.npz"
 
 
+def _resolve_population_inits(parameter: Dict[str, object], binary_cfg: Dict[str, object]) -> List[float]:
+    template = binary_cfg.get("population_rate_init", 0.1)
+    return binary_multi.build_population_rate_vector(parameter, template)
+
+
+def _resolve_binary_seed(binary_cfg: Dict[str, object]) -> int:
+    seed = binary_cfg.get("seed")
+    if seed is None:
+        return int(np.random.randint(0, 2**31 - 1))
+    return int(seed)
+
+
 def ensure_trace_file(parameter: Dict[str, object], binary_cfg: Dict[str, object], spec: RasterPanelSpec) -> Path:
     trace_path = expected_trace_path(parameter, spec.output_name)
     if trace_path.exists():
         return trace_path
-    result = run_binary_simulation(parameter, dict(binary_cfg), output_name=spec.output_name)
-    resolved = Path(result["trace_path"])
-    if not resolved.is_absolute():
-        resolved = (REPO_ROOT / resolved).resolve()
-    return resolved
+    run_cfg = dict(binary_cfg)
+    run_cfg["output_name"] = spec.output_name
+    seed = _resolve_binary_seed(run_cfg)
+    run_cfg["seed"] = seed
+    init_rates = _resolve_population_inits(parameter, run_cfg)
+    binary_dir = trace_path.parent
+    binary_dir.mkdir(parents=True, exist_ok=True)
+    resolved = binary_multi.run_legacy_binary_simulation(
+        parameter,
+        run_cfg,
+        str(binary_dir),
+        spec.output_name,
+        init_rates,
+        seed=seed,
+        capture_spikes=True,
+        capture_state_dynamics=False,
+    )
+    return Path(resolved)
 
 
 def load_trace_summary(trace_path: Path) -> Dict[str, object]:
@@ -303,17 +331,38 @@ def _build_state_source(
         summary.get("neurons")
         or (inline_states.shape[1] if inline_states is not None and inline_states.ndim == 2 else 0)
     )
+    if "state_updates" in data and "state_deltas" in data:
+        updates = np.asarray(data["state_updates"], dtype=np.uint16)
+        deltas = np.asarray(data["state_deltas"], dtype=np.int8)
+        init_state = None
+        if "initial_state" in data and np.asarray(data["initial_state"]).size:
+            init_state = np.asarray(data["initial_state"], dtype=np.uint8)
+        return BinaryStateSource.from_diff_logs(
+            updates,
+            deltas,
+            neuron_count=neuron_count,
+            initial_state=init_state,
+        )
     return BinaryStateSource(inline_states=inline_states, chunk_files=chunk_files, neuron_count=neuron_count)
 
 
 def load_trace_payload(path: Path, summary: Dict[str, object]) -> TracePayload:
     if not path.exists():
         raise FileNotFoundError(f"Trace file {path} does not exist.")
-    with np.load(path, allow_pickle=False) as data:
+    with np.load(path, allow_pickle=True) as data:
         rates = np.asarray(data["rates"], dtype=float)
         names = [str(name) for name in data["names"].tolist()]
         times = np.asarray(data["times"], dtype=float) if "times" in data else np.arange(rates.shape[0], dtype=float)
         sample_interval = int(np.asarray(data.get("sample_interval", 1)).item())
+        state_times = np.asarray(data.get("neuron_state_times"), dtype=np.int64)
+        state_interval = int(np.asarray(data.get("neuron_state_interval", 0)).item())
+        if state_interval <= 0 and state_times.ndim == 1 and state_times.size > 1:
+            diffs = np.diff(state_times.astype(np.int64, copy=False))
+            valid = diffs[diffs > 0]
+            if valid.size:
+                state_interval = int(np.median(valid))
+        if state_interval <= 0:
+            state_interval = 1
         warmup_steps = int(np.asarray(data.get("warmup_steps", 0)).item())
         state_source = _build_state_source(data, summary, path)
     return TracePayload(
@@ -321,6 +370,7 @@ def load_trace_payload(path: Path, summary: Dict[str, object]) -> TracePayload:
         times=times,
         names=names,
         sample_interval=sample_interval,
+        state_interval=state_interval,
         warmup_steps=warmup_steps,
         state_source=state_source,
     )
@@ -395,18 +445,6 @@ def _format_time_ticks(start: float, end: float, count: int = 4) -> tuple[np.nda
     return values, labels
 
 
-def _time_axis_scale(window: TimeWindow) -> tuple[float, str]:
-    max_value = max(window.start, window.end)
-    if max_value <= 0:
-        return 1.0, "Time [a.u.]"
-    exponent = int(math.floor(math.log10(max_value)))
-    if exponent < 3:
-        return 1.0, "Time [a.u.]"
-    scale_value = 10 ** exponent
-    label = f"Time [a.u.]/$10^{{{exponent}}}$"
-    return float(scale_value), label
-
-
 def plot_cluster_activity(
     ax: Axes,
     panel: PanelData,
@@ -441,7 +479,7 @@ def plot_cluster_activity(
     window_start = window.start / safe_scale
     window_end = window.end / safe_scale
     ax.set_xlim(window_start, window_end)
-    ax.set_ylim(0.0, 0.55)
+    ax.set_ylim(0.0, 1.05)
     if ylabel:
         ax.set_ylabel(ylabel)
     else:
@@ -616,7 +654,7 @@ def main() -> None:
         if panel is None:
             continue
         window = TimeWindow(start=float(panel.spec.window_start), duration=float(panel.spec.window_duration))
-        time_scale, time_label = _time_axis_scale(window)
+        time_scale, time_label = _time_axis_scale(window.start, window.end)
         total_neurons = panel.payload.state_source.neuron_count
         if total_neurons <= 0:
             total_neurons = int(panel.parameter.get("N_E", 0)) + int(panel.parameter.get("N_I", 0))
@@ -636,7 +674,7 @@ def main() -> None:
         plot_binary_raster(
             ax=raster_ax,
             state_source=panel.payload.state_source,
-            sample_interval=panel.payload.sample_interval,
+            sample_interval=panel.payload.state_interval,
             n_exc=panel.excitatory_neurons,
             total_neurons=total_neurons,
             window=(window.start, window.end),

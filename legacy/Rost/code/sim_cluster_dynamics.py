@@ -1,3 +1,4 @@
+import numpy as np
 from BiNet import network, mean_field, weights
 import organiser
 import spiketools
@@ -102,34 +103,32 @@ def simulate(original_params):
             return_state_dynamics,
         )
     )
+    record_spike_times = bool(return_cluster_rates_and_spiketimes)
     result = {}
     if needs_cluster_rates:
         cluster_outputs = []
         sampled_states = []
         sampled_fields = []
         state_indices = None
-        spiketimes = pylab.zeros((3, 0))
+        spiketimes = pylab.zeros((3, 0)) if record_spike_times else None
         for trial in range(params['trials']):
-            if return_cluster_rates_and_spiketimes:
-                net.update_record = []
-            all_states = net.forward(
+            forward_output = net.forward(
                 input,
                 return_state=True,
                 record_subthreshold=False,
-                record_updates=return_cluster_rates_and_spiketimes,
+                record_updates=False,
+                return_spiketimes=record_spike_times,
             )
-            if return_cluster_rates_and_spiketimes:
-                updates = pylab.zeros_like(all_states)
-                for step, update in enumerate(net.update_record):
-                    updates[update, step] = 1
-                spikes = (updates > 0) * (all_states > 0)
-                units, times = pylab.where(spikes)
-                if len(units):
-                    new_spiketimes = pylab.concatenate(
-                        (times[None, :], pylab.ones((1, len(units))) * trial, units[None, :]), axis=0
-                    )
-                    spiketimes = pylab.append(spiketimes, new_spiketimes, axis=1)
-                net.update_record = []
+            if record_spike_times:
+                all_states, spike_log = forward_output
+                if spike_log is not None and spike_log.size:
+                    trial_block = pylab.zeros((3, spike_log.shape[1]))
+                    trial_block[0] = spike_log[0]
+                    trial_block[1] = trial
+                    trial_block[2] = spike_log[1]
+                    spiketimes = pylab.append(spiketimes, trial_block, axis=1)
+            else:
+                all_states = forward_output
             cluster_states = []
             for i in range(len(n_bins) - 1):
                 cluster_states.append(all_states[n_bins[i]:n_bins[i + 1]].mean(axis=0))
@@ -163,8 +162,15 @@ def simulate(original_params):
         if return_max_cluster_rates:
             excitatory_output = cluster_outputs[:, :params['spec_args']['Q']]
             result["max_cluster_rates"] = excitatory_output.max(axis=2)
-        if return_cluster_rates_and_spiketimes:
+        if record_spike_times and spiketimes is not None:
             result["spike_times"] = spiketimes
+            updates = getattr(net, "last_update_log", None)
+            deltas = getattr(net, "last_delta_log", None)
+            if updates is not None and deltas is not None:
+                result["state_updates"] = np.array(updates, dtype=np.uint16, copy=True, order="F")
+                result["state_deltas"] = np.array(deltas, dtype=np.int8, copy=True, order="F")
+                init_state = getattr(net, "reference_state", net.state)
+                result["initial_state"] = np.asarray(init_state, dtype=np.uint8)
         if return_state_dynamics:
             result["sampled_states"] = pylab.array(sampled_states)
             result["sampled_fields"] = pylab.array(sampled_fields)
