@@ -6,7 +6,7 @@ import pylab
 import os
 from copy import deepcopy
 from time import time as clock
-from scipy.signal import decimate, convolve2d
+from scipy.signal import convolve2d
 
 
 def _compute_state_sample_indices(length, stride):
@@ -15,6 +15,92 @@ def _compute_state_sample_indices(length, stride):
         return pylab.zeros(0, dtype=int)
     start = min(stride - 1, max(length - 1, 0))
     return pylab.arange(start, length, stride)
+
+
+def _stream_cluster_traces(
+    init_state,
+    update_log,
+    delta_log,
+    n_bins,
+    *,
+    downsample_factor=None,
+    state_indices=None,
+    input_array=None,
+    net=None,
+):
+    updates = np.asarray(update_log, dtype=np.int64)
+    deltas = np.asarray(delta_log, dtype=np.int8)
+    if updates.ndim != 2 or deltas.shape != updates.shape:
+        num_clusters = len(n_bins) - 1
+        state_size = np.asarray(init_state).size
+        empty_clusters = np.zeros((num_clusters, 0), dtype=np.float32)
+        empty_states = np.zeros((state_size, 0), dtype=np.uint8)
+        empty_fields = np.zeros((state_size, 0), dtype=np.float32)
+        return empty_clusters, empty_states, empty_fields
+    steps = updates.shape[1]
+    state = np.asarray(init_state, dtype=np.int8).ravel()
+    state_size = state.size
+    ds_factor = 1 if downsample_factor in (None, 0, 1) else max(1, int(downsample_factor))
+    num_clusters = len(n_bins) - 1
+    cluster_sizes = np.diff(np.asarray(n_bins, dtype=np.int64))
+    cluster_sizes = cluster_sizes.astype(np.float32, copy=False)
+    cluster_sums = np.add.reduceat(state.astype(np.int32, copy=False), n_bins[:-1])
+    cluster_of = np.empty(state_size, dtype=np.int32)
+    for idx in range(num_clusters):
+        cluster_of[n_bins[idx]:n_bins[idx + 1]] = idx
+    traces = []
+    bin_accumulator = np.zeros(num_clusters, dtype=np.float64)
+    bin_count = 0
+    sample_indices = None
+    if state_indices is not None:
+        sample_indices = np.asarray(state_indices, dtype=np.int64).ravel()
+    want_samples = sample_indices is not None and sample_indices.size > 0
+    sampled_states = []
+    sample_cursor = 0
+    per_step_updates = updates.shape[0]
+    for step in range(steps):
+        if per_step_updates:
+            units = updates[:, step]
+            delta_step = deltas[:, step]
+            for unit, delta in zip(units, delta_step):
+                if delta == 0:
+                    continue
+                cluster_idx = cluster_of[int(unit)]
+                cluster_sums[cluster_idx] += int(delta)
+                state_value = state[int(unit)] + int(delta)
+                state[int(unit)] = 1 if state_value > 0 else 0
+        bin_accumulator += cluster_sums
+        bin_count += 1
+        if want_samples:
+            while sample_cursor < sample_indices.size and sample_indices[sample_cursor] == step:
+                sampled_states.append(state.astype(np.uint8, copy=True))
+                sample_cursor += 1
+        if bin_count == ds_factor:
+            mean_counts = bin_accumulator / float(bin_count)
+            traces.append((mean_counts / cluster_sizes).astype(np.float32, copy=False))
+            bin_accumulator.fill(0.0)
+            bin_count = 0
+    if bin_count > 0:
+        mean_counts = bin_accumulator / float(bin_count)
+        traces.append((mean_counts / cluster_sizes).astype(np.float32, copy=False))
+    if traces:
+        cluster_array = np.stack(traces, axis=1)
+    else:
+        cluster_array = np.zeros((num_clusters, 0), dtype=np.float32)
+    if want_samples:
+        if sampled_states:
+            sampled_state_matrix = np.stack(sampled_states, axis=1)
+        else:
+            sampled_state_matrix = np.zeros((state_size, 0), dtype=np.uint8)
+        if net is not None and input_array is not None and sampled_state_matrix.shape[1]:
+            input_slice = np.asarray(input_array, dtype=float)[:, sample_indices]
+            sampled_fields = net.compute_fields_from_states(sampled_state_matrix, input_slice)
+        else:
+            sampled_fields = np.zeros((state_size, sampled_state_matrix.shape[1]), dtype=np.float32)
+    else:
+        sampled_state_matrix = np.zeros((state_size, 0), dtype=np.uint8)
+        sampled_fields = np.zeros((state_size, 0), dtype=np.float32)
+    return cluster_array, sampled_state_matrix, sampled_fields
 
 
 def simulate(original_params):
@@ -118,6 +204,7 @@ def simulate(original_params):
         sampled_fields = []
         state_indices = None
         spiketimes = pylab.zeros((3, 0)) if record_spike_times else None
+        state_indices_output = None
         for trial in range(params['trials']):
             forward_output = net.forward(
                 input,
@@ -137,14 +224,23 @@ def simulate(original_params):
                     trial_block[2] = spike_log[1]
                     spiketimes = pylab.append(spiketimes, trial_block, axis=1)
             init_state, update_log, delta_log = state_packet
-            all_states = net._reconstruct_states(init_state, update_log, delta_log)
-            cluster_states = []
-            for i in range(len(n_bins) - 1):
-                cluster_states.append(all_states[n_bins[i]:n_bins[i + 1]].mean(axis=0))
-            cluster_states = pylab.array(cluster_states)
-            if downsample is not None:
-                downsample_factor = int(downsample)
-                cluster_states = decimate(cluster_states, downsample_factor, axis=1)
+            total_steps = update_log.shape[1] if np.ndim(update_log) == 2 else 0
+            state_indices = None
+            if return_state_dynamics:
+                indices = _compute_state_sample_indices(total_steps, state_record_stride)
+                if indices.size == 0 and total_steps > 0:
+                    indices = pylab.array([total_steps - 1], dtype=int)
+                state_indices = indices
+            cluster_states, sampled_state_matrix, sampled_field_matrix = _stream_cluster_traces(
+                init_state,
+                update_log,
+                delta_log,
+                n_bins,
+                downsample_factor=downsample,
+                state_indices=state_indices,
+                input_array=input,
+                net=net,
+            )
             if kernel is not None:
                 cluster_states = convolve2d(cluster_states, kernel, 'same')
                 half_width = kernel.shape[1] // 2
@@ -153,15 +249,9 @@ def simulate(original_params):
                     cluster_states[:, -half_width:] = pylab.nan
             cluster_outputs.append(cluster_states)
             if return_state_dynamics:
-                indices = _compute_state_sample_indices(all_states.shape[1], state_record_stride)
-                if indices.size == 0 and all_states.shape[1] > 0:
-                    indices = pylab.array([all_states.shape[1] - 1], dtype=int)
-                state_indices = indices
-                state_slice = all_states[:, indices]
-                sampled_states.append(state_slice)
-                input_slice = input[:, indices]
-                fields = net.compute_fields_from_states(state_slice, input_slice)
-                sampled_fields.append(fields)
+                state_indices_output = state_indices
+                sampled_states.append(sampled_state_matrix)
+                sampled_fields.append(sampled_field_matrix)
         cluster_outputs = pylab.array(cluster_outputs)
         result["cluster_rates"] = cluster_outputs
         if return_mean_cluster_rates:
@@ -183,7 +273,10 @@ def simulate(original_params):
         if return_state_dynamics:
             result["sampled_states"] = pylab.array(sampled_states)
             result["sampled_fields"] = pylab.array(sampled_fields)
-            result["state_indices"] = state_indices if state_indices is not None else pylab.zeros(0, dtype=int)
+            if state_indices_output is not None:
+                result["state_indices"] = state_indices_output
+            else:
+                result["state_indices"] = pylab.zeros(0, dtype=int)
         return result
 
     output = [net.forward(input, return_spiketimes=True) for _ in range(params['trials'])]

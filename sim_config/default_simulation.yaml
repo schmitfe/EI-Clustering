@@ -1,28 +1,28 @@
-N_E: 4000
-N_I: 1000
+N_E: 8000
+N_I: 2000
 Q: 20
 focus_count: 1
 V_th: 1.0
 g: 1.2
 p0_ee: 0.2
-p0_ie: 0.5
-p0_ei: 0.5
-p0_ii: 0.5
+p0_ie: 0.2
+p0_ei: 0.2
+p0_ii: 0.2
 tau_e: 10.0
 tau_i: 5.0
 R_Eplus: null
-R_j: 0.0
-kappa: 0.0
-connection_type: bernoulli
+R_j: 0.75
+kappa: 0.5
+connection_type: poisson
 m_X: 0.03
 collapse_types: true
 initial_activity:
-  mode: bernoulli
+  mode: poisson
   excitatory: null
   inhibitory: null
 binary:
-  warmup_steps: 5000
-  simulation_steps: 20000
+  warmup_steps: 200000
+  simulation_steps: 3000000
   sample_interval: 10
   batch_size: 10
   state_chunk_size: 0

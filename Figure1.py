@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import multiprocessing
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -102,6 +103,13 @@ class PanelData:
     excitatory_population_indices: List[int]
 
 
+@dataclass
+class PanelContext:
+    spec: RasterPanelSpec
+    parameter: Dict[str, object]
+    binary_cfg: Dict[str, object]
+
+
 RASTER_PANELS: list[RasterPanelSpec] = [
     RasterPanelSpec(
         label="c1",
@@ -172,6 +180,12 @@ def parse_args() -> argparse.Namespace:
         default=5,
         metavar="N",
         help="Only plot every Nth neuron in the raster panels (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Worker processes for the multi-init simulations (default: %(default)s).",
     )
     return parser.parse_args()
 
@@ -311,6 +325,22 @@ def ensure_trace_file(parameter: Dict[str, object], binary_cfg: Dict[str, object
     return Path(resolved)
 
 
+def _ensure_trace_for_context(context: PanelContext) -> str:
+    path = ensure_trace_file(context.parameter, context.binary_cfg, context.spec)
+    return str(path)
+
+
+def ensure_traces_for_contexts(contexts: Sequence[PanelContext], jobs: int) -> List[Path]:
+    if not contexts:
+        return []
+    worker_count = max(1, min(int(jobs or 1), len(contexts)))
+    if worker_count > 1:
+        with multiprocessing.Pool(processes=worker_count) as pool:
+            resolved = pool.map(_ensure_trace_for_context, contexts)
+        return [Path(entry) for entry in resolved]
+    return [ensure_trace_file(context.parameter, context.binary_cfg, context.spec) for context in contexts]
+
+
 def load_trace_summary(trace_path: Path) -> Dict[str, object]:
     summary_path = trace_path.with_name(f"{trace_path.stem}_summary.yaml")
     if not summary_path.exists():
@@ -403,19 +433,28 @@ def select_excitatory_populations(names: Sequence[str]) -> List[int]:
     return [idx for idx, name in enumerate(names) if name.upper().startswith("E")]
 
 
-def prepare_panel(
+def build_panel_context(
     spec: RasterPanelSpec,
     *,
     global_overrides: Sequence[str],
     panel_override_map: Dict[str, Sequence[str]],
-) -> PanelData:
+) -> PanelContext:
     label_key = _normalize_label(spec.label)
     combined_overrides: List[str] = list(spec.overrides)
     combined_overrides.extend(global_overrides)
     combined_overrides.extend(panel_override_map.get(label_key, []))
     parameter = load_parameter(spec.config_name, combined_overrides)
     binary_cfg = resolve_binary_config(parameter)
-    trace_path = ensure_trace_file(parameter, binary_cfg, spec)
+    return PanelContext(spec=spec, parameter=parameter, binary_cfg=binary_cfg)
+
+
+def prepare_panel(
+    context: PanelContext,
+    trace_path: Path,
+) -> PanelData:
+    spec = context.spec
+    parameter = context.parameter
+    binary_cfg = context.binary_cfg
     summary = load_trace_summary(trace_path)
     payload = load_trace_payload(trace_path, summary)
     if payload.state_source.neuron_count <= 0:
@@ -425,7 +464,7 @@ def prepare_panel(
     excitatory_neurons = max(0, excitatory_neurons)
     excitatory_population_indices = select_excitatory_populations(payload.names)
     return PanelData(
-        spec=spec,
+        spec=context.spec,
         parameter=parameter,
         binary_cfg=binary_cfg,
         trace_path=trace_path,
@@ -642,9 +681,14 @@ def main() -> None:
         window_map=panel_window_map,
         cluster_map=panel_cluster_map,
     )
-    panels = [
-        prepare_panel(spec, global_overrides=args.override, panel_override_map=panel_override_map)
+    contexts = [
+        build_panel_context(spec, global_overrides=args.override, panel_override_map=panel_override_map)
         for spec in specs
+    ]
+    trace_paths = ensure_traces_for_contexts(contexts, jobs=args.jobs)
+    panels = [
+        prepare_panel(context, trace_path)
+        for context, trace_path in zip(contexts, trace_paths)
     ]
     validate_panels(panels)
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
