@@ -15,6 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.ticker import MaxNLocator  # noqa: E402
 
 import figure_helpers as helpers  # noqa: E402
 from plotting import (
@@ -247,24 +248,30 @@ def _compute_linear_offsets(
     *,
     step: float,
     threshold: float = 0.025,
-) -> List[float]:
+) -> Tuple[List[float], List[List[int]]]:
     count = len(values)
     offsets = [0.0] * count
-    if count <= 1 or step <= 0.0:
-        return offsets
+    clusters: List[List[int]] = []
+    if count == 0:
+        return offsets, clusters
+    if count == 1 or step <= 0.0:
+        clusters = [[idx] for idx in range(count)]
+        return offsets, clusters
     order = sorted(range(count), key=lambda idx: values[idx])
     i = 0
     while i < count:
-        cluster = [order[i]]
+        base_idx = order[i]
+        cluster = [base_idx]
         j = i + 1
-        while j < count and abs(values[order[j]] - values[order[i]]) <= threshold:
+        while j < count and abs(values[order[j]] - values[base_idx]) <= threshold:
             cluster.append(order[j])
             j += 1
         cluster_sorted = sorted(cluster, key=lambda idx: focus_keys[idx], reverse=True)
+        clusters.append(cluster_sorted)
         for pos, idx in enumerate(cluster_sorted):
             offsets[idx] = -step * pos
         i = j
-    return offsets
+    return offsets, clusters
 
 
 def _plot_example_traces(
@@ -461,12 +468,21 @@ def _plot_fixpoint_overlays(
         return
     values = [entry[1] for entry in valid_entries]
     focuses = [entry[2] for entry in valid_entries]
-    offsets = _compute_linear_offsets(values, focuses, step=step_x, threshold=0.025)
+    offsets, clusters = _compute_linear_offsets(values, focuses, step=step_x, threshold=0.025)
+    aligned_levels = list(values)
+    for cluster in clusters:
+        if len(cluster) <= 1:
+            continue
+        leftmost_idx = min(cluster, key=lambda idx: offsets[idx])
+        ref_value = values[leftmost_idx]
+        for member in cluster:
+            aligned_levels[member] = ref_value
     for (entry, offset) in zip(valid_entries, offsets):
         idx, value, _ = entry
         marker = markers[idx]
         color = color_map.get(marker.focus, fallback_color)
         linestyle = "-" if marker.stable else "--"
+        value = aligned_levels[idx]
         ax.hlines(
             value,
             x_start,
@@ -571,14 +587,23 @@ def _plot_histogram(
     pad = max(0.2, marker_level * 0.15)
     ymax = marker_level + pad
     step_y, _ = _marker_data_step(ax, ymax, "y", marker_size=marker_size)
-    offsets = _compute_linear_offsets(values, focus_keys, step=step_y, threshold=0.025)
+    offsets, clusters = _compute_linear_offsets(values, focus_keys, step=step_y, threshold=0.025)
+    aligned_positions = list(values)
+    for cluster in clusters:
+        if len(cluster) <= 1:
+            continue
+        reference_idx = cluster[0]
+        anchor_value = values[reference_idx]
+        for member in cluster:
+            aligned_positions[member] = anchor_value
     for (entry, offset) in zip(valid_entries, offsets):
-        idx, value, _ = entry
+        idx, _value, _ = entry
         marker = focus_markers[idx]
         color = color_map.get(marker.focus, fallback_color)
         linestyle = "-" if marker.stable else "--"
         facecolors = color if marker.stable else "white"
         edgecolors = color
+        value = aligned_positions[idx]
         ax.scatter(
             value,
             marker_level + offset,
@@ -641,17 +666,15 @@ def _plot_histogram(
                     label="unstable",
                 )
             )
-        if handles:
-            ax.legend(
-                handles=handles,
-                loc="upper center",
-                ncol=2,
-                frameon=False,
-                fontsize=font_cfg.legend,
-            )
-    ticks = ax.get_yticks()
-    if len(ticks) > 1:
-        ax.set_yticks(ticks[:-1])
+    if handles:
+        ax.legend(
+            handles=handles,
+            loc="upper center",
+            ncol=2,
+            frameon=False,
+            fontsize=font_cfg.legend,
+        )
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True, prune="upper"))
 
 
 def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
@@ -728,7 +751,16 @@ def main() -> None:
                 payload = None
         focus_markers = _collect_focus_markers(result.focus_rates)
         fig = plt.figure(figsize=(13, 5))
-        outer = fig.add_gridspec(1, 2, width_ratios=[1.2, 1.0], wspace=0.2, left=0.1, right=0.97, top=0.94, bottom=0.13)
+        outer = fig.add_gridspec(
+            1,
+            2,
+            width_ratios=[1.2, 1.0],
+            wspace=0.15,
+            left=0.075,
+            right=0.995,
+            top=0.94,
+            bottom=0.13,
+        )
         left_grid = outer[0, 0].subgridspec(2, 1, height_ratios=[1.0, 0.6], hspace=0.08)
         ax_raster = fig.add_subplot(left_grid[0, 0])
         ax_rates = fig.add_subplot(left_grid[1, 0], sharex=ax_raster)
@@ -763,7 +795,7 @@ def main() -> None:
         style_axes(ax_hist, font_cfg)
         add_panel_label(ax_raster, "a1", font_cfg, x=-0.15, y=1.04)
         add_panel_label(ax_rates, "a2", font_cfg, x=-0.15, y=1.06)
-        add_panel_label(ax_hist, "b", font_cfg, x=-0.08, y=1.04)
+        add_panel_label(ax_raster, "b", font_cfg, x=1.06, y=1.04)
         _save_figure(fig, args.output_prefix, r_value)
         plt.close(fig)
 
