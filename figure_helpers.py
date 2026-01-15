@@ -181,7 +181,7 @@ def run_legacy_max_rate_analysis(
     overwrite_simulation: bool = False,
     overwrite_analysis: bool = False,
 ) -> LegacyMaxRateResult:
-    folder, binary_dir, analysis_dir = binary_multi._prepare_max_rate_folder(parameter, folder_hint)
+    folder, binary_dir, analysis_dir = binary_multi._prepare_max_rate_folder(parameter, folder_hint, binary_cfg)
     candidates, Q_value = _legacy_candidate_selection(parameter, bundle_path, focus_counts, stability_filter)
     seeds = [int(base_seed) + idx for idx in range(total_simulations)]
     if not seeds:

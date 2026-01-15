@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from dataclasses import dataclass
 from copy import deepcopy
@@ -23,6 +24,7 @@ from plotting import (
     add_panel_label,
     draw_listed_colorbar,
     plot_binary_raster,
+    plot_spike_raster,
     style_axes,
     _time_axis_scale,
     _prepare_line_color_map,
@@ -160,6 +162,9 @@ def _load_trace_payload(path: str) -> Dict[str, Any]:
         state_updates = np.asarray(data["state_updates"], dtype=np.uint16) if "state_updates" in data else None
         state_deltas = np.asarray(data["state_deltas"], dtype=np.int8) if "state_deltas" in data else None
         initial_state = np.asarray(data["initial_state"], dtype=np.uint8) if "initial_state" in data else None
+        spike_times = np.asarray(data["spike_times"], dtype=float).ravel() if "spike_times" in data else np.zeros(0, dtype=float)
+        spike_ids = np.asarray(data["spike_ids"], dtype=np.int64).ravel() if "spike_ids" in data else np.zeros(0, dtype=np.int64)
+        spike_trials = np.asarray(data["spike_trials"], dtype=np.int16).ravel() if "spike_trials" in data else np.zeros(0, dtype=np.int16)
     return {
         "rates": rates,
         "names": names,
@@ -169,6 +174,9 @@ def _load_trace_payload(path: str) -> Dict[str, Any]:
         "state_deltas": state_deltas,
         "initial_state": initial_state,
         "sample_interval": sample_interval,
+        "spike_times": spike_times,
+        "spike_ids": spike_ids,
+        "spike_trials": spike_trials,
     }
 
 
@@ -190,6 +198,73 @@ def _collect_focus_markers(focus_rates: Dict[int, Dict[str, List[float]]]) -> Li
         if unstable_values:
             markers.append(FocusMarker(focus=int(focus), value=max(unstable_values), stable=False))
     return markers
+
+
+def _format_time_ticks(start: float, end: float, count: int = 4) -> Tuple[np.ndarray, List[str]]:
+    if count <= 1 or end <= start:
+        values = np.array([start, end], dtype=float)
+    else:
+        values = np.linspace(start, end, count, dtype=float)
+    labels: List[str] = []
+    for value in values:
+        rounded = round(value)
+        if abs(value - rounded) < 1e-6:
+            labels.append(f"{rounded:d}")
+        else:
+            labels.append(f"{value:.0f}")
+    return values, labels
+
+
+def _marker_data_step(
+    ax: plt.Axes,
+    span: float,
+    orientation: str,
+    *,
+    marker_size: float,
+    fraction: float = 2.0 / 3.0,
+) -> tuple[float, float]:
+    span = max(float(span), 1e-9)
+    fig = ax.figure
+    try:
+        renderer = fig.canvas.get_renderer()
+        bbox = ax.get_window_extent(renderer=renderer)
+    except Exception:
+        bbox = ax.get_window_extent()
+    extent = bbox.width if orientation == "x" else bbox.height
+    extent = max(extent, 1e-9)
+    data_per_pixel = span / extent
+    pixels_per_point = fig.dpi / 72.0 if fig.dpi else 1.0
+    data_per_point = data_per_pixel * pixels_per_point
+    diameter_points = 2.0 * math.sqrt(marker_size / math.pi)
+    diameter_data = diameter_points * data_per_point
+    step_data = diameter_data * fraction
+    return step_data, diameter_data
+
+
+def _compute_linear_offsets(
+    values: Sequence[float],
+    focus_keys: Sequence[int],
+    *,
+    step: float,
+    threshold: float = 0.025,
+) -> List[float]:
+    count = len(values)
+    offsets = [0.0] * count
+    if count <= 1 or step <= 0.0:
+        return offsets
+    order = sorted(range(count), key=lambda idx: values[idx])
+    i = 0
+    while i < count:
+        cluster = [order[i]]
+        j = i + 1
+        while j < count and abs(values[order[j]] - values[order[i]]) <= threshold:
+            cluster.append(order[j])
+            j += 1
+        cluster_sorted = sorted(cluster, key=lambda idx: focus_keys[idx], reverse=True)
+        for pos, idx in enumerate(cluster_sorted):
+            offsets[idx] = -step * pos
+        i = j
+    return offsets
 
 
 def _plot_example_traces(
@@ -275,20 +350,45 @@ def _plot_example_traces(
     time_scale, time_label = _time_axis_scale(scale_start, scale_end)
     safe_scale = time_scale if time_scale > 0 else 1.0
     plot_window = raster_window if raster_window is not None else (window_start, window_end)
-    plot_binary_raster(
-        ax=ax_raster,
-        state_source=state_source,
-        sample_interval=sample_interval,
-        n_exc=excit_neurons,
-        total_neurons=total_neurons,
-        window=plot_window,
-        time_scale=time_scale,
-        stride=1,
-        labels=labels,
-        marker=".",
-        marker_size=3.0,
-        empty_text="No neuron state samples",
-    )
+    spike_times = np.asarray(payload.get("spike_times"), dtype=float)
+    spike_ids = np.asarray(payload.get("spike_ids"), dtype=np.int64)
+    n_inh = max(total_neurons - excit_neurons, 0)
+    if spike_times.size and spike_ids.size:
+        scaled_spike_times = spike_times / safe_scale
+        if plot_window is not None:
+            t_start = plot_window[0] / safe_scale
+            t_end = plot_window[1] / safe_scale
+        else:
+            t_start = None
+            t_end = None
+        plot_spike_raster(
+            ax=ax_raster,
+            spike_times_ms=scaled_spike_times,
+            spike_ids=spike_ids,
+            n_exc=excit_neurons,
+            n_inh=n_inh,
+            stride=1,
+            t_start=t_start,
+            t_end=t_end,
+            marker=".",
+            marker_size=3.0,
+            labels=labels,
+        )
+    else:
+        plot_binary_raster(
+            ax=ax_raster,
+            state_source=state_source,
+            sample_interval=sample_interval,
+            n_exc=excit_neurons,
+            total_neurons=total_neurons,
+            window=plot_window,
+            time_scale=time_scale,
+            stride=1,
+            labels=labels,
+            marker=".",
+            marker_size=2.0,
+            empty_text="No neuron state samples",
+        )
     for text in ax_raster.texts:
         if id(text) not in existing:
             label = text.get_text().strip().lower()
@@ -321,6 +421,9 @@ def _plot_example_traces(
     ax_rates.set_xlim(scaled_start, scaled_end)
     ax_rates.set_ylabel(r"$m_c$")
     ax_rates.set_xlabel(time_label)
+    tick_vals, tick_labels = _format_time_ticks(scaled_start, scaled_end, 4)
+    ax_rates.set_xticks(tick_vals)
+    ax_rates.set_xticklabels(tick_labels)
     _plot_fixpoint_overlays(
         ax_rates,
         focus_markers,
@@ -345,12 +448,23 @@ def _plot_fixpoint_overlays(
     if x_end <= x_start:
         x_end = x_start + 1.0
     span = x_end - x_start
-    marker_x = x_end - 0.02 * span
+    step_x, diameter_x = _marker_data_step(ax, span, "x", marker_size=25.0)
+    marker_x = x_end - max(diameter_x / 2.0, 0.0)
     fallback_color = "#444444"
-    for marker in markers:
+    valid_entries: List[Tuple[int, float, int]] = []
+    for idx, marker in enumerate(markers):
         value = float(marker.value)
         if not np.isfinite(value):
             continue
+        valid_entries.append((idx, value, marker.focus))
+    if not valid_entries:
+        return
+    values = [entry[1] for entry in valid_entries]
+    focuses = [entry[2] for entry in valid_entries]
+    offsets = _compute_linear_offsets(values, focuses, step=step_x, threshold=0.025)
+    for (entry, offset) in zip(valid_entries, offsets):
+        idx, value, _ = entry
+        marker = markers[idx]
         color = color_map.get(marker.focus, fallback_color)
         linestyle = "-" if marker.stable else "--"
         ax.hlines(
@@ -365,7 +479,7 @@ def _plot_fixpoint_overlays(
         )
         facecolor = color if marker.stable else "white"
         ax.scatter(
-            marker_x,
+            marker_x + offset,
             value,
             marker="o",
             s=25.0,
@@ -447,14 +561,27 @@ def _plot_histogram(
     line_kwargs = {"linewidth": 1.2, "alpha": 0.8}
     has_stable = False
     has_unstable = False
-    for marker in focus_markers:
+    valid_entries: List[Tuple[int, float, int]] = []
+    for idx, marker in enumerate(focus_markers):
+        value = float(marker.value)
+        if np.isfinite(value):
+            valid_entries.append((idx, value, marker.focus))
+    values = [entry[1] for entry in valid_entries]
+    focus_keys = [entry[2] for entry in valid_entries]
+    pad = max(0.2, marker_level * 0.15)
+    ymax = marker_level + pad
+    step_y, _ = _marker_data_step(ax, ymax, "y", marker_size=marker_size)
+    offsets = _compute_linear_offsets(values, focus_keys, step=step_y, threshold=0.025)
+    for (entry, offset) in zip(valid_entries, offsets):
+        idx, value, _ = entry
+        marker = focus_markers[idx]
         color = color_map.get(marker.focus, fallback_color)
         linestyle = "-" if marker.stable else "--"
         facecolors = color if marker.stable else "white"
         edgecolors = color
         ax.scatter(
-            marker.value,
-            marker_level,
+            value,
+            marker_level + offset,
             marker="o",
             s=marker_size,
             facecolors=facecolors,
@@ -463,7 +590,7 @@ def _plot_histogram(
             zorder=3,
         )
         ax.vlines(
-            marker.value,
+            value,
             0.0,
             marker_level,
             colors=color,
@@ -475,9 +602,6 @@ def _plot_histogram(
             has_stable = True
         else:
             has_unstable = True
-    if marker_level <= 0:
-        marker_level = 0.05
-    ymax = max(marker_level * 1.35, marker_level + 0.2)
     ax.set_ylim(0.0, ymax)
     if colorbar_entries:
         draw_listed_colorbar(
@@ -525,6 +649,9 @@ def _plot_histogram(
                 frameon=False,
                 fontsize=font_cfg.legend,
             )
+    ticks = ax.get_yticks()
+    if len(ticks) > 1:
+        ax.set_yticks(ticks[:-1])
 
 
 def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
@@ -629,6 +756,8 @@ def main() -> None:
             fig=fig,
             font_cfg=font_cfg,
         )
+        kappa_value = float(param_copy.get("kappa", 0.0) or 0.0)
+        ax_raster.set_title(rf"$\kappa={kappa_value:.1f}$", fontsize=font_cfg.title)
         style_axes(ax_raster, font_cfg, set_xlabel=False, set_ylabel=False)
         style_axes(ax_rates, font_cfg)
         style_axes(ax_hist, font_cfg)

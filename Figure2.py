@@ -1404,6 +1404,7 @@ def main() -> None:
     reference_row_set = {idx for idx in BIF_REFERENCE_ROWS if 0 <= idx < n_rows}
     for r_idx, avg_conn in enumerate(row_order):
         scaled_parameter = _scale_probabilities(base_parameter, avg_conn)
+        print(scaled_parameter)
         row_parameter = dict(scaled_parameter)
         overrides = row_parameter_overrides.get(r_idx)
         if overrides:

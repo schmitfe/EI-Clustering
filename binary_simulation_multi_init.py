@@ -1086,11 +1086,15 @@ def _build_common_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _prepare_max_rate_folder(parameter: Dict[str, Any], base_folder: str | None) -> Tuple[str, str, str]:
+def _prepare_max_rate_folder(
+    parameter: Dict[str, Any],
+    base_folder: str | None,
+    binary_cfg: Dict[str, Any] | None = None,
+) -> Tuple[str, str, str]:
     folder, binary_dir, _ = _prepare_output_folders(
         parameter,
         base_folder=base_folder,
-        binary_cfg=parameter.get("binary"),
+        binary_cfg=binary_cfg or parameter.get("binary"),
     )
     analysis_dir = os.path.join(binary_dir, LEGACY_ANALYSIS_SUBDIR)
     os.makedirs(analysis_dir, exist_ok=True)
