@@ -171,7 +171,12 @@ def _filtered_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
     return filtered
 
 
-def _prepare_output_folders(parameter: Dict[str, Any], *, base_folder: str | None = None) -> Tuple[str, str, str]:
+def _prepare_output_folders(
+    parameter: Dict[str, Any],
+    *,
+    base_folder: str | None = None,
+    binary_cfg: Dict[str, Any] | None = None,
+) -> Tuple[str, str, str]:
     filtered = _filtered_parameter_for_tag(parameter)
     if base_folder:
         folder = os.path.abspath(base_folder)
@@ -182,8 +187,17 @@ def _prepare_output_folders(parameter: Dict[str, Any], *, base_folder: str | Non
     params_path = os.path.join(folder, "params.yaml")
     if not os.path.exists(params_path):
         write_yaml_config(filtered, params_path)
-    binary_dir = os.path.join(folder, "binary")
+    resolved_binary_cfg = dict(binary_cfg) if binary_cfg is not None else dict(parameter.get("binary") or {})
+    binary_payload = {
+        "parameter": parameter,
+        "binary": resolved_binary_cfg,
+    }
+    binary_tag = sim_tag_from_cfg(binary_payload)
+    binary_dir = os.path.join(folder, "binary", binary_tag)
     os.makedirs(binary_dir, exist_ok=True)
+    binary_params_path = os.path.join(binary_dir, "params.yaml")
+    if not os.path.exists(binary_params_path):
+        write_yaml_config({"parameter": parameter, "binary": resolved_binary_cfg}, binary_params_path)
     analysis_dir = os.path.join(binary_dir, "max_rates_distribution")
     os.makedirs(analysis_dir, exist_ok=True)
     return folder, binary_dir, analysis_dir
@@ -326,7 +340,11 @@ def _write_trace_summary(
 
 
 def _prepare_multi_init_folder(parameter: Dict[str, Any], base_folder: str | None) -> Tuple[str, str, str]:
-    folder, binary_dir, _ = _prepare_output_folders(parameter, base_folder=base_folder)
+    folder, binary_dir, _ = _prepare_output_folders(
+        parameter,
+        base_folder=base_folder,
+        binary_cfg=parameter.get("binary"),
+    )
     analysis_dir = os.path.join(binary_dir, CORR_ANALYSIS_SUBDIR)
     os.makedirs(analysis_dir, exist_ok=True)
     return folder, binary_dir, analysis_dir
@@ -1069,7 +1087,11 @@ def _build_common_parser() -> argparse.ArgumentParser:
 
 
 def _prepare_max_rate_folder(parameter: Dict[str, Any], base_folder: str | None) -> Tuple[str, str, str]:
-    folder, binary_dir, _ = _prepare_output_folders(parameter, base_folder=base_folder)
+    folder, binary_dir, _ = _prepare_output_folders(
+        parameter,
+        base_folder=base_folder,
+        binary_cfg=parameter.get("binary"),
+    )
     analysis_dir = os.path.join(binary_dir, LEGACY_ANALYSIS_SUBDIR)
     os.makedirs(analysis_dir, exist_ok=True)
     return folder, binary_dir, analysis_dir
@@ -1745,7 +1767,7 @@ def _debug_main() -> None:
     binary_cfg = ensure_binary_behavior_defaults(parameter.get("binary"))
     binary_cfg["output_name"] = args.output_name
     rates = build_population_rate_vector(parameter, args.init_rate)
-    folder, binary_dir, _ = _prepare_output_folders(parameter, base_folder=folder_hint)
+    folder, binary_dir, _ = _prepare_output_folders(parameter, base_folder=folder_hint, binary_cfg=binary_cfg)
     trace_path = run_legacy_binary_simulation(
         parameter,
         binary_cfg,

@@ -19,7 +19,7 @@ plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
 import binary_simulation_multi_init as binary_multi
 from binary_pipeline import ensure_binary_behavior_defaults
-from sim_config import deep_update, load_config, parse_overrides, sim_tag_from_cfg
+from sim_config import deep_update, load_config, parse_overrides, sim_tag_from_cfg, write_yaml_config
 import yaml
 
 from plotting import (
@@ -64,7 +64,7 @@ class RasterPanelSpec:
     window_duration: float = RASTER_WINDOW_DURATION
     cluster_indices: Sequence[int] | None = None
     cluster_count: int = 20
-    marker_size: float = 3.
+    marker_size: float = 2.
     label_font_size: float = 7.0
 
 
@@ -275,18 +275,32 @@ def resolve_binary_config(parameter: Dict[str, object]) -> Dict[str, object]:
     return ensure_binary_behavior_defaults(cfg)
 
 
-def binary_output_folder(parameter: Dict[str, object]) -> Path:
+def _filtered_erf_parameter(parameter: Dict[str, object]) -> Dict[str, object]:
+    filtered = dict(parameter)
+    filtered.pop("R_Eplus", None)
+    return filtered
+
+
+def binary_output_folder(parameter: Dict[str, object], binary_cfg: Dict[str, object]) -> tuple[Path, Path]:
     conn_name = str(parameter.get("connection_type", "bernoulli")).strip()
     conn_label = conn_name.capitalize()
     r_j = float(parameter.get("R_j", 0.0))
     rj_label = f"Rj{r_j:05.2f}".replace(".", "_")
-    filtered = {k: v for k, v in parameter.items() if k != "R_Eplus"}
-    tag = sim_tag_from_cfg(filtered)
-    return REPO_ROOT / "data" / conn_label / rj_label / tag / "binary"
+    filtered = _filtered_erf_parameter(parameter)
+    base_tag = sim_tag_from_cfg(filtered)
+    base_dir = REPO_ROOT / "data" / conn_label / rj_label / base_tag
+    binary_payload = {
+        "parameter": parameter,
+        "binary": binary_cfg,
+    }
+    binary_tag = sim_tag_from_cfg(binary_payload)
+    binary_dir = base_dir / "binary" / binary_tag
+    return base_dir, binary_dir
 
 
-def expected_trace_path(parameter: Dict[str, object], output_name: str) -> Path:
-    return binary_output_folder(parameter) / f"{output_name}.npz"
+def expected_trace_path(parameter: Dict[str, object], binary_cfg: Dict[str, object], output_name: str) -> Path:
+    _, binary_dir = binary_output_folder(parameter, binary_cfg)
+    return binary_dir / f"{output_name}.npz"
 
 
 def _resolve_population_inits(parameter: Dict[str, object], binary_cfg: Dict[str, object]) -> List[float]:
@@ -302,7 +316,8 @@ def _resolve_binary_seed(binary_cfg: Dict[str, object]) -> int:
 
 
 def ensure_trace_file(parameter: Dict[str, object], binary_cfg: Dict[str, object], spec: RasterPanelSpec) -> Path:
-    trace_path = expected_trace_path(parameter, spec.output_name)
+    base_dir, binary_dir = binary_output_folder(parameter, binary_cfg)
+    trace_path = binary_dir / f"{spec.output_name}.npz"
     if trace_path.exists():
         return trace_path
     run_cfg = dict(binary_cfg)
@@ -310,8 +325,14 @@ def ensure_trace_file(parameter: Dict[str, object], binary_cfg: Dict[str, object
     seed = _resolve_binary_seed(run_cfg)
     run_cfg["seed"] = seed
     init_rates = _resolve_population_inits(parameter, run_cfg)
-    binary_dir = trace_path.parent
+    base_dir.mkdir(parents=True, exist_ok=True)
+    params_path = base_dir / "params.yaml"
+    if not params_path.exists():
+        write_yaml_config(_filtered_erf_parameter(parameter), params_path)
     binary_dir.mkdir(parents=True, exist_ok=True)
+    binary_params_path = binary_dir / "params.yaml"
+    if not binary_params_path.exists():
+        write_yaml_config({"parameter": parameter, "binary": binary_cfg}, binary_params_path)
     resolved = binary_multi.run_legacy_binary_simulation(
         parameter,
         run_cfg,
