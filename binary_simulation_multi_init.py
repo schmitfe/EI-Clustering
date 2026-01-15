@@ -1484,11 +1484,15 @@ def run_legacy_binary_simulation(
         capture_spikes=capture_spikes,
         cluster_seed=cluster_seed,
     )
+    if capture_spikes:
+        legacy_params["return_cluster_rates_and_spiketimes"] = True
     state_stride = int(legacy_params.get("state_record_stride", 1) or 1)
     if capture_state_dynamics:
         if capture_spikes:
             raise ValueError("Cannot capture spikes and state dynamics simultaneously.")
         legacy_params["return_state_dynamics"] = True
+    warmup_steps = int(binary_cfg.get("warmup_steps", 0) or 0)
+    simulation_steps = int(binary_cfg.get("simulation_steps", 0) or 0)
     raw_output = legacy_simulate(legacy_params)
     if not isinstance(raw_output, dict):
         raise RuntimeError("Legacy simulation did not return a structured payload.")
@@ -1502,6 +1506,9 @@ def run_legacy_binary_simulation(
     state_updates = None
     state_deltas = None
     initial_state = None
+    trimmed_spike_times = None
+    trimmed_spike_ids = None
+    trimmed_spike_trials = None
     if capture_spikes:
         spike_payload = np.asarray(raw_output.get("spike_times"), dtype=float)
         if spike_payload.size == 0:
@@ -1513,6 +1520,25 @@ def run_legacy_binary_simulation(
             state_updates = np.asarray(updates_raw, dtype=np.uint16)
             state_deltas = np.asarray(deltas_raw, dtype=np.int8)
             initial_state = np.asarray(init_raw, dtype=np.uint8) if init_raw is not None else None
+        if spike_payload.ndim == 2 and spike_payload.shape[0] >= 3:
+            spike_times = np.asarray(spike_payload[0], dtype=float)
+            spike_trials = np.asarray(spike_payload[1], dtype=float)
+            spike_ids = np.asarray(spike_payload[2], dtype=float)
+            mask = np.ones(spike_times.shape, dtype=bool)
+            if warmup_steps > 0:
+                mask &= spike_times >= warmup_steps
+            if simulation_steps > 0:
+                mask &= spike_times < (warmup_steps + simulation_steps)
+            spike_times = spike_times[mask] - float(warmup_steps)
+            spike_ids = spike_ids[mask].astype(np.int64, copy=False)
+            spike_trials = spike_trials[mask].astype(np.int16, copy=False)
+            trimmed_spike_times = spike_times.astype(np.float32, copy=False)
+            trimmed_spike_ids = spike_ids
+            trimmed_spike_trials = spike_trials
+        else:
+            trimmed_spike_times = np.zeros(0, dtype=np.float32)
+            trimmed_spike_ids = np.zeros(0, dtype=np.int64)
+            trimmed_spike_trials = np.zeros(0, dtype=np.int16)
     if capture_state_dynamics:
         sampled_states = np.asarray(raw_output.get("sampled_states"), dtype=float)
         sampled_fields = np.asarray(raw_output.get("sampled_fields"), dtype=float)
@@ -1538,8 +1564,6 @@ def run_legacy_binary_simulation(
     rates = np.asarray(cluster_rates, dtype=float).T
     if rates.size == 0:
         raise ValueError("Legacy simulation produced an empty rate trace.")
-    warmup_steps = int(binary_cfg.get("warmup_steps", 0) or 0)
-    simulation_steps = int(binary_cfg.get("simulation_steps", 0) or 0)
     if warmup_steps > 0:
         if warmup_steps >= rates.shape[0]:
             raise ValueError("Warmup interval exceeds legacy trace length.")
@@ -1593,6 +1617,12 @@ def run_legacy_binary_simulation(
             payload["state_deltas"] = state_deltas
         if initial_state is not None and initial_state.size:
             payload["initial_state"] = initial_state
+    if trimmed_spike_times is not None:
+        payload["spike_times"] = trimmed_spike_times
+        if trimmed_spike_ids is not None:
+            payload["spike_ids"] = trimmed_spike_ids
+        if trimmed_spike_trials is not None:
+            payload["spike_trials"] = trimmed_spike_trials
     np.savez_compressed(trace_path, **payload)
     total_neurons = int(parameter.get("N_E", 0) or 0) + int(parameter.get("N_I", 0) or 0)
     _write_trace_summary(

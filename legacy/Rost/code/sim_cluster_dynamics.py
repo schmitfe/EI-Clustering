@@ -23,7 +23,8 @@ def simulate(original_params):
         pylab.seed(params['randseed'])
     except:
         pylab.seed(None)
-    simulation_type = str(params.get('simulation_type', 'rost')).lower()
+
+    simulation_type = str(params.get('simulation_type', 'new')).lower()
     if simulation_type not in {'rost', 'new'}:
         raise ValueError(f"Unknown simulation_type '{simulation_type}'. Expected 'rost' or 'new'.")
 
@@ -38,12 +39,12 @@ def simulate(original_params):
     if not 0.0 <= kappa <= 1.0:
         raise ValueError(f"kappa must be in [0, 1], got {kappa}")
 
-    if params['spec_func'] == 'mazzucato':
-        spec_func = weights.mazzucato_cluster_specs
-    elif params['spec_func'] == 'doiron':
-        spec_func = weights.doiron_cluster_specs
-    elif params['spec_func'] == 'EI_jplus':
-        spec_func = weights.EI_jplus_cluster_specs
+    #if params['spec_func'] == 'mazzucato':
+    #    spec_func = weights.mazzucato_cluster_specs
+    #elif params['spec_func'] == 'doiron':
+    #    spec_func = weights.doiron_cluster_specs
+    #elif params['spec_func'] == 'EI_jplus':
+    spec_func = weights.EI_jplus_cluster_specs
 
     return_mean_cluster_rates = bool(params.get('return_mean_cluster_rates', False))
     return_max_cluster_rates = bool(params.get('return_max_cluster_rates', False))
@@ -85,6 +86,8 @@ def simulate(original_params):
     input[1, :] *= 0
     input[1, int(params['stim_start'] * net.taus[0]):int(params['stim_end'] * net.taus[0])] = params['stim_level']
 
+
+
     kernel = None
     if smooth_rates is not None:
         tau_samples = net.taus[0]
@@ -95,6 +98,8 @@ def simulate(original_params):
         kernel = spiketools.gaussian_kernel(sigma=smooth_rates, dt=dt, nstd=2.)[None, :]
         kernel /= kernel.sum()
 
+
+
     needs_cluster_rates = any(
         (
             return_mean_cluster_rates,
@@ -103,6 +108,8 @@ def simulate(original_params):
             return_state_dynamics,
         )
     )
+    print(f"return_state_dynamics: {return_state_dynamics}, other rates: {needs_cluster_rates}")
+    print(f"downsample: {downsample}")
     record_spike_times = bool(return_cluster_rates_and_spiketimes)
     result = {}
     if needs_cluster_rates:
@@ -119,16 +126,18 @@ def simulate(original_params):
                 record_updates=False,
                 return_spiketimes=record_spike_times,
             )
+            spike_log = None
+            state_packet = forward_output
             if record_spike_times:
-                all_states, spike_log = forward_output
+                state_packet, spike_log = forward_output
                 if spike_log is not None and spike_log.size:
                     trial_block = pylab.zeros((3, spike_log.shape[1]))
                     trial_block[0] = spike_log[0]
                     trial_block[1] = trial
                     trial_block[2] = spike_log[1]
                     spiketimes = pylab.append(spiketimes, trial_block, axis=1)
-            else:
-                all_states = forward_output
+            init_state, update_log, delta_log = state_packet
+            all_states = net._reconstruct_states(init_state, update_log, delta_log)
             cluster_states = []
             for i in range(len(n_bins) - 1):
                 cluster_states.append(all_states[n_bins[i]:n_bins[i + 1]].mean(axis=0))

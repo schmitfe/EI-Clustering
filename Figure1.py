@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Sequence
 
@@ -28,6 +28,7 @@ from plotting import (
     add_image_ax,
     add_panel_label,
     plot_binary_raster,
+    plot_spike_raster,
     style_axes,
     _time_axis_scale,
 )
@@ -85,6 +86,9 @@ class TracePayload:
     state_interval: int
     warmup_steps: int
     state_source: BinaryStateSource
+    spike_times: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=float))
+    spike_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    spike_trials: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int16))
 
 
 @dataclass
@@ -350,6 +354,7 @@ def load_trace_payload(path: Path, summary: Dict[str, object]) -> TracePayload:
     if not path.exists():
         raise FileNotFoundError(f"Trace file {path} does not exist.")
     with np.load(path, allow_pickle=True) as data:
+        available = set(data.files)
         rates = np.asarray(data["rates"], dtype=float)
         names = [str(name) for name in data["names"].tolist()]
         times = np.asarray(data["times"], dtype=float) if "times" in data else np.arange(rates.shape[0], dtype=float)
@@ -365,6 +370,21 @@ def load_trace_payload(path: Path, summary: Dict[str, object]) -> TracePayload:
             state_interval = 1
         warmup_steps = int(np.asarray(data.get("warmup_steps", 0)).item())
         state_source = _build_state_source(data, summary, path)
+        spike_times = (
+            np.asarray(data["spike_times"], dtype=float).ravel()
+            if "spike_times" in available
+            else np.zeros(0, dtype=float)
+        )
+        spike_ids = (
+            np.asarray(data["spike_ids"], dtype=np.int64).ravel()
+            if "spike_ids" in available
+            else np.zeros(0, dtype=np.int64)
+        )
+        spike_trials = (
+            np.asarray(data["spike_trials"], dtype=np.int16).ravel()
+            if "spike_trials" in available
+            else np.zeros(0, dtype=np.int16)
+        )
     return TracePayload(
         rates=rates,
         times=times,
@@ -373,6 +393,9 @@ def load_trace_payload(path: Path, summary: Dict[str, object]) -> TracePayload:
         state_interval=state_interval,
         warmup_steps=warmup_steps,
         state_source=state_source,
+        spike_times=spike_times,
+        spike_ids=spike_ids,
+        spike_trials=spike_trials,
     )
 
 
@@ -671,19 +694,39 @@ def main() -> None:
             },
         )
         existing = {id(text) for text in raster_ax.texts}
-        plot_binary_raster(
-            ax=raster_ax,
-            state_source=panel.payload.state_source,
-            sample_interval=panel.payload.state_interval,
-            n_exc=panel.excitatory_neurons,
-            total_neurons=total_neurons,
-            window=(window.start, window.end),
-            time_scale=time_scale,
-            stride=args.raster_neuron_step,
-            labels=labels,
-            marker=".",
-            marker_size=max(2.0, float(panel.spec.marker_size)),
-        )
+        n_inh = max(total_neurons - panel.excitatory_neurons, 0)
+        if panel.payload.spike_times.size and panel.payload.spike_ids.size:
+            safe_scale = time_scale if time_scale > 0 else 1.0
+            scaled_times = panel.payload.spike_times / safe_scale
+            t_start = window.start / safe_scale
+            t_end = window.end / safe_scale
+            plot_spike_raster(
+                ax=raster_ax,
+                spike_times_ms=scaled_times,
+                spike_ids=panel.payload.spike_ids,
+                n_exc=panel.excitatory_neurons,
+                n_inh=n_inh,
+                stride=args.raster_neuron_step,
+                t_start=t_start,
+                t_end=t_end,
+                marker=".",
+                marker_size=max(2.0, float(panel.spec.marker_size)),
+                labels=labels,
+            )
+        else:
+            plot_binary_raster(
+                ax=raster_ax,
+                state_source=panel.payload.state_source,
+                sample_interval=panel.payload.state_interval,
+                n_exc=panel.excitatory_neurons,
+                total_neurons=total_neurons,
+                window=(window.start, window.end),
+                time_scale=time_scale,
+                stride=args.raster_neuron_step,
+                labels=labels,
+                marker=".",
+                marker_size=max(2.0, float(panel.spec.marker_size)),
+            )
         for text in raster_ax.texts:
             if id(text) not in existing:
                 text_label = text.get_text().strip().lower()

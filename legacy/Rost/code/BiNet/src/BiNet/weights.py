@@ -116,6 +116,7 @@ def generate_weight_matrix(Ns,ps,js,delta_j,connection_type='bernoulli'):
         from [js[i,j]*(1-0.5*delta_j[i,j]),js[i,j]*(1+0.5*delta_j[i,j])].
         """
     connection_type = _normalize_connection_type(connection_type)
+
     Ns = np.array(Ns)
     Npop = len(Ns)
     N = Ns.sum()
@@ -225,6 +226,7 @@ def EI_jplus_cluster_specs(Ns,ps,Ts,taus,g,Q,jplus,jip_factor = None,kappa=None)
     js = calc_js(Ns,ps,Ts,g)
     Ns=np.array(Ns)
     kappa = _normalize_kappa(kappa)
+    print(f"kappa = {kappa}, Ns = {Ns}, re = {jplus}, jip_factor = {jip_factor}")
     
 
     Npops = Q*2

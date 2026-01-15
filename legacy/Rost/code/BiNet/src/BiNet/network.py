@@ -81,7 +81,6 @@ class UpdateQueue(object):
 class _BaseNetwork(object):
     def __init__(self,weights,T,input_weights=None):
         """ Base class for binary networks implementing only the integration loop. """
-        print("We use legacy!")
         self.weights =weights
         
         self.set_weights(weights)
@@ -205,14 +204,16 @@ class _BaseNetwork(object):
         else:
             self.last_update_log = np.zeros((0, 0), dtype=np.uint16)
             self.last_delta_log = np.zeros((0, 0), dtype=np.int8)
+        print(f"Different events [-,0,+]: {np.unique(self.last_delta_log, return_counts=True)}")
         self.reference_state = initial_state
         state_output = None
         spike_array = None
         if return_state:
-            if self.last_update_log.size:
-                state_output = self._reconstruct_states(initial_state, self.last_update_log, self.last_delta_log)
-            else:
-                state_output = initial_state.reshape(self.N, 1)
+            state_output = (
+                initial_state.astype(STATE_TYPE, copy=True),
+                np.asarray(self.last_update_log, dtype=np.uint16, order="F"),
+                np.asarray(self.last_delta_log, dtype=np.int8, order="F"),
+            )
         if return_spiketimes and self.last_delta_log.size:
             spike_array = self._extract_spike_events(self.last_update_log, self.last_delta_log)
         if return_state and return_spiketimes:
@@ -227,14 +228,27 @@ class _BaseNetwork(object):
             return spike_array
         return None
 
-    def _reconstruct_states(self, base_state, updates_log, delta_log):
+    def _reconstruct_states(self, base_state, updates_log, delta_log, *, final_only=False):
         updates = np.asarray(updates_log, dtype=np.int64)
         deltas = np.asarray(delta_log, dtype=np.int8)
         if updates.ndim != 2 or deltas.shape != updates.shape:
-            return np.zeros((self.N, 0), dtype=STATE_TYPE)
+            return np.zeros((self.N, 0), dtype=STATE_TYPE) if not final_only else np.zeros(self.N, dtype=STATE_TYPE)
         steps = updates.shape[1]
+        if steps == 0:
+            return base_state.astype(STATE_TYPE, copy=True) if not final_only else base_state.astype(STATE_TYPE, copy=True)
+        base = np.asarray(base_state, dtype=np.int8).reshape(self.N)
+        if final_only:
+            accumulator = np.zeros(self.N, dtype=np.int32)
+            for idx in range(steps):
+                units = updates[:, idx]
+                if units.size == 0:
+                    continue
+                delta = deltas[:, idx].astype(np.int32, copy=False)
+                np.add.at(accumulator, units, delta)
+            result = np.clip(base + accumulator, 0, 1)
+            return result.astype(STATE_TYPE, copy=False)
         result = np.zeros((self.N, steps), dtype=STATE_TYPE)
-        current = base_state.astype(np.int8, copy=True)
+        current = base.copy()
         for idx in range(steps):
             units = updates[:, idx]
             delta = deltas[:, idx]
