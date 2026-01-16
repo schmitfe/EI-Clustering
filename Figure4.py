@@ -28,7 +28,7 @@ DEFAULT_KAPPA_VALUES = (0.0, 0.25, 0.5, 0.75, 1.0)
 MEASURES = ("output", "input")
 CATEGORIES = ("within", "across")
 FISHER_EPS = 1e-6
-BAND_ALPHA = 0.2
+BAND_ALPHA = 0.15
 WITHIN_STYLE = {"linestyle": "-", "marker": "o", "fillstyle": "full"}
 ACROSS_STYLE = {"linestyle": "--", "marker": "s", "fillstyle": "none"}
 MEASURE_KEY_MAP = {
@@ -468,7 +468,7 @@ def _plot_correlation_figure(
 ) -> None:
     if not results:
         raise ValueError("No simulation data available to plot.")
-    fig, (ax_input, ax_output) = plt.subplots(1, 2, sharex=True, figsize=(13 / 2, 4.0))
+    fig, (ax_input, ax_output) = plt.subplots(1, 2, sharey=True, figsize=(13 / 2, 4.0))
     connectivity_values = [payload["connectivity"] for payload in results.values()]
     cmap = plt.cm.viridis
     norm = mpl_colors.Normalize(
@@ -487,8 +487,8 @@ def _plot_correlation_figure(
     for ax in (ax_output, ax_input):
         ax.set_xlabel(r"$\kappa$")
         style_axes(ax, font_cfg)
-    add_panel_label(ax_input, "a", font_cfg, offset=(-0.08, 1.08))
-    add_panel_label(ax_output, "b", font_cfg, offset=(-0.08, 1.08))
+    add_panel_label(ax_input, "a", font_cfg, x=-0.08, y=1.08)
+    add_panel_label(ax_output, "b", font_cfg, x=-0.08, y=1.08)
     legend_handles = [
         Line2D(
             [0],
@@ -523,8 +523,8 @@ def _plot_correlation_figure(
     if len(connectivity_values) > 1:
         sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         cbar = fig.colorbar(sm, ax=[ax_input, ax_output], fraction=0.05, pad=0.04)
-        cbar.set_label("Mean connectivity", fontsize=font_cfg.legend)
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+        cbar.set_label(r"$\overline{p}$", fontsize=font_cfg.legend)
+    #fig.tight_layout(rect=(0, 0, 1, 0.95))
     base = Path(output_prefix)
     base.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(base.with_suffix(".png"), dpi=600)

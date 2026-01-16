@@ -669,10 +669,12 @@ def _plot_histogram(
     if handles:
         ax.legend(
             handles=handles,
-            loc="upper center",
             ncol=2,
             frameon=False,
             fontsize=font_cfg.legend,
+            columnspacing = 0.4,
+            handletextpad= -0.3,
+            bbox_to_anchor = [0.62, 1.04]
         )
     ax.yaxis.set_major_locator(MaxNLocator(integer=True, prune="upper"))
 
