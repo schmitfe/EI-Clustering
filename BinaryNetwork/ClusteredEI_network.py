@@ -4,7 +4,6 @@ import math
 from typing import Callable, Dict, List, Sequence, Tuple
 
 import numpy as np
-from lief import exception
 
 from .BinaryNetwork import (
     AllToAllSynapse,
@@ -217,7 +216,7 @@ class ClusteredEI_network(BaseBinaryNetwork):
     def __init__(self, parameter: Dict, *, kappa: float | None = None, connection_type: str | None = None, name="Binary EI Network"):
         super().__init__(name)
         # break to ensure we use legacy!
-        raise exception
+        raise
         self.parameter = dict(parameter)
         self.Q = int(self.parameter["Q"])
         self.connection_type = _normalize_conn_type(connection_type or self.parameter.get("connection_type"))

@@ -1134,6 +1134,7 @@ def plot_bifurcation_row(
             avg_value = float(entry["avg"]) * 100.0
             label = str(entry.get("letter", ""))
             if onset_x > lower_bound:
+                print(onset_x, avg_value)
                 ax.scatter(
                     [onset_x],
                     [avg_value],

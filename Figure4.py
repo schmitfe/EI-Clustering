@@ -2,23 +2,48 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from types import SimpleNamespace
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib import colors as mpl_colors  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 import numpy as np  # noqa: E402
 
 import figure_helpers as helpers  # noqa: E402
+import binary_simulation_multi_init as binary_multi  # noqa: E402
 from plotting import FontCfg, add_panel_label, style_axes  # noqa: E402
 from sim_config import add_override_arguments, load_from_args  # noqa: E402
 
 
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 DEFAULT_MAX_PAIRS = 200_000
+DEFAULT_KAPPA_VALUES = (0.0, 0.25, 0.5, 0.75, 1.0)
+MEASURES = ("output", "input")
+CATEGORIES = ("within", "across")
+FISHER_EPS = 1e-6
+BAND_ALPHA = 0.2
+WITHIN_STYLE = {"linestyle": "-", "marker": "o", "fillstyle": "full"}
+ACROSS_STYLE = {"linestyle": "--", "marker": "s", "fillstyle": "none"}
+MEASURE_KEY_MAP = {
+    ("output", "within"): "state_excit_within",
+    ("output", "across"): "state_excit_between",
+    ("input", "within"): "field_excit_within",
+    ("input", "across"): "field_excit_between",
+}
+
+
+@dataclass
+class ConnectivityInstance:
+    parameter: Dict[str, Any]
+    label: str
+    value: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,9 +54,15 @@ def parse_args() -> argparse.Namespace:
         )
     )
     add_override_arguments(parser)
-    parser.add_argument("--kappa-start", type=float, required=True, help="Start of the kappa sweep (inclusive).")
-    parser.add_argument("--kappa-stop", type=float, required=True, help="End of the kappa sweep (inclusive).")
-    parser.add_argument("--kappa-step", type=float, required=True, help="Step size for the kappa sweep.")
+    parser.add_argument(
+        "--kappas",
+        type=str,
+        nargs="+",
+        help="Explicit list of kappas or range expressions (e.g., 0.0 0.5 1.0 or 0:1:0.25).",
+    )
+    parser.add_argument("--kappa-start", type=float, help="Start of the kappa sweep (inclusive).")
+    parser.add_argument("--kappa-stop", type=float, help="End of the kappa sweep (inclusive).")
+    parser.add_argument("--kappa-step", type=float, help="Step size for the kappa sweep.")
     parser.add_argument(
         "--mean-connectivity",
         type=float,
@@ -50,9 +81,26 @@ def parse_args() -> argparse.Namespace:
         default="stable",
         help="Select fixpoints with the desired stability (default: %(default)s).",
     )
-    parser.add_argument("--n-inits", type=int, default=50, help="Number of fixpoint initializations per kappa (default: %(default)s).")
-    parser.add_argument("--seed-inits", type=int, default=0, help="Seed governing fixpoint sampling (default: %(default)s).")
-    parser.add_argument("--seed-network", type=int, help="Seed for building the network connectivity.")
+    parser.add_argument(
+        "--n-networks",
+        type=int,
+        default=50,
+        help="Number of network seeds simulated per kappa (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--n-inits",
+        type=int,
+        default=5,
+        help="Fixpoint initializations per network (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--bootstrap-samples",
+        type=int,
+        default=1000,
+        help="Bootstrap samples for confidence intervals (default: %(default)s).",
+    )
+    parser.add_argument("--seed-inits", type=int, help="Base seed used to draw fixpoint initializations.")
+    parser.add_argument("--seed-network", type=int, help="Optional base seed for the network-seed sequence.")
     parser.add_argument("--warmup-steps", type=int, help="Override binary.warmup_steps.")
     parser.add_argument("--simulation-steps", type=int, help="Override binary.simulation_steps.")
     parser.add_argument("--sample-interval", type=int, help="Override binary.sample_interval.")
@@ -125,165 +173,363 @@ def _kappa_sequence(start: float, stop: float, step: float) -> List[float]:
     return [float(val) for val in values]
 
 
-def _stat_summary(array: Any) -> Tuple[float, float]:
-    values = np.asarray(array, dtype=float).ravel()
-    if values.size == 0:
-        return float("nan"), float("nan")
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
-        return float("nan"), float("nan")
-    return float(np.nanmedian(finite)), float(np.nanmean(finite))
+def _parse_explicit_kappas(values: Iterable[str]) -> List[float]:
+    resolved: List[float] = []
+    for raw in values:
+        if ":" in raw:
+            try:
+                start, stop, step = (float(part) for part in raw.split(":"))
+            except ValueError as exc:  # pragma: no cover - defensive
+                raise ValueError(f"Invalid kappa range '{raw}'. Use start:stop:step.") from exc
+            resolved.extend(_kappa_sequence(start, stop, step))
+        else:
+            resolved.append(float(raw))
+    if not resolved:
+        raise ValueError("No kappas were provided via --kappas.")
+    # Preserve order while removing duplicates that can occur when combining ranges and explicit values.
+    ordered_unique = list(dict.fromkeys(resolved))
+    return ordered_unique
 
 
-def _build_instances(parameter: Dict[str, Any], targets: Sequence[float] | None) -> List[Tuple[Dict[str, Any], str]]:
-    instances: List[Tuple[Dict[str, Any], str]] = []
+def _resolve_kappa_values(args: argparse.Namespace) -> List[float]:
+    if args.kappas:
+        return _parse_explicit_kappas(args.kappas)
+    if args.kappa_start is not None and args.kappa_stop is not None and args.kappa_step is not None:
+        return _kappa_sequence(float(args.kappa_start), float(args.kappa_stop), float(args.kappa_step))
+    if args.kappa_start is not None or args.kappa_stop is not None or args.kappa_step is not None:
+        raise ValueError("Provide --kappa-start/stop/step together or rely on --kappas.")
+    return list(DEFAULT_KAPPA_VALUES)
+def _build_instances(parameter: Dict[str, Any], targets: Sequence[float] | None) -> List[ConnectivityInstance]:
+    instances: List[ConnectivityInstance] = []
     if targets:
         for target in targets:
             scaled = helpers.scale_connectivity(parameter, target)
-            label = f"conn={float(target):.2f}"
-            instances.append((deepcopy(scaled), label))
+            conn_value = helpers.mean_connectivity(scaled)
+            label = f"conn={conn_value:.2f}"
+            instances.append(ConnectivityInstance(parameter=deepcopy(scaled), label=label, value=conn_value))
+        return instances
+    base_conn = helpers.mean_connectivity(parameter)
+    label = f"conn={base_conn:.2f}"
+    return [ConnectivityInstance(parameter=deepcopy(parameter), label=label, value=base_conn)]
+
+
+def _generate_seed_sequences(
+    *,
+    base_seed: int | None,
+    n_networks: int,
+    init_seed_base: int | None,
+    network_seed_override: int | None,
+) -> Tuple[List[int], List[int]]:
+    if n_networks <= 0:
+        raise ValueError("--n-networks must be positive.")
+    if network_seed_override is not None:
+        network_seeds = [int(network_seed_override) + idx for idx in range(n_networks)]
     else:
-        base_conn = helpers.mean_connectivity(parameter)
-        instances.append((deepcopy(parameter), f"conn={base_conn:.2f}"))
-    return instances
+        rng_network = np.random.default_rng(0 if base_seed is None else int(base_seed))
+        network_seeds = rng_network.integers(0, 2**31 - 1, size=n_networks).tolist()
+    init_seed_source = int(init_seed_base) if init_seed_base is not None else (0 if base_seed is None else int(base_seed) + 1)
+    rng_init = np.random.default_rng(init_seed_source)
+    init_seeds = rng_init.integers(0, 2**31 - 1, size=n_networks).tolist()
+    return network_seeds, init_seeds
 
 
-def _append_result(
-    store: Dict[str, Dict[str, List[float]]],
-    label: str,
-    kappa: float,
-    summary: Dict[str, Any],
-) -> None:
-    target = store.setdefault(
-        label,
-        {
-            "kappa": [],
-            "state_within_median": [],
-            "state_within_mean": [],
-            "state_across_median": [],
-            "state_across_mean": [],
-            "field_within_median": [],
-            "field_within_mean": [],
-            "field_across_median": [],
-            "field_across_mean": [],
-        },
+def _resolve_base_output_name(parameter: Dict[str, Any], overrides: helpers.BinaryRunSettings) -> str:
+    if overrides.output_name:
+        return str(overrides.output_name)
+    binary_cfg = parameter.get("binary") or {}
+    candidate = binary_cfg.get("output_name")
+    if candidate:
+        return str(candidate)
+    return "activity_trace"
+
+
+def _network_output_name(base_name: str, network_index: int) -> str:
+    return f"{base_name}_net{network_index:03d}"
+
+
+def _with_output_name(settings: helpers.BinaryRunSettings, output_name: str) -> helpers.BinaryRunSettings:
+    return helpers.BinaryRunSettings(
+        warmup_steps=settings.warmup_steps,
+        simulation_steps=settings.simulation_steps,
+        sample_interval=settings.sample_interval,
+        batch_size=settings.batch_size,
+        seed=settings.seed,
+        output_name=output_name,
     )
-    sw_med, sw_mean = _stat_summary(summary.get("state_excit_within", np.zeros(0)))
-    sa_med, sa_mean = _stat_summary(summary.get("state_excit_between", np.zeros(0)))
-    fw_med, fw_mean = _stat_summary(summary.get("field_excit_within", np.zeros(0)))
-    fa_med, fa_mean = _stat_summary(summary.get("field_excit_between", np.zeros(0)))
-    target["kappa"].append(float(kappa))
-    target["state_within_median"].append(sw_med)
-    target["state_within_mean"].append(sw_mean)
-    target["state_across_median"].append(sa_med)
-    target["state_across_mean"].append(sa_mean)
-    target["field_within_median"].append(fw_med)
-    target["field_within_mean"].append(fw_mean)
-    target["field_across_median"].append(fa_med)
-    target["field_across_mean"].append(fa_mean)
 
 
-def _plot_metric_set(
+def _empty_metric_tracker() -> Dict[str, List[float]]:
+    return {"mean": [], "lower": [], "upper": []}
+
+
+def _init_metric_map() -> Dict[str, Dict[str, Dict[str, List[float]]]]:
+    return {measure: {category: _empty_metric_tracker() for category in CATEGORIES} for measure in MEASURES}
+
+
+@dataclass
+class SeriesStats:
+    mean: float
+    lower: float
+    upper: float
+
+
+def _append_metric(metrics: Dict[str, Dict[str, Dict[str, List[float]]]], measure: str, category: str, stats: SeriesStats) -> None:
+    metrics[measure][category]["mean"].append(stats.mean)
+    metrics[measure][category]["lower"].append(stats.lower)
+    metrics[measure][category]["upper"].append(stats.upper)
+
+
+def _fisher_mean(values: Any) -> float:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 0:
+        return float("nan")
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return float("nan")
+    clipped = np.clip(finite, -1.0 + FISHER_EPS, 1.0 - FISHER_EPS)
+    return float(np.mean(np.arctanh(clipped)))
+
+
+def _load_analysis_payload(path: Path) -> Dict[str, Any]:
+    with np.load(path, allow_pickle=True) as data:
+        return {key: data[key] for key in data.files}
+
+
+def _summarize_init_payload(payload: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    summary: Dict[str, Dict[str, float]] = {measure: {category: float("nan") for category in CATEGORIES} for measure in MEASURES}
+    for (measure, category), key in MEASURE_KEY_MAP.items():
+        values = payload.get(key)
+        summary[measure][category] = _fisher_mean(values if values is not None else np.zeros(0, dtype=float))
+    return summary
+
+
+def _merge_init_summaries(entries: Sequence[Dict[str, Dict[str, float]]]) -> Dict[str, Dict[str, float]]:
+    merged: Dict[str, Dict[str, float]] = {measure: {category: float("nan") for category in CATEGORIES} for measure in MEASURES}
+    if not entries:
+        return merged
+    for measure in MEASURES:
+        for category in CATEGORIES:
+            values = [entry[measure][category] for entry in entries if np.isfinite(entry[measure][category])]
+            merged[measure][category] = float(np.mean(values)) if values else float("nan")
+    return merged
+
+
+def _summarize_network_dir(analysis_dir: Path, n_inits: int) -> Dict[str, Dict[str, float]]:
+    payloads: List[Dict[str, Dict[str, float]]] = []
+    for init_idx in range(n_inits):
+        path = analysis_dir / f"analysis_init{init_idx:04d}.npz"
+        if not path.exists():
+            continue
+        payload = _load_analysis_payload(path)
+        payloads.append(_summarize_init_payload(payload))
+    if not payloads:
+        raise FileNotFoundError(f"No analysis files were found in {analysis_dir}.")
+    return _merge_init_summaries(payloads)
+
+
+def _series_stats_from_values(values: Sequence[float], bootstrap_samples: int, rng: np.random.Generator) -> SeriesStats:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return SeriesStats(mean=float("nan"), lower=float("nan"), upper=float("nan"))
+    mean_z = float(np.mean(arr))
+    mean_r = float(np.tanh(mean_z))
+    if arr.size == 1 or bootstrap_samples <= 0:
+        return SeriesStats(mean=mean_r, lower=mean_r, upper=mean_r)
+    indices = rng.integers(0, arr.size, size=(bootstrap_samples, arr.size))
+    boot_means = arr[indices].mean(axis=1)
+    boot_r = np.tanh(boot_means)
+    lower, upper = np.percentile(boot_r, [2.5, 97.5])
+    return SeriesStats(mean=mean_r, lower=float(lower), upper=float(upper))
+
+
+def _run_network_initializations(
+    parameter: Dict[str, Any],
+    *,
+    folder_hint: str,
+    bundle_path: str,
+    focus_counts: Sequence[int],
+    stability_filter: str,
+    n_inits: int,
+    network_seeds: Sequence[int],
+    init_seed_bases: Sequence[int],
+    binary_overrides: helpers.BinaryRunSettings,
+    base_output_name: str,
+    stride_analysis: int,
+    max_pairs: int,
+    jobs: int,
+    analysis_only: bool,
+    overwrite_simulation: bool,
+    overwrite_analysis: bool,
+) -> List[str]:
+    if len(network_seeds) != len(init_seed_bases):
+        raise ValueError("Network seed and initialization seed lists must have the same length.")
+    target_rep = parameter.get("R_Eplus")
+    if target_rep is None:
+        raise ValueError("Parameter 'R_Eplus' must be defined before scheduling simulations.")
+    target_rep = float(target_rep)
+    bundle = binary_multi._load_fixpoint_bundle(bundle_path)
+    Q_value = int(parameter.get("Q", 0) or 0)
+    pop_length = 2 * Q_value
+    candidates = binary_multi._load_fixpoint_candidates(
+        bundle,
+        focus_counts,
+        stability_filter,
+        pop_length,
+        target_rep,
+    )
+    assembly_ids, assembly_names = binary_multi._assembly_membership(parameter)
+    worker_args = SimpleNamespace(
+        analysis_only=analysis_only,
+        overwrite_simulation=overwrite_simulation,
+        overwrite_analysis=overwrite_analysis,
+        stride_sweeps_analysis=stride_analysis,
+        max_pairs=max_pairs,
+    )
+    all_tasks = []
+    analysis_dirs: List[str] = []
+    for net_idx, (network_seed, init_seed) in enumerate(zip(network_seeds, init_seed_bases)):
+        run_param = deepcopy(parameter)
+        run_param_binary = dict(run_param.get("binary") or {})
+        output_name = _network_output_name(base_output_name, net_idx)
+        run_param_binary["output_name"] = output_name
+        run_param["binary"] = run_param_binary
+        per_run_overrides = _with_output_name(binary_overrides, output_name)
+        binary_cfg = helpers.resolve_binary_config(run_param, per_run_overrides)
+        binary_cfg["seed"] = int(network_seed)
+        _, binary_dir, analysis_dir = binary_multi._prepare_multi_init_folder(run_param, folder_hint)
+        binary_multi._prepare_metadata(
+            analysis_dir,
+            base_output=binary_cfg.get("output_name", output_name),
+            fixpoints_path=bundle_path,
+            focus_counts=focus_counts,
+            stability_filter=stability_filter,
+            seed_network=int(network_seed),
+            binary_cfg=binary_cfg,
+            target_rep=target_rep,
+        )
+        picks = binary_multi._select_fixpoints(candidates, seed=int(init_seed), count=n_inits)
+        tasks = binary_multi._prepare_tasks(
+            picks,
+            binary_dir=binary_dir,
+            analysis_dir=analysis_dir,
+            binary_cfg=binary_cfg,
+            parameter=run_param,
+            assembly_ids=assembly_ids,
+            assembly_names=assembly_names,
+            args=worker_args,
+        )
+        print(
+            f"     network {net_idx + 1:03d}/{len(network_seeds)} "
+            f"(seed={int(network_seed)}, init-seed={int(init_seed)}, output={output_name})"
+        )
+        all_tasks.extend(tasks)
+        analysis_dirs.append(analysis_dir)
+    if not all_tasks:
+        raise RuntimeError("No initialization tasks were prepared for the correlation workflow.")
+    results = binary_multi._execute_tasks(all_tasks, max(1, int(jobs)))
+    for entry in results:
+        idx = entry.get("index")
+        for line in entry.get("logs", []):
+            print(f"[init {idx:04d}] {line}")
+        if not entry.get("success", False):
+            print(f"[init {idx:04d}] Failed: {entry.get('error')}")
+    return analysis_dirs
+
+
+def _plot_series(
     ax: plt.Axes,
     kappa: Sequence[float],
-    median_values: Sequence[float],
-    mean_values: Sequence[float],
+    tracker: Dict[str, List[float]],
     *,
-    color: str,
-    marker: str,
-    label_prefix: str,
+    color: Any,
+    style: Dict[str, Any],
 ) -> None:
-    ax.plot(kappa, median_values, color=color, linestyle="-", marker=marker, label=f"{label_prefix} median")
+    if not kappa:
+        return
     ax.plot(
         kappa,
-        mean_values,
+        tracker["mean"],
         color=color,
-        linestyle="--",
-        marker=marker,
-        fillstyle="none",
-        label=f"{label_prefix} mean",
+        linewidth=1.5,
+        marker=style.get("marker"),
+        linestyle=style.get("linestyle"),
+        fillstyle=style.get("fillstyle", "full"),
+        markersize=4,
     )
+    ax.fill_between(kappa, tracker["lower"], tracker["upper"], color=color, alpha=BAND_ALPHA, linewidth=0)
 
 
 def _plot_correlation_figure(
-    results: Dict[str, Dict[str, List[float]]],
+    results: Dict[str, Dict[str, Any]],
     *,
-    kappa_bounds: Tuple[float, float],
     font_cfg: FontCfg,
     output_prefix: str,
 ) -> None:
-    fig, (ax_state, ax_field) = plt.subplots(1, 2, sharex=True, figsize=(13/2, 3.))
-    within_color = "#4c72b0"
-    across_color = "#dd8452"
-    markers = ["o", "s", "^", "D", "P", "X"]
-    for idx, (label, payload) in enumerate(sorted(results.items())):
-        marker = markers[idx % len(markers)]
+    if not results:
+        raise ValueError("No simulation data available to plot.")
+    fig, (ax_output, ax_input) = plt.subplots(1, 2, sharex=True, figsize=(13 / 2, 3.0))
+    connectivity_values = [payload["connectivity"] for payload in results.values()]
+    cmap = plt.cm.viridis
+    norm = mpl_colors.Normalize(
+        vmin=min(connectivity_values), vmax=max(connectivity_values) if connectivity_values else 1.0
+    )
+    for payload in results.values():
+        color = cmap(norm(payload["connectivity"]))
         kappa = payload["kappa"]
-        _plot_metric_set(
-            ax_state,
-            kappa,
-            payload["state_within_median"],
-            payload["state_within_mean"],
-            color=within_color,
-            marker=marker,
-            label_prefix=f"E within ({label})",
-        )
-        _plot_metric_set(
-            ax_state,
-            kappa,
-            payload["state_across_median"],
-            payload["state_across_mean"],
-            color=across_color,
-            marker=marker,
-            label_prefix=f"E across ({label})",
-        )
-        _plot_metric_set(
-            ax_field,
-            kappa,
-            payload["field_within_median"],
-            payload["field_within_mean"],
-            color=within_color,
-            marker=marker,
-            label_prefix=f"E within ({label})",
-        )
-        _plot_metric_set(
-            ax_field,
-            kappa,
-            payload["field_across_median"],
-            payload["field_across_mean"],
-            color=across_color,
-            marker=marker,
-            label_prefix=f"E across ({label})",
-        )
-    ax_state.set_ylabel("State correlation")
-    ax_field.set_ylabel("Field correlation")
-    ax_field.set_xlabel(r"$\kappa$")
-    ax_state.set_title("State correlations")
-    ax_field.set_title("Subthreshold correlations")
-    ax_field.set_xlim(*kappa_bounds)
-    style_axes(ax_state, font_cfg)
-    style_axes(ax_field, font_cfg)
-    add_panel_label(ax_state, "a", font_cfg)
-    add_panel_label(ax_field, "b", font_cfg)
-    handles, labels = ax_state.get_legend_handles_labels()
-    if handles:
-        ax_state.legend(handles, labels, loc="best", fontsize=font_cfg.legend)
+        metrics = payload["metrics"]
+        _plot_series(ax_output, kappa, metrics["output"]["within"], color=color, style=WITHIN_STYLE)
+        _plot_series(ax_output, kappa, metrics["output"]["across"], color=color, style=ACROSS_STYLE)
+        _plot_series(ax_input, kappa, metrics["input"]["within"], color=color, style=WITHIN_STYLE)
+        _plot_series(ax_input, kappa, metrics["input"]["across"], color=color, style=ACROSS_STYLE)
+    ax_output.set_ylabel("Output correlation")
+    ax_input.set_ylabel("Input correlation")
+    for ax in (ax_output, ax_input):
+        ax.set_xlabel(r"$\kappa$")
+        style_axes(ax, font_cfg)
+    add_panel_label(ax_output, "a", font_cfg)
+    add_panel_label(ax_input, "b", font_cfg)
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            linestyle=WITHIN_STYLE["linestyle"],
+            marker=WITHIN_STYLE["marker"],
+            fillstyle=WITHIN_STYLE["fillstyle"],
+            markersize=4,
+            label="Within cluster",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            linestyle=ACROSS_STYLE["linestyle"],
+            marker=ACROSS_STYLE["marker"],
+            fillstyle=ACROSS_STYLE["fillstyle"],
+            markersize=4,
+            label="Across clusters",
+        ),
+    ]
+    ax_output.legend(legend_handles, [h.get_label() for h in legend_handles], loc="upper left", fontsize=font_cfg.legend)
+    if len(connectivity_values) > 1:
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+        cbar = fig.colorbar(sm, ax=[ax_output, ax_input], fraction=0.05, pad=0.04)
+        cbar.set_label("Mean connectivity", fontsize=font_cfg.legend)
     fig.tight_layout()
     base = Path(output_prefix)
     base.parent.mkdir(parents=True, exist_ok=True)
-    png_path = base.with_suffix(".png")
-    pdf_path = base.with_suffix(".pdf")
-    fig.savefig(png_path, dpi=600)
-    fig.savefig(pdf_path, dpi=600)
+    fig.savefig(base.with_suffix(".png"), dpi=600)
+    fig.savefig(base.with_suffix(".pdf"), dpi=600)
     plt.close(fig)
-    print(f"Stored Figure 4 at {png_path} and {pdf_path}")
+    print(f"Stored Figure 4 at {base.with_suffix('.png')} and {base.with_suffix('.pdf')}")
 
 
 def main() -> None:
     args = parse_args()
     parameter = load_from_args(args)
     focus_counts = helpers.resolve_focus_counts(parameter, args.focus_counts)
-    kappa_values = _kappa_sequence(float(args.kappa_start), float(args.kappa_stop), float(args.kappa_step))
+    kappa_values = _resolve_kappa_values(args)
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
     sweep_cfg = helpers.PipelineSweepSettings(
         v_start=args.v_start,
@@ -303,46 +549,77 @@ def main() -> None:
         output_name=args.output_name,
     )
     instances = _build_instances(parameter, args.mean_connectivity)
-    results: Dict[str, Dict[str, List[float]]] = {}
-    for idx, (base_param, label) in enumerate(instances):
-        print(f"=== Correlation workflow for {label} ===")
+    if not instances:
+        raise ValueError("No connectivity instances were generated.")
+    base_seed = args.seed if args.seed is not None else 0
+    network_seeds, init_seed_bases = _generate_seed_sequences(
+        base_seed=base_seed,
+        n_networks=int(args.n_networks),
+        init_seed_base=args.seed_inits,
+        network_seed_override=args.seed_network,
+    )
+    bootstrap_rng = np.random.default_rng(int(base_seed) + 2024)
+    n_inits = max(1, int(args.n_inits))
+    max_pairs = max(1, int(args.max_pairs or DEFAULT_MAX_PAIRS))
+    jobs = max(1, int(args.jobs or 1))
+    stride_analysis = max(1, int(args.stride_analysis or 1))
+    bootstrap_samples = max(0, int(args.bootstrap_samples))
+    results: Dict[str, Dict[str, Any]] = {}
+    for instance in instances:
+        label = instance.label
+        print(f"=== Correlation workflow for {label} (mean connectivity {instance.value:.4f}) ===")
+        instance_store = {"kappa": [], "metrics": _init_metric_map(), "connectivity": instance.value}
+        base_output_name = _resolve_base_output_name(instance.parameter, binary_overrides)
         for kappa in kappa_values:
-            param_copy = deepcopy(base_param)
-            param_copy["kappa"] = float(kappa)
-            r_value = param_copy.get("R_Eplus")
+            param_kappa = deepcopy(instance.parameter)
+            param_kappa["kappa"] = float(kappa)
+            r_value = param_kappa.get("R_Eplus")
             if r_value is None:
-                raise ValueError(
-                    "Parameter 'R_Eplus' must be defined (or overridden via -O) for the correlation workflow."
-                )
+                raise ValueError("Parameter 'R_Eplus' must be defined (or overridden via -O).")
             print(f"  -> kappa = {kappa:.4f}, R_Eplus = {float(r_value):.4f}")
             folder, bundle_path = helpers.ensure_fixpoint_bundle(
-                param_copy,
+                deepcopy(param_kappa),
                 focus_counts,
                 [float(r_value)],
                 sweep_cfg,
             )
-            binary_cfg = helpers.resolve_binary_config(param_copy, binary_overrides)
-            seed_network = args.seed_network if args.seed_network is not None else int(binary_cfg.get("seed", 0) or 0)
-            corr_result = helpers.run_multi_init_correlation(
-                param_copy,
-                binary_cfg,
+            analysis_dirs = _run_network_initializations(
+                deepcopy(param_kappa),
                 folder_hint=folder,
                 bundle_path=bundle_path,
                 focus_counts=focus_counts,
                 stability_filter=args.stability_filter,
-                n_inits=max(0, int(args.n_inits)),
-                seed_inits=int(args.seed_inits),
-                seed_network=seed_network,
-                stride_analysis=max(1, int(args.stride_analysis or 1)),
-                max_pairs=max(1, int(args.max_pairs or DEFAULT_MAX_PAIRS)),
-                jobs=max(1, int(args.jobs or 1)),
+                n_inits=n_inits,
+                network_seeds=network_seeds,
+                init_seed_bases=init_seed_bases,
+                binary_overrides=binary_overrides,
+                base_output_name=base_output_name,
+                stride_analysis=stride_analysis,
+                max_pairs=max_pairs,
+                jobs=jobs,
                 analysis_only=args.analysis_only,
                 overwrite_simulation=args.overwrite_simulation,
                 overwrite_analysis=args.overwrite_analysis,
             )
-            _append_result(results, label, float(kappa), corr_result.summary)
-    kappa_bounds = (min(kappa_values), max(kappa_values))
-    _plot_correlation_figure(results, kappa_bounds=kappa_bounds, font_cfg=font_cfg, output_prefix=args.output_prefix)
+            network_payloads: Dict[str, Dict[str, List[float]]] = {
+                measure: {category: [] for category in CATEGORIES} for measure in MEASURES
+            }
+            for analysis_dir in analysis_dirs:
+                network_summary = _summarize_network_dir(Path(analysis_dir), n_inits)
+                for measure in MEASURES:
+                    for category in CATEGORIES:
+                        network_payloads[measure][category].append(network_summary[measure][category])
+            for measure in MEASURES:
+                for category in CATEGORIES:
+                    stats = _series_stats_from_values(
+                        network_payloads[measure][category],
+                        bootstrap_samples,
+                        bootstrap_rng,
+                    )
+                    _append_metric(instance_store["metrics"], measure, category, stats)
+            instance_store["kappa"].append(float(kappa))
+        results[label] = instance_store
+    _plot_correlation_figure(results, font_cfg=font_cfg, output_prefix=args.output_prefix)
 
 
 if __name__ == "__main__":
