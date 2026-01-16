@@ -468,7 +468,7 @@ def _plot_correlation_figure(
 ) -> None:
     if not results:
         raise ValueError("No simulation data available to plot.")
-    fig, (ax_output, ax_input) = plt.subplots(1, 2, sharex=True, figsize=(13 / 2, 3.0))
+    fig, (ax_input, ax_output) = plt.subplots(1, 2, sharex=True, figsize=(13 / 2, 4.0))
     connectivity_values = [payload["connectivity"] for payload in results.values()]
     cmap = plt.cm.viridis
     norm = mpl_colors.Normalize(
@@ -478,17 +478,17 @@ def _plot_correlation_figure(
         color = cmap(norm(payload["connectivity"]))
         kappa = payload["kappa"]
         metrics = payload["metrics"]
-        _plot_series(ax_output, kappa, metrics["output"]["within"], color=color, style=WITHIN_STYLE)
-        _plot_series(ax_output, kappa, metrics["output"]["across"], color=color, style=ACROSS_STYLE)
         _plot_series(ax_input, kappa, metrics["input"]["within"], color=color, style=WITHIN_STYLE)
         _plot_series(ax_input, kappa, metrics["input"]["across"], color=color, style=ACROSS_STYLE)
-    ax_output.set_ylabel("Output correlation")
+        _plot_series(ax_output, kappa, metrics["output"]["within"], color=color, style=WITHIN_STYLE)
+        _plot_series(ax_output, kappa, metrics["output"]["across"], color=color, style=ACROSS_STYLE)
     ax_input.set_ylabel("Input correlation")
+    ax_output.set_ylabel("Output correlation")
     for ax in (ax_output, ax_input):
         ax.set_xlabel(r"$\kappa$")
         style_axes(ax, font_cfg)
-    add_panel_label(ax_output, "a", font_cfg)
-    add_panel_label(ax_input, "b", font_cfg)
+    add_panel_label(ax_input, "a", font_cfg, offset=(-0.08, 1.08))
+    add_panel_label(ax_output, "b", font_cfg, offset=(-0.08, 1.08))
     legend_handles = [
         Line2D(
             [0],
@@ -511,12 +511,20 @@ def _plot_correlation_figure(
             label="Across clusters",
         ),
     ]
-    ax_output.legend(legend_handles, [h.get_label() for h in legend_handles], loc="upper left", fontsize=font_cfg.legend)
+    legend = fig.legend(
+        legend_handles,
+        [h.get_label() for h in legend_handles],
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=2,
+        frameon=False,
+        fontsize=font_cfg.legend,
+    )
     if len(connectivity_values) > 1:
         sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-        cbar = fig.colorbar(sm, ax=[ax_output, ax_input], fraction=0.05, pad=0.04)
+        cbar = fig.colorbar(sm, ax=[ax_input, ax_output], fraction=0.05, pad=0.04)
         cbar.set_label("Mean connectivity", fontsize=font_cfg.legend)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
     base = Path(output_prefix)
     base.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(base.with_suffix(".png"), dpi=600)
