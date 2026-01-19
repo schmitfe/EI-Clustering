@@ -469,11 +469,18 @@ def _plot_correlation_figure(
     if not results:
         raise ValueError("No simulation data available to plot.")
     fig, (ax_input, ax_output) = plt.subplots(1, 2, sharey=True, figsize=(13 / 2, 4.0))
+
+    plt.subplots_adjust(top=0.85,
+                        bottom=0.15,
+                        left=0.125,
+                        right=0.9,)
     connectivity_values = [payload["connectivity"] for payload in results.values()]
     cmap = plt.cm.viridis
     norm = mpl_colors.Normalize(
         vmin=min(connectivity_values), vmax=max(connectivity_values) if connectivity_values else 1.0
     )
+    for ax in (ax_input, ax_output):
+        ax.axhline(0.0, color="0.6", linestyle="--", linewidth=0.8, zorder=0)
     for payload in results.values():
         color = cmap(norm(payload["connectivity"]))
         kappa = payload["kappa"]
@@ -482,8 +489,8 @@ def _plot_correlation_figure(
         _plot_series(ax_input, kappa, metrics["input"]["across"], color=color, style=ACROSS_STYLE)
         _plot_series(ax_output, kappa, metrics["output"]["within"], color=color, style=WITHIN_STYLE)
         _plot_series(ax_output, kappa, metrics["output"]["across"], color=color, style=ACROSS_STYLE)
-    ax_input.set_ylabel("Input correlation")
-    ax_output.set_ylabel("Output correlation")
+    ax_input.set_ylabel(r"$\overline{r_{\mathrm{in}}}$")
+    ax_output.set_ylabel(r"$\overline{r_{\mathrm{out}}}$")
     for ax in (ax_output, ax_input):
         ax.set_xlabel(r"$\kappa$")
         style_axes(ax, font_cfg)
