@@ -53,6 +53,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--v-steps", type=int, default=1000, help="ERF samples per sweep (default: %(default)s).")
     parser.add_argument("--retry-step", type=float, help="Optional retry increment for solver restarts.")
     parser.add_argument(
+        "--delta-rep-mf",
+        type=float,
+        default=0.025,
+        help="R_Eplus sampling half-width for MF fallback (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--rep-retry-mf",
+        type=int,
+        default=10,
+        help="Resample attempts for MF fallback when no fixpoints are found (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--rep-rng-seed",
+        type=int,
+        help="Seed for MF resample RNG (default: random).",
+    )
+    parser.add_argument(
         "--erf-jobs",
         type=int,
         default=1,
@@ -115,6 +132,12 @@ def parse_args() -> argparse.Namespace:
         "--raster-duration",
         type=float,
         help="Restrict the raster plot to this duration (same units as the trace time axis).",
+    )
+    parser.add_argument(
+        "--raster-stride",
+        type=int,
+        default=1,
+        help="Plot every Nth neuron in the raster (default: %(default)s).",
     )
     parser.add_argument(
         "--rates-duration",
@@ -343,6 +366,85 @@ def _prepare_focus_markers(
     return _collect_focus_markers(focus_rates), candidates
 
 
+def _is_missing_fixpoints_error(exc: Exception) -> bool:
+    return "no fixpoint" in str(exc).lower()
+
+
+def _prepare_focus_markers_with_retry(
+    parameter: Dict[str, Any],
+    focus_counts: Sequence[int],
+    stability_filter: str,
+    sweep_cfg: helpers.PipelineSweepSettings,
+    *,
+    delta_rep: float,
+    rep_retry: int,
+    rng_seed: int | None,
+    column_label: str,
+) -> Tuple[List[FocusMarker], Sequence[Dict[str, Any]], str, str]:
+    target_rep = parameter.get("R_Eplus")
+    if target_rep is None:
+        raise ValueError("Parameter 'R_Eplus' must be set before selecting MF fixpoints.")
+    target_rep = float(target_rep)
+    folder, bundle_path = helpers.ensure_fixpoint_bundle(
+        parameter,
+        focus_counts,
+        [target_rep],
+        sweep_cfg,
+    )
+    base_exc: ValueError | None = None
+    try:
+        focus_markers, candidates = _prepare_focus_markers(
+            parameter,
+            bundle_path,
+            focus_counts,
+            stability_filter,
+        )
+        return focus_markers, candidates, folder, bundle_path
+    except ValueError as exc:
+        if not _is_missing_fixpoints_error(exc):
+            raise
+        base_exc = exc
+    if rep_retry <= 0 or delta_rep <= 0:
+        if base_exc is not None:
+            raise base_exc
+        raise
+    print(
+        f"No MF fixpoints for R_Eplus={target_rep:.4f} (column {column_label}); "
+        f"trying {rep_retry} resamples within +/-{delta_rep:.4f}."
+    )
+    rng = np.random.default_rng(rng_seed)
+    for attempt in range(int(rep_retry)):
+        sample_rep = float(rng.uniform(target_rep - delta_rep, target_rep + delta_rep))
+        sample_param = dict(parameter)
+        sample_param["R_Eplus"] = sample_rep
+        folder, bundle_path = helpers.ensure_fixpoint_bundle(
+            sample_param,
+            focus_counts,
+            [sample_rep],
+            sweep_cfg,
+        )
+        try:
+            focus_markers, candidates = _prepare_focus_markers(
+                sample_param,
+                bundle_path,
+                focus_counts,
+                stability_filter,
+            )
+        except ValueError as exc:
+            if not _is_missing_fixpoints_error(exc):
+                raise
+            continue
+        print(
+            f"MF resample {attempt + 1}/{rep_retry} found fixpoints at "
+            f"R_Eplus={sample_rep:.4f} (column {column_label})."
+        )
+        return focus_markers, candidates, folder, bundle_path
+    raise ValueError(
+        f"No MF fixpoints found after {rep_retry} resamples within +/-{delta_rep:.4f} "
+        f"of R_Eplus={target_rep:.4f}."
+    )
+
+
 def _build_trace_task(
     parameter: Dict[str, Any],
     binary_cfg: Dict[str, Any],
@@ -459,6 +561,7 @@ def _plot_example_traces(
     parameter: Dict[str, Any],
     raster_duration: float | None,
     rates_duration: float | None,
+    raster_stride: int,
     font_cfg: FontCfg,
     focus_markers: Sequence[FocusMarker],
     color_map: Dict[int, str],
@@ -476,6 +579,7 @@ def _plot_example_traces(
         states_arr = np.asarray(states_raw)
     sample_interval = max(1, int(payload.get("sample_interval", 1) or 1))
     raster_window = (0.0, float(raster_duration)) if raster_duration is not None and raster_duration > 0 else None
+    stride = max(1, int(raster_stride))
     labels = RasterLabels(
         show=True,
         excitatory="Exc.",
@@ -551,7 +655,7 @@ def _plot_example_traces(
             spike_ids=spike_ids,
             n_exc=excit_neurons,
             n_inh=n_inh,
-            stride=1,
+            stride=stride,
             t_start=t_start,
             t_end=t_end,
             marker=".",
@@ -567,7 +671,7 @@ def _plot_example_traces(
             total_neurons=total_neurons,
             window=plot_window,
             time_scale=time_scale,
-            stride=1,
+            stride=stride,
             labels=labels,
             marker=".",
             marker_size=2.0,
@@ -780,21 +884,19 @@ def main() -> None:
             title_text = _resolve_column_title(column_param, spec, title_map=column_title_map)
             focus_counts = helpers.resolve_focus_counts(column_param, args.focus_counts)
             focus_union.update(int(value) for value in focus_counts)
-            column_r_value = float(column_param.get("R_Eplus", r_value) or r_value)
-            folder, bundle_path = helpers.ensure_fixpoint_bundle(
-                column_param,
-                focus_counts,
-                [column_r_value],
-                sweep_cfg,
-            )
+            column_param["R_Eplus"] = float(column_param.get("R_Eplus", r_value) or r_value)
             binary_cfg = helpers.resolve_binary_config(column_param, binary_overrides)
             base_seed = int(binary_cfg.get("seed", 0) or 0)
             seed = base_seed + idx
-            focus_markers, candidates = _prepare_focus_markers(
+            focus_markers, candidates, folder, bundle_path = _prepare_focus_markers_with_retry(
                 column_param,
-                bundle_path,
                 focus_counts,
                 args.stability_filter,
+                sweep_cfg,
+                delta_rep=float(args.delta_rep_mf),
+                rep_retry=int(args.rep_retry_mf),
+                rng_seed=args.rep_rng_seed,
+                column_label=str(spec.label),
             )
             trace_path, task = _build_trace_task(
                 column_param,
@@ -851,15 +953,15 @@ def main() -> None:
         fig = plt.figure(figsize=(4.2 * n_cols + 1.4, 5))
         outer = fig.add_gridspec(
             1,
-            n_cols + 1,
-            width_ratios=[1.0] * n_cols + [0.07],
+            n_cols + 2,
+            width_ratios=[1.0] * n_cols + 2*[0.05],
             wspace=0.28,
             left=0.06,
-            right=0.985,
+            right=0.99,
             top=0.92,
             bottom=0.12,
         )
-        colorbar_ax = fig.add_subplot(outer[0, -1])
+        colorbar_ax = fig.add_subplot(outer[0, -2])
         rate_axes: List[plt.Axes] = []
         for idx, context in enumerate(column_contexts):
             param_copy = context.parameter
@@ -882,6 +984,7 @@ def main() -> None:
                 parameter=param_copy,
                 raster_duration=args.raster_duration,
                 rates_duration=args.rates_duration,
+                raster_stride=args.raster_stride,
                 font_cfg=font_cfg,
                 focus_markers=context.focus_markers,
                 color_map=color_map,
@@ -925,6 +1028,8 @@ def main() -> None:
             height_fraction=0.8,
             use_parent_axis=False,
         )
+        colorbar_ax.get_xaxis().set_visible(False)
+        colorbar_ax.get_yaxis().set_visible(False)
         _save_figure(fig, args.output_prefix, r_value)
         plt.close(fig)
 
