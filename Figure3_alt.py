@@ -848,18 +848,19 @@ def main() -> None:
                 for task in simulation_tasks:
                     _simulate_legacy_task(task)
         n_cols = len(column_contexts)
-        fig = plt.figure(figsize=(4.2 * n_cols + 1.2, 5))
+        fig = plt.figure(figsize=(4.2 * n_cols + 1.4, 5))
         outer = fig.add_gridspec(
             1,
             n_cols + 1,
-            width_ratios=[1.0] * n_cols + [0.06],
-            wspace=0.2,
+            width_ratios=[1.0] * n_cols + [0.07],
+            wspace=0.28,
             left=0.06,
-            right=0.98,
+            right=0.985,
             top=0.92,
             bottom=0.12,
         )
         colorbar_ax = fig.add_subplot(outer[0, -1])
+        rate_axes: List[plt.Axes] = []
         for idx, context in enumerate(column_contexts):
             param_copy = context.parameter
             try:
@@ -870,7 +871,10 @@ def main() -> None:
                 ) from exc
             column_grid = outer[0, idx].subgridspec(2, 1, height_ratios=[1.0, 0.6], hspace=0.08)
             ax_raster = fig.add_subplot(column_grid[0, 0])
-            ax_rates = fig.add_subplot(column_grid[1, 0], sharex=ax_raster)
+            if rate_axes:
+                ax_rates = fig.add_subplot(column_grid[1, 0], sharex=ax_raster, sharey=rate_axes[0])
+            else:
+                ax_rates = fig.add_subplot(column_grid[1, 0], sharex=ax_raster)
             _plot_example_traces(
                 ax_raster,
                 ax_rates,
@@ -888,13 +892,38 @@ def main() -> None:
             panel_prefix = context.spec.label.strip()
             add_panel_label(ax_raster, f"{panel_prefix}1", font_cfg, x=-0.15, y=1.04)
             add_panel_label(ax_rates, f"{panel_prefix}2", font_cfg, x=-0.15, y=1.06)
+            rate_axes.append(ax_rates)
+        if rate_axes:
+            max_y = max(ax.get_ylim()[1] for ax in rate_axes)
+            tick_max = max(0.5, math.ceil(float(max_y) * 10.0) / 10.0)
+            ticks = list(np.arange(0.0, tick_max + 1e-9, 0.25))
+            if ticks and ticks[-1] < tick_max - 1e-6:
+                ticks.append(tick_max)
+            tick_labels = []
+            for value in ticks:
+                if abs(value) < 1e-6:
+                    tick_labels.append("0")
+                elif abs(value - 0.5) < 1e-6:
+                    tick_labels.append("0.5")
+                else:
+                    tick_labels.append("")
+            for idx, ax in enumerate(rate_axes):
+                ax.set_ylim(0.0, tick_max)
+                ax.set_yticks(ticks)
+                if idx == 0:
+                    ax.set_ylabel(r"$m_c$")
+                    ax.set_yticklabels(tick_labels)
+                else:
+                    ax.set_ylabel("")
+                    ax.tick_params(axis="y", labelleft=False)
         draw_listed_colorbar(
             fig,
             colorbar_ax,
             colorbar_entries,
             font_cfg=font_cfg,
             label="MF prediction: # active clusters",
-            use_parent_axis=True,
+            height_fraction=0.8,
+            use_parent_axis=False,
         )
         _save_figure(fig, args.output_prefix, r_value)
         plt.close(fig)
