@@ -682,7 +682,7 @@ def _plot_example_traces(
             t_start=t_start,
             t_end=t_end,
             marker=".",
-            marker_size=3.0,
+            marker_size=1.5,
             labels=labels,
         )
     else:

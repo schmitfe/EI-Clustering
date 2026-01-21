@@ -64,7 +64,7 @@ class RasterPanelSpec:
     window_duration: float = RASTER_WINDOW_DURATION
     cluster_indices: Sequence[int] | None = None
     cluster_count: int = 20
-    marker_size: float = 2.
+    marker_size: float = 1.5
     label_font_size: float = 7.0
 
 
