@@ -15,6 +15,7 @@ from matplotlib.axes import Axes
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.ticker import MaxNLocator
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
 import binary_simulation_multi_init as binary_multi
@@ -31,7 +32,6 @@ from plotting import (
     plot_binary_raster,
     plot_spike_raster,
     style_axes,
-    _time_axis_scale,
 )
 
 
@@ -528,6 +528,26 @@ def _format_time_ticks(start: float, end: float, count: int = 4) -> tuple[np.nda
     return values, labels
 
 
+def _time_axis_scale_from_taus(parameter: Dict[str, object]) -> tuple[float, str]:
+    tau_e = float(parameter.get("tau_e", math.nan))
+    tau_i = float(parameter.get("tau_i", math.nan))
+    n_e = int(parameter.get("N_E", 0) or 0)
+    n_i = int(parameter.get("N_I", 0) or 0)
+    if not np.isfinite(tau_e) or not np.isfinite(tau_i) or tau_e <= 0.0 or tau_i <= 0.0:
+        return 1.0, "Time [s]"
+    max_tau = max(tau_e, tau_i)
+    min_tau = min(tau_e, tau_i)
+    n_max = n_e if tau_e >= tau_i else n_i
+    n_min = n_i if tau_e >= tau_i else n_e
+    expected_updates = float(n_max) + (max_tau / min_tau) * float(n_min)
+    if not np.isfinite(expected_updates) or expected_updates <= 0.0 or max_tau <= 0.0:
+        return 1.0, "Time [s]"
+    max_tau_seconds = max_tau / 1000.0
+    if max_tau_seconds <= 0.0 or not np.isfinite(max_tau_seconds):
+        return 1.0, "Time [s]"
+    return float(expected_updates / max_tau_seconds), "Time [s]"
+
+
 def plot_cluster_activity(
     ax: Axes,
     panel: PanelData,
@@ -568,9 +588,7 @@ def plot_cluster_activity(
     else:
         ax.set_ylabel("")
     ax.set_xlabel(time_label)
-    ticks, labels = _format_time_ticks(window_start, window_end, 4)
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(labels)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
 
 PANEL_LABEL_COORDS = (-0.12, 1.02)
@@ -742,7 +760,7 @@ def main() -> None:
         if panel is None:
             continue
         window = TimeWindow(start=float(panel.spec.window_start), duration=float(panel.spec.window_duration))
-        time_scale, time_label = _time_axis_scale(window.start, window.end)
+        time_scale, time_label = _time_axis_scale_from_taus(panel.parameter)
         total_neurons = panel.payload.state_source.neuron_count
         if total_neurons <= 0:
             total_neurons = int(panel.parameter.get("N_E", 0)) + int(panel.parameter.get("N_I", 0))

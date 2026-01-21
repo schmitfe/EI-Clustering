@@ -14,6 +14,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.ticker import MaxNLocator
 import numpy as np  # noqa: E402
 
 import binary_simulation_multi_init as binary_multi  # noqa: E402
@@ -27,7 +28,6 @@ from plotting import (
     plot_binary_raster,
     plot_spike_raster,
     style_axes,
-    _time_axis_scale,
     _prepare_line_color_map,
 )  # noqa: E402
 from sim_config import add_override_arguments, deep_update, load_from_args, parse_overrides  # noqa: E402
@@ -310,6 +310,26 @@ def _format_time_ticks(start: float, end: float, count: int = 4) -> Tuple[np.nda
         else:
             labels.append(f"{value:.0f}")
     return values, labels
+
+
+def _time_axis_scale_from_taus(parameter: Dict[str, Any]) -> Tuple[float, str]:
+    tau_e = float(parameter.get("tau_e", math.nan))
+    tau_i = float(parameter.get("tau_i", math.nan))
+    n_e = int(parameter.get("N_E", 0) or 0)
+    n_i = int(parameter.get("N_I", 0) or 0)
+    if not np.isfinite(tau_e) or not np.isfinite(tau_i) or tau_e <= 0.0 or tau_i <= 0.0:
+        return 1.0, "Time [s]"
+    max_tau = max(tau_e, tau_i)
+    min_tau = min(tau_e, tau_i)
+    n_max = n_e if tau_e >= tau_i else n_i
+    n_min = n_i if tau_e >= tau_i else n_e
+    expected_updates = float(n_max) + (max_tau / min_tau) * float(n_min)
+    if not np.isfinite(expected_updates) or expected_updates <= 0.0 or max_tau <= 0.0:
+        return 1.0, "Time [s]"
+    max_tau_seconds = max_tau / 1000.0
+    if max_tau_seconds <= 0.0 or not np.isfinite(max_tau_seconds):
+        return 1.0, "Time [s]"
+    return float(expected_updates / max_tau_seconds), "Time [s]"
 
 
 def _format_kappa_value(value: float) -> str:
@@ -637,7 +657,7 @@ def _plot_example_traces(
         scale_end = float(rates_duration)
     if scale_end <= scale_start:
         scale_end = scale_start + float(sample_interval)
-    time_scale, time_label = _time_axis_scale(scale_start, scale_end)
+    time_scale, time_label = _time_axis_scale_from_taus(parameter)
     safe_scale = time_scale if time_scale > 0 else 1.0
     plot_window = raster_window if raster_window is not None else (window_start, window_end)
     spike_times = np.asarray(payload.get("spike_times"), dtype=float)
@@ -711,9 +731,7 @@ def _plot_example_traces(
     ax_rates.set_xlim(scaled_start, scaled_end)
     ax_rates.set_ylabel(r"$m_c$")
     ax_rates.set_xlabel(time_label)
-    tick_vals, tick_labels = _format_time_ticks(scaled_start, scaled_end, 4)
-    ax_rates.set_xticks(tick_vals)
-    ax_rates.set_xticklabels(tick_labels)
+    ax_rates.xaxis.set_major_locator(MaxNLocator(integer=True))
     _plot_fixpoint_overlays(
         ax_rates,
         focus_markers,
@@ -1021,6 +1039,7 @@ def main() -> None:
                 else:
                     ax.set_ylabel("")
                     ax.tick_params(axis="y", labelleft=False)
+                ax.set_xlim(0,5)
         draw_listed_colorbar(
             fig,
             colorbar_ax,
