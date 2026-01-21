@@ -14,6 +14,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 import numpy as np  # noqa: E402
 
@@ -1040,7 +1041,7 @@ def main() -> None:
                     ax.set_ylabel("")
                     ax.tick_params(axis="y", labelleft=False)
                 ax.set_xlim(0,5)
-        draw_listed_colorbar(
+        colorbar = draw_listed_colorbar(
             fig,
             colorbar_ax,
             colorbar_entries,
@@ -1051,6 +1052,43 @@ def main() -> None:
         )
         colorbar_ax.get_xaxis().set_visible(False)
         colorbar_ax.get_yaxis().set_visible(False)
+        if colorbar is not None:
+            cbar_ax = colorbar.ax
+            legend_handles = [
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    linestyle="None",
+                    markersize=5,
+                    markerfacecolor="black",
+                    markeredgecolor="black",
+                    label="stable",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    linestyle="None",
+                    markersize=5,
+                    markerfacecolor="white",
+                    markeredgecolor="black",
+                    label="unstable",
+                ),
+            ]
+            cbar_ax.legend(
+                handles=legend_handles,
+                loc="upper center",
+                bbox_to_anchor=(2., -0.05),
+                frameon=False,
+                fontsize=font_cfg.tick,
+                borderpad=0.0,
+                handletextpad=-0.4,
+                labelspacing=0.2,
+            )
+            pos = cbar_ax.get_position()
+            cbar_ax.set_axes_locator(None)  # key line
+            cbar_ax.set_position([pos.x0 - 0.025, pos.y0 + 0.07, pos.width, pos.height])
         _save_figure(fig, args.output_prefix, r_value)
         plt.close(fig)
 

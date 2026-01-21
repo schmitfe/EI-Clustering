@@ -129,7 +129,7 @@ def draw_listed_colorbar(
 ) -> None:
     if not entries:
         axis.set_axis_off()
-        return
+        return None
     ticks = [float(value) for value, _ in entries]
     colors = [color for _, color in entries]
     cmap = mcolors.ListedColormap(colors)
@@ -163,3 +163,4 @@ def draw_listed_colorbar(
             colorbar.ax.set_ylabel(label, fontsize=font_cfg.label, **params)
         else:
             colorbar.ax.set_xlabel(label, fontsize=font_cfg.label, **params)
+    return colorbar
