@@ -146,6 +146,8 @@ def plot_raster(
     times = np.asarray(spiketimes[0], dtype=float)
     ids = np.asarray(spiketimes[1], dtype=int)
     simtime = float(sim_cfg.get("simtime", times.max() if times.size else 0.0))
+    times_sec = times / 1000.0
+    simtime_sec = simtime / 1000.0
     n_exc = int(net_cfg.get("N_E", 0))
     n_inh = int(net_cfg.get("N_I", 0))
     if times.size == 0 or ids.size == 0:
@@ -166,17 +168,17 @@ def plot_raster(
     )
     plot_spike_raster(
         ax,
-        times,
+        times_sec,
         ids,
         n_exc=n_exc,
         n_inh=n_inh,
         stride=max(1, int(neuron_stride)),
         t_start=0.0,
-        t_end=simtime,
+        t_end=simtime_sec,
         labels=labels,
         marker_size=1.5
     )
-    ax.set_xlim(0.0, simtime)
+    ax.set_xlim(0.0, simtime_sec)
     ax.tick_params(axis="x", labelbottom=False)
     ax.tick_params(axis="y", left=False, labelleft=False)
     for text in ax.texts:
@@ -199,20 +201,22 @@ def plot_rate_traces(
         ax.set_axis_off()
         return
     simtime = float(sim_cfg.get("simtime", rate_time.max()))
+    rate_time_sec = rate_time / 1000.0
+    simtime_sec = simtime / 1000.0
     cmap = plt.get_cmap("Greys")
     if rates.shape[0] <= 1:
         shades = [0.6]
     else:
         shades = np.linspace(0.25, 0.85, rates.shape[0])
     for trace, shade in zip(rates, shades):
-        ax.plot(rate_time, trace, color=cmap(shade), linewidth=1.2)
-    ax.set_xlim(0.0, simtime)
+        ax.plot(rate_time_sec, trace, color=cmap(shade), linewidth=1.2)
+    ax.set_xlim(0.0, simtime_sec)
     ax.set_ylim(bottom=0.0)
     if ylabel:
         ax.set_ylabel(ylabel)
     else:
         ax.set_ylabel("")
-    ax.set_xlabel("Time [ms]")
+    ax.set_xlabel("Time [s]")
 
 
 def _panel_labels(count: int) -> Sequence[str]:
