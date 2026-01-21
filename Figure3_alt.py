@@ -347,7 +347,9 @@ def _resolve_column_title(
     if spec.title:
         return spec.title
     kappa_value = float(parameter.get("kappa", 0.0) or 0.0)
-    return rf"$\kappa={_format_kappa_value(kappa_value)}$"
+    rj_value = float(parameter.get("R_j", 0.0) or 0.0)
+
+    return rf"$\kappa={_format_kappa_value(kappa_value)}\quad R_j={_format_kappa_value(rj_value)}$"
 
 
 def _prepare_focus_markers(
