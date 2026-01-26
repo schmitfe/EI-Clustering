@@ -82,9 +82,18 @@ class RateSystem:
                 raise ValueError("max_newton_steps must be positive.")
             self.max_steps = steps
         self.network_kwargs = dict(network_kwargs)
-        self.A, self.B, self.bias, self.tau = self._build_dynamics(self.parameter, **self.network_kwargs)
+        dynamics = self._build_dynamics(self.parameter, **self.network_kwargs)
+        if len(dynamics) == 4:
+            self.A, self.B, self.bias, self.tau = dynamics
+            self.C = np.zeros_like(self.B)
+        elif len(dynamics) == 5:
+            self.A, self.B, self.C, self.bias, self.tau = dynamics
+            if self.C is None:
+                self.C = np.zeros_like(self.B)
+        else:
+            raise ValueError("Expected _build_dynamics to return (A, B, bias, tau) or (A, B, C, bias, tau).")
         self.population_count = int(self.A.shape[0])
-        if self.A.shape != self.B.shape:
+        if self.A.shape != self.B.shape or self.A.shape != self.C.shape:
             raise ValueError("Connectivity mean and variance matrices must match in shape.")
         if self.bias.shape[0] != self.population_count or self.tau.shape[0] != self.population_count:
             raise ValueError("Bias and tau vectors must match the matrix dimensions.")
@@ -101,7 +110,12 @@ class RateSystem:
         self._jax_args = None
 
     # --- abstract hooks -------------------------------------------------
-    def _build_dynamics(self, parameter: Dict, **network_kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _build_dynamics(
+        self, parameter: Dict, **network_kwargs
+    ) -> Union[
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ]:
         raise NotImplementedError("Derived classes must implement '_build_dynamics'.")
 
     def _build_population_groups(self, focus: np.ndarray) -> List[np.ndarray]:
@@ -183,17 +197,20 @@ class RateSystem:
 
     def _phi_numpy(self, full_rates: np.ndarray) -> np.ndarray:
         mean = self.A.dot(full_rates) + self.bias
-        var = np.maximum(self.B.dot(full_rates), self.VAR_EPS)
+        rates_sq = full_rates * full_rates
+        var = np.maximum(self.B.dot(full_rates) + self.C.dot(rates_sq), self.VAR_EPS)
         return 0.5 * (1 - special.erf(-mean / np.sqrt(2.0 * var)))
 
     def _phi_jacobian_numpy(self, full_rates: np.ndarray) -> np.ndarray:
         mean = self.A.dot(full_rates) + self.bias
-        var = np.maximum(self.B.dot(full_rates), self.VAR_EPS)
+        rates_sq = full_rates * full_rates
+        var = np.maximum(self.B.dot(full_rates) + self.C.dot(rates_sq), self.VAR_EPS)
         inv_sqrt = 1.0 / np.sqrt(2.0 * var)
         exp_term = np.exp(-(mean ** 2) / (2.0 * var))
         coeff = (1.0 / np.sqrt(np.pi)) * exp_term * inv_sqrt
         correction = mean / (2.0 * var)
-        return coeff[:, None] * (self.A - correction[:, None] * self.B)
+        dvar_dm = self.B + self.C * (2.0 * full_rates[None, :])
+        return coeff[:, None] * (self.A - correction[:, None] * dvar_dm)
 
     def residual_numpy(self, x: np.ndarray) -> np.ndarray:
         rates = self._full_rates_numpy(x)
@@ -205,11 +222,11 @@ class RateSystem:
 
     @staticmethod
     def _jax_residual(x, v_focus, args):
-        A, B, bias, tau, focus_vector, selector, membership, reduction, var_eps = args
+        A, B, C, bias, tau, focus_vector, selector, membership, reduction, var_eps = args
         group_values = selector @ x + focus_vector * v_focus
         full_rates = membership @ group_values
         mean = A @ full_rates + bias
-        var = jnp.maximum(B @ full_rates, var_eps)
+        var = jnp.maximum(B @ full_rates + C @ (full_rates * full_rates), var_eps)
         phi = 0.5 * (1 - jspecial.erf(-mean / jnp.sqrt(2.0 * var)))
         residual = (phi - full_rates) / tau
         return reduction @ residual
@@ -262,6 +279,7 @@ class RateSystem:
             self._jax_args = (
                 jnp.asarray(self.A, dtype=jnp.float64),
                 jnp.asarray(self.B, dtype=jnp.float64),
+                jnp.asarray(self.C, dtype=jnp.float64),
                 jnp.asarray(self.bias, dtype=jnp.float64),
                 jnp.asarray(self.tau, dtype=jnp.float64),
                 jnp.asarray(self.focus_vector, dtype=jnp.float64),
