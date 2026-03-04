@@ -1,99 +1,16 @@
 # EI-Clustering Toolkit
 
-The repository now centers on a compact, scriptable workflow that simulates
-effective response functions (ERFs) and evaluates their fixpoints in a single
-pass.  All shared solver utilities live in `rate_system.py`, the EI-network
-specialization resides in `ei_cluster_network.py`, and the command-line entry
-point is `ei_pipeline.py`.
+Mean-field solvers, binary-network simulations, and reference NEST code for the clustered EI model live side by side in this repository. The top level only contains the driver scripts and this overview; each subsystem ships with its own README that covers the full set of options and file layouts.
 
-## ei_pipeline.py
-Run this script to sweep `R_Eplus`, generate ERFs, persist them under
-`data/<ConnectionType>/RjXX_XX/<config-tag>/` (each folder contains a
-`params.yaml` snapshot of the configuration), and immediately analyze the
-stored curves.  Command-line options control the ERF range (`--v-start`,
-`--v-end`, `--v-steps`), select explicit `R_Eplus` values (`--r-eplus`,
-`--r-eplus-start`, `--r-eplus-end`, `--r-eplus-step`), pick the number of
-parallel workers (`--jobs`), limit execution to the simulation or analysis
-stage (`--simulation-only`, `--analysis-only`), adjust how many focus
-populations remain fixed (`--focus-count`), switch to the full 2Q-1 system
-(`--full-focus-system`), and force regeneration via `--overwrite-simulation`.
-Without a flag the script performs both stages: it writes `.pkl` files for each
-converged ERF and emits the fixpoint scatter plot plus a pickle summary inside
-`plots/` and `data/`.
-Select alternative parameter sets via `--config my_case` and override individual
-values with repeated `-O path=value` arguments (e.g.,
-`-O connection_type=poisson -O kappa=0.0`). Environment variables such as
-`connection_type=...` are ignored; use CLI overrides instead so configuration
-changes remain explicit.  Each data directory receives a deterministic tag
-derived from the chosen parameters (excluding `R_Eplus`)—and each tagged folder
-contains a human-readable `params.yaml`—so you can store multiple configurations
-without conflicts.  The default number of focus
-populations is defined via `focus_count` in the YAML and can be overridden with
-`--focus-count`.  Use `--full-focus-system` when you want to fix only the first
-population and leave every other population unconstrained (classic 2Q − 1
-unknowns).
+## Quick Start
+- `python ei_pipeline.py` runs the mean-field ERF sweep plus fixpoint analysis using `sim_config/default_simulation.yaml`. See `MeanField/README.md` for the full flag reference, solver details, and data layout.
+- `python binary_pipeline.py` launches the stochastic binary-network simulation with the same default config. See `BinaryNetwork/README.md` for sampling controls and plotting helpers.
+- Configuration defaults are defined under `sim_config/`. Always override parameters through the CLI rather than environment variables so runs remain reproducible.
+- Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, and optional binary traces, while plots go to `plots/`.
 
-## rate_system.py
-Defines the general `RateSystem` solver together with helper utilities for ERF
-generation, interpolation, fixpoint detection, and sweep serialization.  The
-class supports both SciPy and optional JAX/optimistix backends as well as
-population-group constraints so multiple populations share identical rates once
-declared.  Helper functions such as `ensure_output_folder`, `serialize_erf`, and
-`aggregate_data` are reused by the CLI for a consistent layout.
+## Modules
+- `MeanField/` packages the reusable solvers (`rate_system.py`, `solver_utils.py`) and the EI specialization (`ei_cluster_network.py`) used by `ei_pipeline.py`.
+- `BinaryNetwork/` contains the clustered binary model and utilities consumed by `binary_pipeline.py`.
+- `NEST/EI_clustered_network/` holds the spiking reference implementation; consult it when porting the model into NEST-based workflows.
 
-## ei_cluster_network.py
-Implements `EIClusterNetwork`, a concrete `RateSystem` derivative that converts
-the manuscript’s clustering rules into mean/variance connectivity matrices.  It
-reuses the builder logic previously scattered across `connectivit.py` and
-`matrix_builder.py` so the EI model’s details remain isolated from the general
-solver.
-
-## legacy/
-Unchanged: stores the older symbolic Halley/Newton solvers
-(`mean_field.py`, `newton.py`, `halley.py`, `fixpoint_iteration.py`) for
-reference only.
-
-## Simulation Parameters
-Key controls remain the same:
-
-- `P_Eplus`: excitatory cluster strength (0 = unclustered, `Q` = fully clustered)
-- `R_j`: inhibitory cluster strength relative to the excitatory one (0–1)
-- `kappa`: interpolation between probability (`0`) and weight (`1`) clustering
-- `connection_type`: `"bernoulli"`, `"poisson"`, or `"fixed-indegree"`
-
-Defaults live in `sim_config/default_simulation.yaml` and can be overridden via
-`--config` (to select another YAML) and repeated `-O path=value` CLI overrides.
-Use `python ei_pipeline.py --help` for the full set of options.
-
-## Binary Network Simulation
-Run `python binary_pipeline.py` to instantiate the binary-network counterpart
-with the exact same configuration file and override semantics.  The script
-respects the global clustering parameters (`kappa`, `connection_type`,
-`R_Eplus`, `R_j`, etc.), reproduces the mixed probability/weight scheme, and
-supports Bernoulli, Poisson, or fixed-indegree synapse generation.  Simulation
-settings live under the `binary` section in the YAML (`warmup_steps`,
-`simulation_steps`, `sample_interval`, `batch_size`, `seed`, and
-`output_name`) and can be overridden via `-O binary.sample_interval=25`, etc.
-Each run stores downsampled population activities in
-`data/<ConnectionType>/RjXX_XX/<tag>/binary/` alongside a YAML summary, using
-the same deterministic folder layout as the mean-field pipeline.  Every
-`activity_trace.npz` now bundles a `neuron_states` array (samples × neurons) so
-you can compute pairwise correlations or reconstruct raster plots.  Add
-`--plot-activity` to dump a neuron-by-time heatmap that spans the entire
-recording; the figure is generated directly from `neuron_states`.
-
-To initialize the network near a predicted mean-field state, configure the new
-`initial_activity` block in the YAML.  Supply a scalar or a length-`Q` list for
-`excitatory` and `inhibitory` and choose `mode: bernoulli` (sample each neuron
-with the given probability) or `mode: deterministic` (exactly match the desired
-fraction by shuffling ones).  Example:
-
-```yaml
-initial_activity:
-  mode: deterministic
-  excitatory: [0.3, 0.1, 0.1, 0.05]
-  inhibitory: 0.02
-```
-
-This ensures binary simulations start from the same clustered activity profile
-used by the mean-field solver, enabling apples-to-apples comparisons.
+Refer to the module-specific READMEs for implementation notes, diagnostics, and advanced usage.

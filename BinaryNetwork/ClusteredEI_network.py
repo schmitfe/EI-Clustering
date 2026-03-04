@@ -17,6 +17,12 @@ from .BinaryNetwork import (
 )
 
 
+def _total_population(parameter: Dict) -> float:
+    if "N_E" not in parameter or "N_I" not in parameter:
+        raise ValueError("Parameters must define both N_E and N_I.")
+    return float(parameter["N_E"]) + float(parameter["N_I"])
+
+
 def _normalize_conn_type(kind: str | None) -> str:
     label = "bernoulli" if kind is None else str(kind).replace("_", "-").lower()
     if label not in {"bernoulli", "poisson", "fixed-indegree"}:
@@ -48,10 +54,10 @@ def _mix_scales(R_plus: float, Q: int, kappa: float) -> Tuple[float, float, floa
 
 
 def _compute_cluster_parameters(parameter: Dict, kappa: float) -> Dict[str, np.ndarray]:
-    N = float(parameter["N"])
     Q = int(parameter["Q"])
     N_E = float(parameter["N_E"])
     N_I = float(parameter["N_I"])
+    N = _total_population(parameter)
     V_th = float(parameter["V_th"])
     g = float(parameter["g"])
     p0_ee = float(parameter["p0_ee"])
@@ -216,8 +222,7 @@ class ClusteredEI_network(BaseBinaryNetwork):
         self.connection_parameters = _compute_cluster_parameters(self.parameter, self.kappa)
         self.E_sizes = _split_counts(int(self.parameter["N_E"]), self.Q)
         self.I_sizes = _split_counts(int(self.parameter["N_I"]), self.Q)
-        if sum(self.E_sizes) + sum(self.I_sizes) != int(self.parameter["N"]):
-            print("Warning: N does not match N_E + N_I. Proceeding with per-type totals.")
+        self.total_neurons = sum(self.E_sizes) + sum(self.I_sizes)
         self.initializers_E, self.initializers_I = _resolve_initializers(
             self.parameter.get("initial_activity"),
             self.E_sizes,
@@ -305,6 +310,36 @@ class ClusteredEI_network(BaseBinaryNetwork):
         self._build_synapses()
         self._build_background()
         self._structure_created = True
+
+    def configure_cell_type_queue(
+        self,
+        *,
+        excitatory_repeat: int = 1,
+        inhibitory_repeat: int = 1,
+        chunk_size: int | None = None,
+    ) -> None:
+        """Configure the parent network's update queue using cell-type repeats."""
+        excit_repeat = max(1, int(excitatory_repeat))
+        inhib_repeat = max(1, int(inhibitory_repeat))
+        entries: List[np.ndarray] = []
+        for pop in self.E_pops:
+            start, end = int(pop.view[0]), int(pop.view[1])
+            base = np.arange(start, end, dtype=np.int64)
+            if excit_repeat > 1 and base.size:
+                base = np.repeat(base, excit_repeat)
+            if base.size:
+                entries.append(base)
+        for pop in self.I_pops:
+            start, end = int(pop.view[0]), int(pop.view[1])
+            base = np.arange(start, end, dtype=np.int64)
+            if inhib_repeat > 1 and base.size:
+                base = np.repeat(base, inhib_repeat)
+            if base.size:
+                entries.append(base)
+        if not entries:
+            raise RuntimeError("Cannot configure an update queue without neuron populations.")
+        pool = np.concatenate(entries) if len(entries) > 1 else entries[0]
+        self.configure_update_queue(pool, chunk_size=chunk_size)
 
     def initialize(self, autapse: bool = True):
         self._ensure_structure()
