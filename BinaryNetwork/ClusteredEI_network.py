@@ -215,6 +215,8 @@ def _resolve_initializers(config, excit_sizes: Sequence[int], inhib_sizes: Seque
 class ClusteredEI_network(BaseBinaryNetwork):
     def __init__(self, parameter: Dict, *, kappa: float | None = None, connection_type: str | None = None, name="Binary EI Network"):
         super().__init__(name)
+        # break to ensure we use legacy!
+        raise
         self.parameter = dict(parameter)
         self.Q = int(self.parameter["Q"])
         self.connection_type = _normalize_conn_type(connection_type or self.parameter.get("connection_type"))

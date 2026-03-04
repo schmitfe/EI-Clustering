@@ -57,9 +57,9 @@ net_dict = {
     # synaptic delay [ms]
     "delay": 0.1,
     # Feed forward excitatory input [rheobase current]
-    "I_th_E": 1.25,
+    "I_th_E": 3.25,
     # Feed forward inhibitory input [rheobase current]
-    "I_th_I": 0.78,
+    "I_th_I": 1.82,
     # distribution of feed forward input,
     # I_th*[1-delta_I_../2, 1+delta_I_../2]
     "delta_I_xE": 0.0,  # excitatory
@@ -89,14 +89,14 @@ net_dict = {
     # - can be used to scale weights with network size
     "s": 1.0,
     # connection rule: pairwise_bernoulli, pairwise_poisson or fixed_indegree
-    "connection_rule": "pairwise_bernoulli",
+    "connection_rule": "pairwise_poisson",
     # interpolation factor between probability (0) and weight (1) clustering
-    "kappa": 1.0,
+    "kappa": 1.,
     # ratio excitatory to inhibitory clustering,
     # rj = 0 means no clustering, which resembles a clustered network
     # with a blanket of inhibition
-    "rj": 0.82,
+    "rj": 0.75,
     # excitatory clustering factor,
     # rep = 1 means no clustering, reselmbles a balanced random network
-    "rep": 6.0,
+    "rep": 5.0,
 }

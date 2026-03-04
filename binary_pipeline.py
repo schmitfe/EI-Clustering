@@ -274,11 +274,19 @@ def _save_activity_onset_plot(states: np.ndarray, interval: int, parameter: Dict
     plt.close(fig)
 
 
-def _taggable_binary_config(parameter: Dict[str, Any]) -> Dict[str, Any]:
+def _erf_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
     filtered = dict(parameter)
     for key in ("R_Eplus", "focus_count", "focus_counts"):
         filtered.pop(key, None)
     return filtered
+
+
+def _taggable_binary_config(parameter: Dict[str, Any], binary_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        "parameter": dict(parameter),
+        "binary": dict(binary_cfg),
+    }
+    return payload
 
 
 def run_binary_simulation(
@@ -331,14 +339,18 @@ def run_binary_simulation(
     total_steps = int(binary_cfg["simulation_steps"])
     if total_steps < 0:
         raise ValueError("simulation_steps must be non-negative.")
-    filtered = _taggable_binary_config(parameter)
+    filtered = _erf_parameter_for_tag(parameter)
     tag = sim_tag_from_cfg(filtered)
     folder = ensure_output_folder(parameter, tag=tag)
     params_path = os.path.join(folder, "params.yaml")
     if not os.path.exists(params_path):
         write_yaml_config(filtered, params_path)
-    binary_folder = os.path.join(folder, "binary")
+    binary_tag = sim_tag_from_cfg(_taggable_binary_config(parameter, binary_cfg))
+    binary_folder = os.path.join(folder, "binary", binary_tag)
     os.makedirs(binary_folder, exist_ok=True)
+    binary_params_path = os.path.join(binary_folder, "params.yaml")
+    if not os.path.exists(binary_params_path):
+        write_yaml_config({"parameter": parameter, "binary": binary_cfg}, binary_params_path)
     resolved_output_name = output_name or str(binary_cfg["output_name"])
     chunk_size = int(binary_cfg.get("state_chunk_size", 0) or 0)
     chunk_paths: List[str] = []

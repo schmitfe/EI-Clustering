@@ -7,6 +7,12 @@ pyximport.install(setup_args={"include_dirs": np.get_include()},
                   reload_support=True,
                   language_level=3)
 
+try:  # tqdm is optional; skip progress bars if not available
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency
+    def tqdm(iterable, **_kwargs):
+        return iterable
+
 from . import cstuff
 from .weights import generate_balanced_weights
 
@@ -85,7 +91,9 @@ class _BaseNetwork(object):
         self.new_states = None
         self.input_weights = input_weights
         self.current_updates = None
-
+        self.reference_state = self.state.copy()
+        self.last_update_log = None
+        self.last_delta_log = None
         self.subthreshold_record = []
         self.update_record = []
         self.nonzero_states = None
@@ -109,9 +117,11 @@ class _BaseNetwork(object):
     def initialise_state(self,prob):
         self.state = (np.random.rand(*self.state.shape)<prob).astype(STATE_TYPE)
         self.nonzero_states = cstuff.NonZeroCounter(self.state)
+        self.reference_state = self.state.copy()
     def set_state(self,state):
         self.state = state.astype(STATE_TYPE)
         self.nonzero_states = cstuff.NonZeroCounter(self.state)
+        self.reference_state = self.state.copy()
      
     def _update_old_state(self):
         # isolated in function for profiling
@@ -148,16 +158,22 @@ class _BaseNetwork(object):
         # call plasticity method, which may be empty
         self._plasticity(input)
         
+        delta = self.state[self.current_updates].astype(np.int8, copy=True) - self.old_state[self.current_updates].astype(np.int8, copy=False)
         if strict_spiking:
-            # spikes are only emitted, when a unit updates form 0 to 1
-            spikes = self.state[self.current_updates]*(self.old_state[self.current_updates]==False)
+            spikes = delta > 0
         else:
             spikes = self.state[self.current_updates]
-        
-         
-        return spikes
+        return spikes, delta
     
-    def forward(self,input,return_state = False,strict_spiking= False,record_subthreshold = False,record_updates=False,return_spiketimes = False):
+    def forward(
+        self,
+        input,
+        return_state=False,
+        strict_spiking=False,
+        record_subthreshold=False,
+        record_updates=False,
+        return_spiketimes=False,
+    ):
         """ pushes the input array through the network.
             if return state is False, only the newly updated
             spikes in each time step are returned.
@@ -167,29 +183,95 @@ class _BaseNetwork(object):
         assert self.input_weights is not None, 'input weights need to be set'
         assert self.input_weights.shape == (self.N,input.shape[0]), 'input weights must have shape (N,n_inputs)'
 
-        if return_spiketimes:
-            output = []
+        self.update_record = []
+        delta_log: list[np.ndarray] = []
+        initial_state = self.state.astype(STATE_TYPE, copy=True)
+        steps = input.shape[1]
+        for i in tqdm(range(steps), desc="Legacy network updates", disable=steps < 1000):
+            _, delta = self._integration_step(
+                input[:, i],
+                strict_spiking,
+                record_subthreshold,
+                True,
+            )
+            delta_log.append(delta.astype(np.int8, copy=True))
+        if self.update_record:
+            self.last_update_log = np.stack(
+                [np.asarray(entry, dtype=np.uint16) for entry in self.update_record],
+                axis=1,
+            )
+            self.last_delta_log = np.stack(delta_log, axis=1)
         else:
-            output = np.zeros((self.N,input.shape[1]),dtype = bool)
-        for i in range(input.shape[1]):
-            spikes = self._integration_step(input[:,i],strict_spiking,record_subthreshold,record_updates)
-            if return_state:
-                output[:,i] = self.state
-            else:
-                if return_spiketimes:
-                    for unit,spike in zip(self.current_updates,spikes):
-                        if spike:
-                            output.append([i,unit])
-                else:
-                    output[self.current_updates,i] = spikes
-
-        
+            self.last_update_log = np.zeros((0, 0), dtype=np.uint16)
+            self.last_delta_log = np.zeros((0, 0), dtype=np.int8)
+        print(f"Different events [-,0,+]: {np.unique(self.last_delta_log, return_counts=True)}")
+        self.reference_state = initial_state
+        state_output = None
+        spike_array = None
+        if return_state:
+            state_output = (
+                initial_state.astype(STATE_TYPE, copy=True),
+                np.asarray(self.last_update_log, dtype=np.uint16, order="F"),
+                np.asarray(self.last_delta_log, dtype=np.int8, order="F"),
+            )
+        if return_spiketimes and self.last_delta_log.size:
+            spike_array = self._extract_spike_events(self.last_update_log, self.last_delta_log)
+        if return_state and return_spiketimes:
+            if spike_array is None:
+                spike_array = np.zeros((2, 0), dtype=np.int64)
+            return state_output, spike_array
+        if return_state:
+            return state_output
         if return_spiketimes:
-            if len(output)==0:
-                output = np.zeros((2,0))
-            else:
-                output = np.array(output).T
-        return output
+            if spike_array is None:
+                return np.zeros((2, 0), dtype=np.int64)
+            return spike_array
+        return None
+
+    def _reconstruct_states(self, base_state, updates_log, delta_log, *, final_only=False):
+        updates = np.asarray(updates_log, dtype=np.int64)
+        deltas = np.asarray(delta_log, dtype=np.int8)
+        if updates.ndim != 2 or deltas.shape != updates.shape:
+            return np.zeros((self.N, 0), dtype=STATE_TYPE) if not final_only else np.zeros(self.N, dtype=STATE_TYPE)
+        steps = updates.shape[1]
+        if steps == 0:
+            return base_state.astype(STATE_TYPE, copy=True) if not final_only else base_state.astype(STATE_TYPE, copy=True)
+        base = np.asarray(base_state, dtype=np.int8).reshape(self.N)
+        if final_only:
+            accumulator = np.zeros(self.N, dtype=np.int32)
+            for idx in range(steps):
+                units = updates[:, idx]
+                if units.size == 0:
+                    continue
+                delta = deltas[:, idx].astype(np.int32, copy=False)
+                np.add.at(accumulator, units, delta)
+            result = np.clip(base + accumulator, 0, 1)
+            return result.astype(STATE_TYPE, copy=False)
+        result = np.zeros((self.N, steps), dtype=STATE_TYPE)
+        current = base.copy()
+        for idx in range(steps):
+            units = updates[:, idx]
+            delta = deltas[:, idx]
+            if units.size:
+                current[units] = np.clip(current[units] + delta, 0, 1)
+            result[:, idx] = current.astype(STATE_TYPE, copy=False)
+        return result
+
+    def _extract_spike_events(self, updates_log, delta_log):
+        updates = np.asarray(updates_log)
+        deltas = np.asarray(delta_log)
+        if updates.ndim != 2 or deltas.shape != updates.shape:
+            return np.zeros((2, 0), dtype=np.int64)
+        per_step, steps = updates.shape
+        if per_step == 0 or steps == 0:
+            return np.zeros((2, 0), dtype=np.int64)
+        mask = deltas > 0
+        if not mask.any():
+            return np.zeros((2, 0), dtype=np.int64)
+        times = np.repeat(np.arange(steps, dtype=np.int64), per_step)
+        flat_units = updates.reshape(-1, order="F").astype(np.int64, copy=False)
+        flat_mask = mask.reshape(-1, order="F")
+        return np.vstack((times[flat_mask], flat_units[flat_mask]))
 
     def compute_fields_from_states(self, states, external_input=None):
         """Compute subthreshold fields for recorded states."""
@@ -263,5 +345,3 @@ class BalancedNetwork(_BaseNetwork):
     def _get_next_updates(self):
         return self.update_queue.next()
         
-
-

@@ -50,7 +50,8 @@ class TestBaseNetwork(unittest.TestCase):
 
         net = network._BaseNetwork(weights,Ts,input_weights)
 
-        output = net.forward(input,return_state =True)
+        packet = net.forward(input, return_state=True)
+        output = net._reconstruct_states(*packet)
         self.assertTrue(output.shape == (N,T))
 
         expected_output = pylab.zeros((N,T)) 
@@ -76,14 +77,33 @@ class TestBaseNetwork(unittest.TestCase):
         net = network._BaseNetwork(weights,Ts,input_weights)
         state = pylab.randint(0,2,N).astype(bool)
         net.set_state(state)
-        output = net.forward(input)
+        packet = net.forward(input, return_state=True, strict_spiking=True)
+        init_state, updates, deltas = packet
+        state_log = net._reconstruct_states(init_state, updates, deltas)
+        onset_count = int((net.last_delta_log > 0).sum())
         net.set_state(state)
         spiketimes= net.forward(input,return_spiketimes = True)
-        self.assertEqual(output.sum(),spiketimes.shape[1])
+        self.assertEqual(onset_count,spiketimes.shape[1])
 
-        spikes = pylab.zeros_like(output)
-        spikes[spiketimes[1],spiketimes[0]] = True
-        self.assertTrue((spikes==output).all())
+        if spiketimes.shape[1]:
+            spikes = np.zeros_like(state_log, dtype=bool)
+            spikes[spiketimes[1],spiketimes[0]] = True
+            self.assertTrue(spikes.sum() == spiketimes.shape[1])
+
+    def test_reconstruct_final_state(self):
+        N  =20
+        T = 10
+        weights = (pylab.rand(N,N)<0.5) * pylab.randn(N,N)
+        Ts = pylab.rand(N)
+        input_weights = pylab.rand(N,1)
+        input = pylab.rand(1,T)
+
+        net = network._BaseNetwork(weights,Ts,input_weights)
+        packet = net.forward(input, return_state=True)
+        states = net._reconstruct_states(*packet)
+        final_state = net._reconstruct_states(*packet, final_only=True)
+        self.assertTrue(states.shape[1] == T)
+        self.assertTrue((states[:,-1] == final_state).all())
     
 
 
@@ -138,7 +158,9 @@ class TestBalancedNetwork(unittest.TestCase):
         updates = []
         for t in range(T):
            
-            output.append(net.forward(input[:,[t]],return_state = True)[:,0])
+            packet = net.forward(input[:,[t]],return_state = True)
+            reconstructed = net._reconstruct_states(*packet)
+            output.append(reconstructed[:,0])
             updates.append(net.current_updates)
         output = pylab.array(output).T
        
@@ -155,9 +177,6 @@ class TestBalancedNetwork(unittest.TestCase):
         self.assertTrue((expected_output == output).all())
 
         
-
-
-
 
 
 

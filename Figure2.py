@@ -16,7 +16,14 @@ from matplotlib.lines import Line2D
 import numpy as np
 
 from MeanField.ei_cluster_network import EIClusterNetwork
-from plotting import FontCfg, style_axes, style_legend
+from plotting import (
+    FontCfg,
+    DEFAULT_LINE_COLOR,
+    _prepare_line_color_map,
+    draw_listed_colorbar,
+    style_axes,
+    style_legend,
+)
 from ei_pipeline import (
     _filter_fixpoint_candidates,
     _key_to_r_eplus,
@@ -29,26 +36,10 @@ from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg,
 
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
-def _cmyk_to_rgb_hex(c: float, m: float, y: float, k: float) -> str:
-    r = 1.0 - min(1.0, c + k)
-    g = 1.0 - min(1.0, m + k)
-    b = 1.0 - min(1.0, y + k)
-    return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
-
-
-FOCUS_STABLE_COLOR = _cmyk_to_rgb_hex(0.0, 0.0, 0.0, 1.0)
-FOCUS_UNSTABLE_COLOR = _cmyk_to_rgb_hex(0.0, 0.0, 0.0, 1.0)
-LINE_COLORS = (
-    _cmyk_to_rgb_hex(0.8, 0.1, 0.0, 0.1),
-    _cmyk_to_rgb_hex(0.0, 0.6, 0.2, 0.1),
-    _cmyk_to_rgb_hex(0.1, 0.2, 0.8, 0.1),
-    _cmyk_to_rgb_hex(0.0, 0.4, 0.8, 0.2),
-    _cmyk_to_rgb_hex(0.6, 0.0, 0.1, 0.2),
-)
-DEFAULT_LINE_COLOR = LINE_COLORS[0]
+FOCUS_STABLE_COLOR = "#000000"
+FOCUS_UNSTABLE_COLOR = "#000000"
 COLORBAR_WIDTH_RATIO = 0.04
 COLORBAR_HEIGHT_FRACTION = 0.6
-LISTED_CATEGORICAL_LIMIT = 32
 PANEL_LABEL_COORDS = (-0.12, 1.02)
 PANEL_LABEL_ALIGN = ("right", "bottom")
 PANEL_LABEL_ABOVE_COORDS = (0.0, 1.02)
@@ -62,7 +53,7 @@ BIF_COLUMN_TOL = 1e-6
 MIN_PROBABILITY = 1e-6
 BIF_MARKERS = ("o", "s", "D", "^", "v", "<", ">", "P", "X")
 LINE_WIDTH = 1.5
-MARKER_STRIDE = 4
+MARKER_STRIDE = 2
 BIF_LINESTYLE_CYCLE = ("-", "--", ":", "-.")
 BIF_REFERENCE_ROWS = (0, 1)
 BIF_REFERENCE_MARKER = "^"
@@ -549,113 +540,6 @@ def _summary_path(parameter: Mapping[str, float]) -> str:
     return os.path.join(
         "data",
         f"all_fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter.get('R_j', 0.0)}_{analysis_tag}.pkl",
-    )
-
-
-def _cycle_palette(palette: Sequence[str], count: int) -> List[str]:
-    if count <= 0:
-        return []
-    if not palette:
-        raise ValueError("Cannot cycle an empty palette.")
-    repeats = (count + len(palette) - 1) // len(palette)
-    return list(palette * repeats)[:count]
-
-
-def _sample_cmap_colors(colormap: str, count: int) -> List[str]:
-    if count <= 0:
-        return []
-    try:
-        cmap = plt.get_cmap(colormap)
-    except ValueError as exc:
-        raise SystemExit(f"Unknown matplotlib colormap '{colormap}'.") from exc
-    categorical_colors = getattr(cmap, "colors", None)
-    use_categorical = (
-        isinstance(cmap, mcolors.ListedColormap)
-        and categorical_colors is not None
-        and len(categorical_colors) <= LISTED_CATEGORICAL_LIMIT
-    )
-    if use_categorical:
-        base_colors = list(categorical_colors)
-        repeats = (count + len(base_colors) - 1) // len(base_colors)
-        selected = (base_colors * repeats)[:count]
-    else:
-        if count == 1:
-            positions = [0.5]
-        else:
-            positions = np.linspace(0.0, 1.0, count)
-        selected = [cmap(float(pos)) for pos in positions]
-    return [mcolors.to_hex(color) for color in selected]
-
-
-def _prepare_line_color_map(
-    focus_counts: Sequence[int],
-    *,
-    colormap: str | None,
-) -> Tuple[Dict[int, str], List[Tuple[int, str]]]:
-    mapping: Dict[int, str] = {}
-    entries: List[Tuple[int, str]] = []
-    ordered_counts = sorted(set(int(fc) for fc in focus_counts))
-    if not ordered_counts:
-        return mapping, entries
-    if colormap:
-        colors = _sample_cmap_colors(colormap, len(ordered_counts))
-    else:
-        colors = _cycle_palette(LINE_COLORS, len(ordered_counts))
-    for focus_count, color in zip(ordered_counts, colors):
-        mapping[int(focus_count)] = color
-        entries.append((int(focus_count), color))
-    return mapping, entries
-
-
-def _focus_count_boundaries(focus_counts: Sequence[int]) -> List[float]:
-    if not focus_counts:
-        return []
-    ordered = sorted(focus_counts)
-    if len(ordered) == 1:
-        fc = float(ordered[0])
-        return [fc - 0.5, fc + 0.5]
-    boundaries = [float(ordered[0]) - 0.5]
-    for prev_val, next_val in zip(ordered[:-1], ordered[1:]):
-        boundaries.append((float(prev_val) + float(next_val)) / 2.0)
-    boundaries.append(float(ordered[-1]) + 0.5)
-    return boundaries
-
-
-def _draw_focus_count_colorbar(
-    fig: plt.Figure,
-    axis: plt.Axes,
-    entries: Sequence[Tuple[int, str]],
-    font_cfg: FontCfg,
-) -> Optional[float]:
-    if not entries:
-        axis.set_axis_off()
-        return
-    axis.set_axis_off()
-    target_axis = axis
-    if 0.0 < COLORBAR_HEIGHT_FRACTION < 1.0:
-        inset_height = COLORBAR_HEIGHT_FRACTION
-        inset_y = (1.0 - inset_height) / 2.0
-        target_axis = axis.inset_axes([0.0, inset_y, 1.0, inset_height])
-    focus_counts = [fc for fc, _ in entries]
-    colors = [color for _, color in entries]
-    cmap = mcolors.ListedColormap(colors)
-    boundaries = _focus_count_boundaries(focus_counts)
-    norm = mcolors.BoundaryNorm(boundaries, cmap.N)
-    scalar = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-    scalar.set_array([])
-    colorbar = fig.colorbar(
-        scalar,
-        cax=target_axis,
-        ticks=focus_counts,
-        boundaries=boundaries,
-    )
-    colorbar.ax.tick_params(labelsize=font_cfg.tick)
-    colorbar.ax.set_ylabel(
-        "# active clusters",
-        fontsize=font_cfg.label,
-        rotation=-90,
-        va="bottom",
-        labelpad=10,
     )
 
 
@@ -1250,6 +1134,7 @@ def plot_bifurcation_row(
             avg_value = float(entry["avg"]) * 100.0
             label = str(entry.get("letter", ""))
             if onset_x > lower_bound:
+                print(onset_x, avg_value)
                 ax.scatter(
                     [onset_x],
                     [avg_value],
@@ -1277,7 +1162,7 @@ def plot_bifurcation_row(
             ylabel = ax.text(
                 -0.18,
                 0.5,
-                r"$\boldsymbol{\bar{p}}$ [%]",
+                r"$\overline{p}$ [%]",
                 transform=ax.transAxes,
                 rotation=90,
                 va="center",
@@ -1520,6 +1405,7 @@ def main() -> None:
     reference_row_set = {idx for idx in BIF_REFERENCE_ROWS if 0 <= idx < n_rows}
     for r_idx, avg_conn in enumerate(row_order):
         scaled_parameter = _scale_probabilities(base_parameter, avg_conn)
+        print(scaled_parameter)
         row_parameter = dict(scaled_parameter)
         overrides = row_parameter_overrides.get(r_idx)
         if overrides:
@@ -1570,7 +1456,7 @@ def main() -> None:
                 row_label = ax.text(
                     -0.18,
                     0.5,
-                    rf"$\boldsymbol{{\bar{{p}}}} \boldsymbol{{=}} {percentage:.0f}\,\%$",
+                    rf"$\overline{{p}}={percentage:.0f}\,\%$",
                     transform=ax.transAxes,
                     rotation=90,
                     va="center",
@@ -1639,7 +1525,15 @@ def main() -> None:
         )
     colorbar_rows = slice(0, max(1, n_rows))
     colorbar_ax = fig.add_subplot(grid[colorbar_rows, -1])
-    _draw_focus_count_colorbar(fig, colorbar_ax, colorbar_entries, font_cfg)
+    draw_listed_colorbar(
+        fig,
+        colorbar_ax,
+        colorbar_entries,
+        font_cfg=font_cfg,
+        label="# active clusters",
+        height_fraction=COLORBAR_HEIGHT_FRACTION,
+        label_kwargs={"rotation": -90, "va": "bottom", "labelpad": 10},
+    )
     save_kwargs = {"dpi": 600}
     fig.savefig(args.output, **save_kwargs)
     if args.write_pdf:

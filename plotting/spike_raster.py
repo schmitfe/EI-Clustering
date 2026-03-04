@@ -195,13 +195,14 @@ def plot_spike_raster(
         group_mask = _evaluate_group_mask(group.ids, neuron_ids)
         if not np.any(group_mask):
             continue
-        ax.plot(
+        ax.scatter(
             times[group_mask],
             neuron_ids[group_mask],
-            linestyle="None",
+            s=float(group.size) ** 2,
+            c=group.color,
             marker=group.marker,
-            markersize=group.size,
-            color=group.color,
+            linewidths=0,
+            edgecolors="none",
         )
 
     # Limits

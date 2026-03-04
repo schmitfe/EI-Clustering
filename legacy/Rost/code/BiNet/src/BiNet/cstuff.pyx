@@ -10,7 +10,8 @@ cimport cython
 cimport cpython
 from cpython.array cimport array, clone
 
-ctypedef np.int_t DTYPE_t
+# np.int_t no longer exists in modern NumPy headers; lock the legacy code to 64-bit ints.
+ctypedef np.int64_t DTYPE_t
 
 
 cpdef double erfc(double x):
