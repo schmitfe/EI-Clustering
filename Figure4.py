@@ -12,13 +12,19 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib import colors as mpl_colors  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib import ticker as mpl_ticker  # noqa: E402
 import numpy as np  # noqa: E402
 
 import figure_helpers as helpers  # noqa: E402
 import binary_simulation_multi_init as binary_multi  # noqa: E402
-from plotting import FontCfg, add_panel_label, style_axes  # noqa: E402
+from plotting import (  # noqa: E402
+    FontCfg,
+    _prepare_value_color_map,
+    add_panel_label,
+    draw_listed_colorbar,
+    style_axes,
+)
 from sim_config import add_override_arguments, load_from_args  # noqa: E402
 
 
@@ -470,19 +476,19 @@ def _plot_correlation_figure(
         raise ValueError("No simulation data available to plot.")
     fig, (ax_input, ax_output) = plt.subplots(1, 2, sharey=True, figsize=(13 / 2, 4.0))
 
-    plt.subplots_adjust(top=0.85,
-                        bottom=0.15,
-                        left=0.125,
-                        right=0.9,)
-    connectivity_values = [payload["connectivity"] for payload in results.values()]
-    cmap = plt.cm.viridis
-    norm = mpl_colors.Normalize(
-        vmin=min(connectivity_values), vmax=max(connectivity_values) if connectivity_values else 1.0
+    plt.subplots_adjust(
+        top=0.85,
+        bottom=0.15,
+        left=0.125,
+        right=0.82,
     )
+    connectivity_values = [payload["connectivity"] for payload in results.values()]
+    color_map, colorbar_entries = _prepare_value_color_map(connectivity_values)
     for ax in (ax_input, ax_output):
         ax.axhline(0.0, color="0.6", linestyle="--", linewidth=0.8, zorder=0)
     for payload in results.values():
-        color = cmap(norm(payload["connectivity"]))
+        connectivity_value = float(payload["connectivity"])
+        color = color_map[connectivity_value]
         kappa = payload["kappa"]
         metrics = payload["metrics"]
         _plot_series(ax_input, kappa, metrics["input"]["within"], color=color, style=WITHIN_STYLE)
@@ -527,10 +533,20 @@ def _plot_correlation_figure(
         frameon=False,
         fontsize=font_cfg.legend,
     )
-    if len(connectivity_values) > 1:
-        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-        cbar = fig.colorbar(sm, ax=[ax_input, ax_output], fraction=0.05, pad=0.04)
-        cbar.set_label(r"$\overline{p}$", fontsize=font_cfg.legend)
+    if len(colorbar_entries) > 1:
+        colorbar_ax = fig.add_axes([0.84, 0.15, 0.06, 0.7])
+        colorbar = draw_listed_colorbar(
+            fig,
+            colorbar_ax,
+            colorbar_entries,
+            font_cfg=font_cfg,
+            label=r"$\overline{p}$",
+            height_fraction=0.5,
+            width_fraction=0.25,
+            label_kwargs={"labelpad": 8},
+        )
+        if colorbar is not None:
+            colorbar.ax.yaxis.set_major_formatter(mpl_ticker.FormatStrFormatter("%.2f"))
     #fig.tight_layout(rect=(0, 0, 1, 0.95))
     base = Path(output_prefix)
     base.parent.mkdir(parents=True, exist_ok=True)
