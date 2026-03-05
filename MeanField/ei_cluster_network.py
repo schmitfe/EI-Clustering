@@ -24,7 +24,8 @@ class EIClusterNetwork(RateSystem):
         *,
         kappa: float | None = None,
         connection_type: str | None = None,
-        use_temporal_variance: bool = True,
+        use_temporal_variance: bool = False,
+        use_quadratic_variance: bool = True,
         focus_population=None,
         prefer_jax: bool = True,
         max_steps: int = 256,
@@ -42,6 +43,7 @@ class EIClusterNetwork(RateSystem):
             kappa=kappa,
             connection_type=connection_type,
             use_temporal_variance=use_temporal_variance,
+            use_quadratic_variance=use_quadratic_variance,
         )
 
     def _build_dynamics(
@@ -54,7 +56,9 @@ class EIClusterNetwork(RateSystem):
             kappa_value = parameter.get("kappa", 0.0)
         conn_kind = network_kwargs.get("connection_type") or parameter.get("connection_type", "bernoulli")
         use_temporal_variance = bool(network_kwargs.get("use_temporal_variance", True))
-        connectivity = self._build_connectivity(parameter, float(kappa_value), str(conn_kind), use_temporal_variance)
+        use_quadratic_variance = bool(network_kwargs.get("use_quadratic_variance", True))
+
+        connectivity = self._build_connectivity(parameter, float(kappa_value), str(conn_kind), use_temporal_variance, use_quadratic_variance)
         tau = np.ones(2 * self.Q, dtype=float)
         tau[: self.Q] *= parameter["tau_e"]
         tau[self.Q :] *= parameter["tau_i"]
@@ -121,7 +125,7 @@ class EIClusterNetwork(RateSystem):
         return groups
 
     def _build_connectivity(
-        self, parameter: Dict, kappa: float, connection_type: str, use_temporal_variance: bool
+        self, parameter: Dict, kappa: float, connection_type: str, use_temporal_variance: bool, use_quadratic_variance: bool,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray] | Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         N_E = parameter["N_E"]
         N_I = parameter["N_I"]
@@ -217,14 +221,14 @@ class EIClusterNetwork(RateSystem):
         A = self._structured_matrix(mean_values)
 
         var_coeffs = dict(
-            EE_IN=self._variance_coeffs(P_EE, J_EE, n_e, connection_type, use_temporal_variance),
-            EE_OUT=self._variance_coeffs(p_ee, j_ee, n_e, connection_type, use_temporal_variance),
-            IE_IN=self._variance_coeffs(P_IE, J_IE, n_e, connection_type, use_temporal_variance),
-            IE_OUT=self._variance_coeffs(p_ie, j_ie, n_e, connection_type, use_temporal_variance),
-            EI_IN=self._variance_coeffs(P_EI, J_EI, n_i, connection_type, use_temporal_variance),
-            EI_OUT=self._variance_coeffs(p_ei, j_ei, n_i, connection_type, use_temporal_variance),
-            II_IN=self._variance_coeffs(P_II, J_II, n_i, connection_type, use_temporal_variance),
-            II_OUT=self._variance_coeffs(p_ii, j_ii, n_i, connection_type, use_temporal_variance),
+            EE_IN=self._variance_coeffs(P_EE, J_EE, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            EE_OUT=self._variance_coeffs(p_ee, j_ee, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            IE_IN=self._variance_coeffs(P_IE, J_IE, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            IE_OUT=self._variance_coeffs(p_ie, j_ie, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            EI_IN=self._variance_coeffs(P_EI, J_EI, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
+            EI_OUT=self._variance_coeffs(p_ei, j_ei, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
+            II_IN=self._variance_coeffs(P_II, J_II, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
+            II_OUT=self._variance_coeffs(p_ii, j_ii, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
         )
         b_values = {key: coeffs[0] for key, coeffs in var_coeffs.items()}
         B = self._structured_matrix(b_values)
@@ -274,12 +278,16 @@ class EIClusterNetwork(RateSystem):
         population: float,
         connection_type: str,
         use_temporal_variance: bool,
+        use_quadratic_variance: bool,
     ) -> tuple[float, float]:
         #if not use_temporal_variance:
         #    return EIClusterNetwork._variance(prob, weight, population, connection_type), 0.0
         conn_kind = connection_type.lower()
         if conn_kind == "poisson":
-            b = (prob + prob ** 2) * weight ** 2 * population
+            if use_quadratic_variance:
+                b= (prob + prob ** 2) * weight ** 2 * population
+            else:
+                b = (prob) * weight ** 2 * population
             c = -(prob ** 2) * weight ** 2 * population
             return b, c
         if conn_kind == "fixed-indegree":
