@@ -18,6 +18,7 @@ __all__ = [
     "_cycle_palette",
     "_sample_cmap_colors",
     "_prepare_line_color_map",
+    "_prepare_value_color_map",
     "compute_discrete_boundaries",
     "draw_listed_colorbar",
 ]
@@ -99,6 +100,28 @@ def _prepare_line_color_map(
     return mapping, entries
 
 
+def _prepare_value_color_map(
+    values: Sequence[float],
+    *,
+    colormap: str | None = None,
+    palette: Sequence[str] | None = None,
+) -> Tuple[Dict[float, str], List[Tuple[float, str]]]:
+    mapping: Dict[float, str] = {}
+    entries: List[Tuple[float, str]] = []
+    ordered_values = sorted({float(value) for value in values if value is not None})
+    if not ordered_values:
+        return mapping, entries
+    palette_source: Sequence[str] = palette if palette is not None else LINE_COLORS
+    if colormap:
+        colors = _sample_cmap_colors(colormap, len(ordered_values))
+    else:
+        colors = _cycle_palette(palette_source, len(ordered_values))
+    for value, color in zip(ordered_values, colors):
+        mapping[float(value)] = color
+        entries.append((float(value), color))
+    return mapping, entries
+
+
 def compute_discrete_boundaries(values: Sequence[float]) -> List[float]:
     numeric = [float(value) for value in values if value is not None]
     if not numeric:
@@ -107,11 +130,14 @@ def compute_discrete_boundaries(values: Sequence[float]) -> List[float]:
     if len(ordered) == 1:
         val = float(ordered[0])
         return [val - 0.5, val + 0.5]
-    boundaries = [ordered[0] - 0.5]
+    gaps = [next_val - prev_val for prev_val, next_val in zip(ordered[:-1], ordered[1:])]
+    first_gap = gaps[0]
+    last_gap = gaps[-1]
+    boundaries = [ordered[0] - first_gap / 2.0]
     for prev_val, next_val in zip(ordered[:-1], ordered[1:]):
         midpoint = (prev_val + next_val) / 2.0
         boundaries.append(midpoint)
-    boundaries.append(ordered[-1] + 0.5)
+    boundaries.append(ordered[-1] + last_gap / 2.0)
     return boundaries
 
 
@@ -124,6 +150,7 @@ def draw_listed_colorbar(
     label: str,
     orientation: str = "vertical",
     height_fraction: float | None = None,
+    width_fraction: float | None = None,
     use_parent_axis: bool = False,
     label_kwargs: Mapping[str, Any] | None = None,
 ) -> None:
@@ -150,10 +177,19 @@ def draw_listed_colorbar(
     else:
         axis.set_axis_off()
         target_axis: "Axes" = axis
+        inset = [0.0, 0.0, 1.0, 1.0]
+        use_inset = False
         if height_fraction is not None and 0.0 < height_fraction < 1.0:
             inset_height = height_fraction
-            inset_y = (1.0 - inset_height) / 2.0
-            target_axis = axis.inset_axes([0.0, inset_y, 1.0, inset_height])
+            inset[1] = (1.0 - inset_height) / 2.0
+            inset[3] = inset_height
+            use_inset = True
+        if width_fraction is not None and 0.0 < width_fraction < 1.0:
+            inset[0] = 0.0
+            inset[2] = width_fraction
+            use_inset = True
+        if use_inset:
+            target_axis = axis.inset_axes(inset)
         colorbar_kwargs["cax"] = target_axis
     colorbar = fig.colorbar(scalar, **colorbar_kwargs)
     colorbar.ax.tick_params(labelsize=font_cfg.tick)

@@ -19,6 +19,7 @@ from .palette import (
     _cycle_palette,
     _sample_cmap_colors,
     _prepare_line_color_map,
+    _prepare_value_color_map,
     compute_discrete_boundaries,
     draw_listed_colorbar,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "_cycle_palette",
     "_sample_cmap_colors",
     "_prepare_line_color_map",
+    "_prepare_value_color_map",
     "compute_discrete_boundaries",
     "draw_listed_colorbar",
 ]
