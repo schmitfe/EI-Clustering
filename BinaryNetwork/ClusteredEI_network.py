@@ -33,22 +33,20 @@ def _normalize_conn_type(kind: str | None) -> str:
 def _split_counts(total: int, groups: int) -> List[int]:
     if groups <= 0:
         raise ValueError("Q must be positive.")
-    base = total // groups
-    remainder = total % groups
-    counts = []
-    for idx in range(groups):
-        counts.append(base + (1 if idx < remainder else 0))
-    return counts
+    if total % groups != 0:
+        raise ValueError(f"Population size {total} must be divisible by Q={groups} to match legacy clustering.")
+    return [total // groups] * groups
 
 
 def _mix_scales(R_plus: float, Q: int, kappa: float) -> Tuple[float, float, float, float]:
+    positive = max(float(R_plus), 0.0)
     if Q <= 1:
-        value = max(R_plus, 0.0)
+        value = positive
         weight = value ** kappa
         return value ** (1.0 - kappa), value ** (1.0 - kappa), weight, weight
-    prob_in = R_plus ** (1.0 - kappa)
+    prob_in = positive ** (1.0 - kappa)
     prob_out = (Q - prob_in) / (Q - 1)
-    weight_in = R_plus ** kappa
+    weight_in = positive ** kappa
     weight_out = (Q - weight_in) / (Q - 1)
     return prob_in, prob_out, weight_in, weight_out
 
@@ -215,8 +213,6 @@ def _resolve_initializers(config, excit_sizes: Sequence[int], inhib_sizes: Seque
 class ClusteredEI_network(BaseBinaryNetwork):
     def __init__(self, parameter: Dict, *, kappa: float | None = None, connection_type: str | None = None, name="Binary EI Network"):
         super().__init__(name)
-        # break to ensure we use legacy!
-        raise
         self.parameter = dict(parameter)
         self.Q = int(self.parameter["Q"])
         self.connection_type = _normalize_conn_type(connection_type or self.parameter.get("connection_type"))
@@ -237,7 +233,7 @@ class ClusteredEI_network(BaseBinaryNetwork):
 
     def _build_populations(self):
         tau_e = float(self.parameter["tau_e"])
-        tau_i = float(self.parameter["tau_i"])
+        tau_i = float(self.parameter.get("tau_i", 0.5 * tau_e))
         theta_E = self.connection_parameters["theta_E"]
         theta_I = self.connection_parameters["theta_I"]
         for idx, size in enumerate(self.E_sizes):
@@ -343,7 +339,7 @@ class ClusteredEI_network(BaseBinaryNetwork):
         pool = np.concatenate(entries) if len(entries) > 1 else entries[0]
         self.configure_update_queue(pool, chunk_size=chunk_size)
 
-    def initialize(self, autapse: bool = True):
+    def initialize(self, autapse: bool = False):
         self._ensure_structure()
         super().initialize(autapse=autapse)
 

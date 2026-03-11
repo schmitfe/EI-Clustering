@@ -37,10 +37,7 @@ def _dense_batch_kernel(neurons, state, field, thresholds, weights, log_states, 
         neuron = neurons[idx]
         old_state = state[neuron]
         potential = field[neuron]
-        if old_state == 0:
-            new_state = 1 if potential >= thresholds[neuron] else 0
-        else:
-            new_state = 0
+        new_state = 1 if potential > thresholds[neuron] else 0
         if new_state != old_state:
             delta = new_state - old_state
             state[neuron] = new_state
@@ -63,10 +60,7 @@ def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indpt
         neuron = neurons[idx]
         old_state = state[neuron]
         potential = field[neuron]
-        if old_state == 0:
-            new_state = 1 if potential >= thresholds[neuron] else 0
-        else:
-            new_state = 0
+        new_state = 1 if potential > thresholds[neuron] else 0
         if new_state != old_state:
             delta = new_state - old_state
             state[neuron] = new_state
