@@ -1,3 +1,5 @@
+"""Utilities for embedding bitmap or PDF-backed images into Matplotlib axes."""
+
 __all__ = [
     "add_image_ax",
 ]
@@ -29,6 +31,33 @@ def _imread_any(path: str, *, pdf_page: int = 0, pdf_zoom: float = 2.0) -> np.nd
         return mpimg.imread(path)
 
 def add_image_ax(ax, path, label=None, fc: Optional[FontCfg]=None, *, pdf_page: int = 0, pdf_zoom: float = 2.0):
+    """Render an image into an axes and optionally add a panel label.
+
+    Parameters
+    ----------
+    ax:
+        Target Matplotlib axes.
+    path:
+        Image or PDF path.
+    label:
+        Optional panel label placed near the upper-left corner.
+    fc:
+        Optional `FontCfg` used for the label size.
+    pdf_page, pdf_zoom:
+        PDF rendering options used when `path` points to a PDF.
+
+    Examples
+    --------
+    ```python
+    fig, ax = plt.subplots(figsize=(3, 2))
+    add_image_ax(ax, "docs/plotting_assets/spike_raster_example.png", label="A")
+    ```
+
+    Expected output
+    ---------------
+    The axes displays the image and, when `label` is provided, a bold panel
+    label is drawn near the upper-left corner.
+    """
     ax.axis('off')
     try:
         img = _imread_any(path, pdf_page=pdf_page, pdf_zoom=pdf_zoom)

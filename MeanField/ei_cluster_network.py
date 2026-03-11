@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
 from .rate_system import RateSystem
+
+__pdoc__ = {"_total_population": False}
 
 
 def _total_population(parameter: Dict) -> float:
@@ -15,15 +17,38 @@ def _total_population(parameter: Dict) -> float:
 
 
 class EIClusterNetwork(RateSystem):
-    """Specialized rate system for the EI-cluster network."""
+    """Specialized mean-field system for the clustered E/I network.
+
+    Examples
+    --------
+    >>> parameter = {
+    ...     "Q": 2,
+    ...     "N_E": 4000,
+    ...     "N_I": 1000,
+    ...     "V_th": 1.0,
+    ...     "g": 1.0,
+    ...     "p0_ee": 0.2,
+    ...     "p0_ei": 0.2,
+    ...     "p0_ie": 0.2,
+    ...     "p0_ii": 0.2,
+    ...     "R_Eplus": 1.0,
+    ...     "R_j": 0.8,
+    ...     "m_X": 0.1,
+    ...     "tau_e": 1.0,
+    ...     "tau_i": 2.0,
+    ... }
+    >>> system = EIClusterNetwork(parameter, v_focus=0.2, prefer_jax=False)
+    >>> system.population_count
+    4
+    """
 
     def __init__(
         self,
         parameter: Dict,
         v_focus: float,
         *,
-        kappa: float | None = None,
-        connection_type: str | None = None,
+        kappa: Optional[float] = None,
+        connection_type: Optional[str] = None,
         use_temporal_variance: bool = True,
         use_quadratic_variance: bool = True,
         focus_population=None,
@@ -48,8 +73,9 @@ class EIClusterNetwork(RateSystem):
 
     def _build_dynamics(
         self, parameter: Dict, **network_kwargs
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | Tuple[
-        np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+    ) -> Union[
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     ]:
         kappa_value = network_kwargs.get("kappa")
         if kappa_value is None:
@@ -126,7 +152,10 @@ class EIClusterNetwork(RateSystem):
 
     def _build_connectivity(
         self, parameter: Dict, kappa: float, connection_type: str, use_temporal_variance: bool, use_quadratic_variance: bool,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray] | Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Union[
+        Tuple[np.ndarray, np.ndarray, np.ndarray],
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ]:
         N_E = parameter["N_E"]
         N_I = parameter["N_I"]
         N = _total_population(parameter)

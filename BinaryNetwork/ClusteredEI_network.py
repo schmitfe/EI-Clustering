@@ -1,7 +1,9 @@
+"""Clustered E/I model built on top of the generic binary-network engine."""
+
 from __future__ import annotations
 
 import math
-from typing import Callable, Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -23,7 +25,7 @@ def _total_population(parameter: Dict) -> float:
     return float(parameter["N_E"]) + float(parameter["N_I"])
 
 
-def _normalize_conn_type(kind: str | None) -> str:
+def _normalize_conn_type(kind: Optional[str]) -> str:
     label = "bernoulli" if kind is None else str(kind).replace("_", "-").lower()
     if label not in {"bernoulli", "poisson", "fixed-indegree"}:
         raise ValueError(f"Unknown connection_type '{kind}'. Expected 'bernoulli', 'poisson', or 'fixed-indegree'.")
@@ -131,7 +133,7 @@ def _flatten_values(values) -> List:
     return [values]
 
 
-def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Dict[str, float] | None]:
+def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Optional[Dict[str, float]]]:
     if entry is None:
         return [None] * count
     mode = default_mode
@@ -149,7 +151,7 @@ def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Dict
         items = items * count
     if len(items) != count:
         raise ValueError(f"Initializer definition must provide {count} entries, got {len(items)}.")
-    normalized: List[Dict[str, float] | None] = []
+    normalized: List[Optional[Dict[str, float]]] = []
     for value in items:
         if value is None:
             normalized.append(None)
@@ -158,7 +160,7 @@ def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Dict
     return normalized
 
 
-def _make_initializer(spec: Dict[str, float] | None, size: int) -> Callable[[int], np.ndarray] | None:
+def _make_initializer(spec: Optional[Dict[str, float]], size: int) -> Optional[Callable[[int], np.ndarray]]:
     if spec is None:
         return None
     mode = spec.get("mode", "bernoulli").lower()
@@ -187,8 +189,8 @@ def _resolve_initializers(config, excit_sizes: Sequence[int], inhib_sizes: Seque
     if not isinstance(config, dict):
         config = {"default": config}
     default_mode = str(config.get("mode", "bernoulli")).lower()
-    excit_specs: List[Dict[str, float] | None] = [None] * len(excit_sizes)
-    inhib_specs: List[Dict[str, float] | None] = [None] * len(inhib_sizes)
+    excit_specs: List[Optional[Dict[str, float]]] = [None] * len(excit_sizes)
+    inhib_specs: List[Optional[Dict[str, float]]] = [None] * len(inhib_sizes)
 
     def apply(entry, targets):
         if entry is None:
@@ -211,7 +213,32 @@ def _resolve_initializers(config, excit_sizes: Sequence[int], inhib_sizes: Seque
 
 
 class ClusteredEI_network(BaseBinaryNetwork):
-    def __init__(self, parameter: Dict, *, kappa: float | None = None, connection_type: str | None = None, name="Binary EI Network"):
+    """Repository-specific clustered E/I binary network.
+
+    Examples
+    --------
+    >>> parameter = {
+    ...     "Q": 2,
+    ...     "N_E": 4,
+    ...     "N_I": 2,
+    ...     "V_th": 1.0,
+    ...     "g": 1.0,
+    ...     "p0_ee": 0.2,
+    ...     "p0_ei": 0.2,
+    ...     "p0_ie": 0.2,
+    ...     "p0_ii": 0.2,
+    ...     "R_Eplus": 1.0,
+    ...     "R_j": 0.0,
+    ...     "m_X": 0.0,
+    ...     "tau_e": 5.0,
+    ...     "tau_i": 10.0,
+    ... }
+    >>> net = ClusteredEI_network(parameter)
+    >>> net.Q
+    2
+    """
+
+    def __init__(self, parameter: Dict, *, kappa: Optional[float] = None, connection_type: Optional[str] = None, name="Binary EI Network"):
         super().__init__(name)
         self.parameter = dict(parameter)
         self.Q = int(self.parameter["Q"])
@@ -316,6 +343,13 @@ class ClusteredEI_network(BaseBinaryNetwork):
         ram_budget_gb: float = 12.0,
         weight_dtype=np.float32,
     ):
+        """Build clustered populations/synapses and initialize the parent network.
+
+        Expected output
+        ---------------
+        After initialization, `state`, `field`, and the sampled connectivity are
+        allocated and ready for `run(...)`.
+        """
         self._ensure_structure()
         super().initialize(
             autapse=autapse,
@@ -325,4 +359,5 @@ class ClusteredEI_network(BaseBinaryNetwork):
         )
 
     def reinitalize(self):
+        """Rebuild the simulation state with the stored parameters."""
         self.initialize()

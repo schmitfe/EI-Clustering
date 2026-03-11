@@ -1,3 +1,5 @@
+"""Spike-train surrogate generation utilities."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -9,7 +11,32 @@ __all__ = ["gamma_spikes"]
 
 
 def gamma_spikes(rates, order=[1], tlim=[0.0, 1000.0], dt=0.1):
-    """Generate spike trains from a homogeneous gamma process."""
+    """Generate surrogate spike trains from a homogeneous gamma process.
+
+    Parameters
+    ----------
+    rates:
+        Scalar or per-train firing rates in spikes/s.
+    order:
+        Gamma-process order parameter per train. `1` corresponds to a Poisson
+        process.
+    tlim:
+        Two-element time interval `[tmin, tmax]` in ms.
+    dt:
+        Simulation step in ms.
+
+    Returns
+    -------
+    np.ndarray
+        Canonical `spiketimes` array.
+
+    Examples
+    --------
+    >>> np.random.seed(0)
+    >>> spikes = gamma_spikes([10.0], order=[1], tlim=[0.0, 10.0], dt=1.0)
+    >>> spikes.shape[0]
+    2
+    """
     time = pylab.arange(tlim[0], tlim[1] + dt, dt)
     if len(rates) == 1:
         rates = rates[0] * order[0]

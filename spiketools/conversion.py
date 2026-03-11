@@ -1,7 +1,40 @@
+"""Conversion utilities for the canonical `spiketimes` representation.
+
+The package-wide spike format is a `float` array of shape `(2, n_spikes)`:
+
+- row `0`: spike times in milliseconds
+- row `1`: trial, unit, or neuron indices
+
+Examples
+--------
+From NEST event dictionaries:
+
+```python
+events = recorder.get("events")
+spiketimes = np.vstack([
+    events["times"],
+    events["senders"] - events["senders"].min(),
+]).astype(float)
+```
+
+From a binned spike-count matrix with shape `(n_neurons, n_time_bins)`:
+
+```python
+time = np.arange(spike_counts.shape[1], dtype=float) * dt_ms
+spiketimes = binary_to_spiketimes(spike_counts, time)
+```
+
+Back to a per-neuron list representation:
+
+```python
+trains = spiketimes_to_list(spiketimes)
+```
+"""
+
 from __future__ import annotations
 
 from bisect import bisect_right
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 import numpy as np
 import pylab
@@ -17,7 +50,24 @@ __all__ = [
 
 def get_time_limits(spiketimes: np.ndarray) -> list[float]:
     """
-    Return [tmin, tmax] bounds inferred from spike times (inclusive start, exclusive end).
+    Infer time limits from a `spiketimes` array.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation with shape `(2, n_spikes)`.
+
+    Returns
+    -------
+    list[float]
+        `[tmin, tmax]` with inclusive start and exclusive end. If inference
+        fails, `[0.0, 1.0]` is returned as a safe fallback.
+
+    Examples
+    --------
+    >>> spikes = np.array([[5.0, 8.0], [0.0, 1.0]])
+    >>> get_time_limits(spikes)
+    [5.0, 9.0]
     """
     try:
         tlim = [
@@ -33,20 +83,41 @@ def get_time_limits(spiketimes: np.ndarray) -> list[float]:
 
 def spiketimes_to_binary(
     spiketimes: np.ndarray,
-    tlim: Sequence[float] | None = None,
+    tlim: Optional[Sequence[float]] = None,
     dt: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Convert an array of spiketimes into a binary spike matrix (trials x time).
+    Convert `spiketimes` into a spike-count matrix on a regular time grid.
 
     Parameters
     ----------
     spiketimes:
-        Array where row 0 holds spike times in ms and row 1 holds trial indices.
+        Canonical spike representation. Row `0` stores times in ms, row `1`
+        stores trial or unit indices.
     tlim:
         Two-element sequence defining [tmin, tmax] in ms. Defaults to inferred bounds.
     dt:
         Temporal resolution in ms.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        `(binary, time)` where `binary.shape == (n_trials, n_bins)` and
+        `time` contains the left bin edges in ms.
+
+    Notes
+    -----
+    The output is not strictly binary if multiple spikes land in the same bin.
+    In that case the matrix stores spike counts per bin.
+
+    Examples
+    --------
+    >>> spikes = np.array([[0.0, 1.0, 1.0], [0.0, 0.0, 1.0]])
+    >>> binary, time = spiketimes_to_binary(spikes, tlim=[0.0, 3.0], dt=1.0)
+    >>> binary.astype(int).tolist()
+    [[1, 1, 0], [0, 1, 0]]
+    >>> time.tolist()
+    [-0.5, 0.5, 1.5]
     """
     if tlim is None:
         tlim = get_time_limits(spiketimes)
@@ -71,7 +142,39 @@ def spiketimes_to_binary(
 
 def binary_to_spiketimes(binary: np.ndarray, time: Iterable[float]) -> np.ndarray:
     """
-    Convert a binary spike matrix and corresponding time axis into spiketimes.
+    Convert a binned spike matrix into canonical `spiketimes`.
+
+    Parameters
+    ----------
+    binary:
+        Array with shape `(n_trials, n_bins)`. Values larger than `1` are
+        interpreted as multiple spikes in the same bin.
+    time:
+        One time value per bin, typically the left bin edges in ms.
+
+    Returns
+    -------
+    np.ndarray
+        `float` array with shape `(2, n_spikes_or_markers)`.
+
+    Notes
+    -----
+    Trials with no spikes are retained via placeholder columns
+    `[nan, trial_id]`.
+
+    This function assumes that each non-zero entry denotes one or more spike
+    events in that time bin. It is not intended for persistent state matrices
+    where a neuron stays at `1` across consecutive bins until the next update.
+
+    Examples
+    --------
+    Convert a spike-count raster on a regular grid:
+
+    >>> binary_to_spiketimes(
+    ...     np.array([[1, 0, 2], [0, 0, 0]]),
+    ...     [0.0, 1.0, 2.0],
+    ... ).tolist()
+    [[0.0, 2.0, 2.0, nan], [0.0, 0.0, 0.0, 1.0]]
     """
     time = pylab.array(time)
     spiketimes: list[list[float]] = [[], []]
@@ -100,7 +203,22 @@ def binary_to_spiketimes(binary: np.ndarray, time: Iterable[float]) -> np.ndarra
 
 def spiketimes_to_list(spiketimes: np.ndarray) -> list[np.ndarray]:
     """
-    Convert the spiketimes array into a list-of-arrays representation per trial.
+    Convert canonical `spiketimes` into one array per trial or unit.
+
+    Parameters
+    ----------
+    spiketimes:
+        Spike array with times in row `0` and indices in row `1`.
+
+    Returns
+    -------
+    list[np.ndarray]
+        `result[i]` contains the spike times of trial or unit `i`.
+
+    Examples
+    --------
+    >>> spiketimes_to_list(np.array([[1.0, 2.0, 4.0], [0.0, 1.0, 1.0]]))
+    [array([1.]), array([2., 4.])]
     """
     if spiketimes.shape[1] == 0:
         return []
@@ -114,7 +232,7 @@ def spiketimes_to_list(spiketimes: np.ndarray) -> list[np.ndarray]:
     trial_order = pylab.argsort(orderedspiketimes[1], kind="mergesort")
     orderedspiketimes = orderedspiketimes[:, trial_order]
 
-    spikelist: list[np.ndarray | None] = [None] * len(trials)
+    spikelist: list[Optional[np.ndarray]] = [None] * len(trials)
     start = 0
     for trial in trials:
         end = bisect_right(orderedspiketimes[1], trial)
@@ -126,7 +244,29 @@ def spiketimes_to_list(spiketimes: np.ndarray) -> list[np.ndarray]:
 
 def cut_spiketimes(spiketimes: np.ndarray, tlim: Sequence[float]) -> np.ndarray:
     """
-    Restrict spiketimes to the provided bounds while preserving empty-trial markers.
+    Restrict `spiketimes` to a time interval.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    tlim:
+        Two-element sequence `[tmin, tmax]` in ms. The interval is inclusive at
+        the start and exclusive at the end.
+
+    Returns
+    -------
+    np.ndarray
+        Cropped spike array. Empty trials are still represented by
+        `[nan, trial_id]` markers.
+
+    Examples
+    --------
+    >>> cut_spiketimes(
+    ...     np.array([[1.0, 3.0, 5.0], [0.0, 0.0, 1.0]]),
+    ...     [2.0, 5.0],
+    ... ).tolist()
+    [[3.0, nan], [0.0, 1.0]]
     """
     alltrials = list(set(spiketimes[1, :]))
     cut_spikes = spiketimes[:, pylab.isfinite(spiketimes[0])]

@@ -1,3 +1,9 @@
+"""Variability metrics for spike trains.
+
+Unless noted otherwise, functions operate on canonical `spiketimes` arrays with
+times in row `0` and trial or unit indices in row `1`.
+"""
+
 from __future__ import annotations
 
 from bisect import bisect_right
@@ -35,7 +41,22 @@ __all__ = [
 
 
 def ff(spiketimes, mintrials=None, tlim=None):
-    """Compute the Fano factor across trials."""
+    """Compute the Fano factor across trials or units.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    mintrials:
+        Optional minimum number of rows required for a valid estimate.
+    tlim:
+        Optional `[tmin, tmax]` counting window in ms.
+
+    Examples
+    --------
+    >>> ff(np.array([[0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]), tlim=[0.0, 2.0])
+    0.0
+    """
     if tlim is None:
         tlim = get_time_limits(spiketimes)
     dt = tlim[1] - tlim[0]
@@ -49,7 +70,32 @@ def ff(spiketimes, mintrials=None, tlim=None):
 
 
 def kernel_fano(spiketimes, window, dt=1.0, tlim=None, components=False):
-    """Sliding-window Fano factor estimated from spike counts."""
+    """Estimate a sliding-window Fano factor from binned spike counts.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    window:
+        Counting window in ms.
+    dt:
+        Bin width in ms.
+    tlim:
+        Optional analysis interval in ms.
+    components:
+        If `True`, return variance and mean separately instead of their ratio.
+
+    Examples
+    --------
+    >>> fano, time = kernel_fano(
+    ...     np.array([[0.0, 2.0, 0.0, 2.0], [0.0, 0.0, 1.0, 1.0]]),
+    ...     window=2.0,
+    ...     dt=1.0,
+    ...     tlim=[0.0, 4.0],
+    ... )
+    >>> fano.shape, time.shape
+    ((3,), (3,))
+    """
     if tlim is None:
         tlim = get_time_limits(spiketimes)
     if tlim[1] - tlim[0] == window:
@@ -75,7 +121,27 @@ def cv2(
     bessel_correction=False,
     minvals=0,
 ):
-    """Compute the squared coefficient of variation for inter-spike intervals."""
+    """Compute the coefficient-of-variation statistic from inter-spike intervals.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    pool:
+        If `True`, pool intervals across trials or units before computing the
+        statistic. Otherwise compute per row and average.
+    return_all:
+        If `True`, return per-row values instead of their mean.
+    bessel_correction:
+        Use `ddof=1` in the interval variance.
+    minvals:
+        Minimum number of finite intervals required for a per-row value.
+
+    Examples
+    --------
+    >>> round(float(cv2(np.array([[0.0, 2.0, 5.0], [0.0, 0.0, 0.0]]))), 3)
+    0.04
+    """
     if spiketimes.shape[1] < 3:
         if return_all:
             return pylab.array([pylab.nan])
@@ -125,7 +191,13 @@ def _consecutive_intervals(spiketimes):
 
 
 def cv_two(spiketimes, min_vals=20):
-    """Compute the local coefficient of variation (Cv2) measure."""
+    """Compute the local Cv2 measure from consecutive inter-spike intervals.
+
+    Examples
+    --------
+    >>> round(float(cv_two(np.array([[0.0, 2.0, 5.0, 9.0], [0.0, 0.0, 0.0, 0.0]]), min_vals=2)), 3)
+    0.343
+    """
     consecutive_isis = _consecutive_intervals(spiketimes)
     ms = (
         2
@@ -138,7 +210,13 @@ def cv_two(spiketimes, min_vals=20):
 
 
 def lv(spiketimes, min_vals=20):
-    """Compute the local variation metric."""
+    """Compute the Shinomoto local variation metric.
+
+    Examples
+    --------
+    >>> round(float(lv(np.array([[0.0, 2.0, 5.0, 9.0], [0.0, 0.0, 0.0, 0.0]]), min_vals=2)), 3)
+    0.091
+    """
     consecutive_isis = _consecutive_intervals(spiketimes)
     ms = (
         3
@@ -161,7 +239,40 @@ def time_resolved_cv2(
     minvals=0,
     return_all=False,
 ):
-    """Sliding-window Cv2 estimate."""
+    """Estimate Cv2 in sliding windows over time.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    window:
+        Window width in ms. If `None`, it is inferred from the mean ISI.
+    ot:
+        Multiplicative factor used when inferring `window`.
+    tlim:
+        Optional analysis interval in ms.
+    pool:
+        Whether to pool intervals across trials or units.
+    tstep:
+        Window step size in ms.
+    bessel_correction:
+        Use `ddof=1` in the interval variance.
+    minvals:
+        Minimum number of intervals per row.
+    return_all:
+        Return per-row values for each window instead of a single mean.
+
+    Examples
+    --------
+    >>> values, time = time_resolved_cv2(
+    ...     np.array([[0.0, 2.0, 5.0, 9.0], [0.0, 0.0, 0.0, 0.0]]),
+    ...     window=5.0,
+    ...     tlim=[0.0, 10.0],
+    ...     tstep=2.0,
+    ... )
+    >>> values.shape, time.shape
+    ((3,), (3,))
+    """
     if tlim is None:
         tlim = get_time_limits(spiketimes)
 
@@ -223,7 +334,49 @@ def time_warped_cv2(
     minvals=0,
     return_all=False,
 ):
-    """Time-warped Cv2 estimate that compensates for rate fluctuations."""
+    """Estimate Cv2 after compensating for slow rate fluctuations by time warping.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    window:
+        Window width in warped time. If `None`, infer from the mean ISI.
+    ot:
+        Multiplicative factor used for automatic window selection.
+    tstep:
+        Window step size in ms.
+    tlim:
+        Optional `[tmin, tmax]` analysis interval.
+    rate:
+        Optional precomputed `(rate, time)` tuple.
+    kernel_width:
+        Gaussian kernel width in ms when `rate` is not provided.
+    pool:
+        Whether to pool intervals across rows in the Cv2 estimate.
+    dt:
+        Rate-estimation sampling interval in ms.
+    inspection_plots:
+        Plot the forward and backward time-warp mappings for debugging.
+    interpolate:
+        If `True`, interpolate the output back onto a regular time grid.
+    minvals:
+        Minimum number of intervals per row.
+    return_all:
+        Return per-row values for each window instead of a single mean.
+
+    Examples
+    --------
+    >>> values, time = time_warped_cv2(
+    ...     np.array([[0.0, 3.0, 7.0, 12.0], [0.0, 0.0, 0.0, 0.0]]),
+    ...     window=3.0,
+    ...     tlim=[0.0, 13.0],
+    ...     pool=True,
+    ...     dt=1.0,
+    ... )
+    >>> time.ndim
+    1
+    """
     del nstd  # Unused but kept for API compatibility.
     del kernel_type  # Unused but kept for API compatibility.
 
@@ -334,5 +487,15 @@ def time_warped_cv2(
 
 
 def time_resolved_cv_two(spiketimes, window=400, tlim=None, min_vals=10, tstep=1):
-    """Cython-backed rolling Cv2."""
+    """Compute rolling Cv2 using the optional C extension.
+
+    Notes
+    -----
+    This function requires the optional `Cspiketools` extension module.
+
+    Expected output
+    ---------------
+    Returns `(values, time)` with the same window semantics as
+    `time_resolved_cv2(...)` when the compiled extension is available.
+    """
     return _time_resolved_cv_two(spiketimes, window, tlim, min_vals, tstep)

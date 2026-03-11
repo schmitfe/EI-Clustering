@@ -1,3 +1,93 @@
+"""Hierarchical configuration loading, merging, and override helpers.
+
+The functions in this module are the common configuration entry point for the
+figure scripts and pipelines.
+
+Simple hierarchical YAML example:
+
+```yaml
+# my_config.yaml
+Q: 4
+R_Eplus: 6.0
+binary:
+  seed: 3
+  simulation_steps: 200000
+  sample_interval: 10
+plot:
+  raster:
+    stride: 4
+```
+
+Loading that config in another script:
+
+```python
+from sim_config import load_config
+
+cfg = load_config("my_config.yaml")
+binary_seed = cfg["binary"]["seed"]
+```
+
+Applying overrides the same way the figure scripts do:
+
+```python
+from sim_config import load_config
+
+cfg = load_config(
+    "my_config.yaml",
+    overrides=[
+        "binary.seed=7",
+        "binary.simulation_steps=500000",
+        "plot.raster.stride=2",
+    ],
+)
+```
+
+Using the argparse helpers:
+
+```python
+import argparse
+
+from sim_config import add_override_arguments, load_from_args
+
+parser = argparse.ArgumentParser()
+add_override_arguments(parser)
+args = parser.parse_args()
+cfg = load_from_args(args)
+```
+
+What this looks like on the command line:
+
+```python
+# script.py
+import argparse
+
+from sim_config import add_override_arguments, load_from_args
+
+parser = argparse.ArgumentParser()
+add_override_arguments(parser)
+args = parser.parse_args()
+cfg = load_from_args(args)
+print(cfg["binary"]["seed"], cfg["plot"]["raster"]["stride"])
+```
+
+```bash
+python script.py --config my_config.yaml \
+  -O binary.seed=7 \
+  -O plot.raster.stride=2
+```
+
+Expected output
+---------------
+
+`cfg["binary"]["seed"] == 7` and `cfg["plot"]["raster"]["stride"] == 2`.
+
+Regenerating docs:
+
+```bash
+python scripts/generate_api_docs.py
+```
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -6,7 +96,7 @@ import json
 import math
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 
 import numpy as np
 
@@ -19,6 +109,26 @@ else:
 
 
 CONFIG_DIR = Path(__file__).resolve().parent
+
+__all__ = [
+    "write_yaml_config",
+    "sim_tag_from_cfg",
+    "load_config",
+    "parse_overrides",
+    "deep_update",
+    "add_override_arguments",
+    "load_from_args",
+]
+
+__pdoc__ = {
+    "CONFIG_DIR": False,
+    "_to_human": False,
+    "write_human_json": False,
+    "_normalize_for_tag": False,
+    "resolve_base_config": False,
+    "first_float": False,
+    "_resolve_config_path": False,
+}
 
 
 def _to_human(obj, *, float_precision=6, nan_policy="string"):
@@ -54,7 +164,7 @@ def _to_human(obj, *, float_precision=6, nan_policy="string"):
 
 def write_human_json(
     cfg: dict,
-    path: str | Path,
+    path: Union[str, Path],
     *,
     float_precision: int = 6,
     nan_policy: str = "string",
@@ -68,7 +178,17 @@ def write_human_json(
     tmp.write_text(txt, encoding="utf-8")
     tmp.replace(path)
 
-def write_yaml_config(cfg: dict, path: str | Path) -> None:
+def write_yaml_config(cfg: dict, path: Union[str, Path]) -> None:
+    """Write a configuration dictionary as YAML.
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> path = Path("/tmp/example_config.yaml")
+    >>> write_yaml_config({"binary": {"seed": 3}}, path)
+    >>> path.exists()
+    True
+    """
     if yaml is None:  # pragma: no cover - optional dependency
         raise ModuleNotFoundError(
             "PyYAML is required to write configuration files. Install it via 'pip install pyyaml'."
@@ -98,6 +218,13 @@ def _normalize_for_tag(obj):
 
 
 def sim_tag_from_cfg(cfg: dict, *, length: int = 10) -> str:
+    """Create a stable short hash for a configuration dictionary.
+
+    Examples
+    --------
+    >>> sim_tag_from_cfg({"binary": {"seed": 3}}, length=8)
+    'da4c7220'
+    """
     canon = _normalize_for_tag(cfg)
     blob = json.dumps(canon, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:length]
@@ -106,8 +233,24 @@ def sim_tag_from_cfg(cfg: dict, *, length: int = 10) -> str:
 def load_config(
     name: str = "default_simulation",
     *,
-    overrides: Iterable[str] | None = None,
+    overrides: Optional[Iterable[str]] = None,
 ) -> dict[str, Any]:
+    """Load a YAML configuration and optionally apply dotted overrides.
+
+    Examples
+    --------
+    ```python
+    cfg = load_config(
+        "default_simulation",
+        overrides=["binary.seed=7", "binary.simulation_steps=1000"],
+    )
+    ```
+
+    Expected output
+    ---------------
+    `cfg` is a nested dictionary where the override values replace the loaded
+    base configuration.
+    """
     config_path = _resolve_config_path(name)
     if yaml is None:  # pragma: no cover - optional dependency
         raise ModuleNotFoundError(
@@ -137,8 +280,8 @@ def resolve_base_config(descriptor: Any) -> dict[str, Any]:
 def first_float(
     value: Any,
     *,
-    cell_type: str | None = None,
-    default: float | None = None,
+    cell_type: Optional[str] = None,
+    default: Optional[float] = None,
 ) -> float:
     if value is None:
         if default is None:
@@ -168,6 +311,13 @@ def first_float(
 
 
 def parse_overrides(pairs: Iterable[str]) -> dict[str, Any]:
+    """Parse CLI-style dotted overrides into a nested dictionary.
+
+    Examples
+    --------
+    >>> parse_overrides(["binary.seed=7", "plot.raster.stride=2"])
+    {'binary': {'seed': 7}, 'plot': {'raster': {'stride': 2}}}
+    """
     root: dict[str, Any] = {}
     for raw in pairs:
         if "=" not in raw:
@@ -184,6 +334,13 @@ def parse_overrides(pairs: Iterable[str]) -> dict[str, Any]:
 
 
 def deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge `updates` into a deep copy of `base`.
+
+    Examples
+    --------
+    >>> deep_update({"binary": {"seed": 3, "steps": 10}}, {"binary": {"steps": 20}})
+    {'binary': {'seed': 3, 'steps': 20}}
+    """
     merged = deepcopy(base)
     for key, value in updates.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -208,6 +365,13 @@ def add_override_arguments(
     config_default: str = "default_simulation",
     overwrite_metavar: str = "path=value",
 ) -> None:
+    """Add the repository's standard config/override arguments to an argparse parser.
+
+    Expected output
+    ---------------
+    The parser accepts a config argument and repeated `-O/--overwrite`
+    arguments compatible with the figure scripts.
+    """
     parser.add_argument(
         config_option,
         default=config_default,
@@ -230,23 +394,21 @@ def load_from_args(
     overwrite_attr: str = "overwrite",
     default_config: str = "default_simulation",
 ) -> dict[str, Any]:
+    """Load a configuration from parsed argparse arguments.
+
+    Examples
+    --------
+    ```python
+    parser = argparse.ArgumentParser()
+    add_override_arguments(parser)
+    args = parser.parse_args(["--config", "default_simulation", "-O", "binary.seed=9"])
+    cfg = load_from_args(args)
+    ```
+
+    Expected output
+    ---------------
+    `cfg["binary"]["seed"] == 9`.
+    """
     config_name = getattr(args, config_attr, default_config) or default_config
     overrides = getattr(args, overwrite_attr, None)
     return load_config(config_name, overrides=overrides)
-
-
-__all__ = [
-    "_to_human",
-    "write_human_json",
-    "write_yaml_config",
-    "_normalize_for_tag",
-    "sim_tag_from_cfg",
-    "load_config",
-    "parse_overrides",
-    "deep_update",
-    "resolve_base_config",
-    "first_float",
-    "CONFIG_DIR",
-    "add_override_arguments",
-    "load_from_args",
-]

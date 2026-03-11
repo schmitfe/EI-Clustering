@@ -1,3 +1,5 @@
+"""Generic mean-field root-finding and ERF utilities."""
+
 import logging
 import os
 from dataclasses import dataclass
@@ -31,9 +33,24 @@ except Exception:  # pragma: no cover - optional dependency
 
 JAX_SOLVER_CACHE: Dict[Tuple[int, float, int], Dict[str, Any]] = {}
 
+__pdoc__ = {
+    "SolverConvergenceError": False,
+    "HAS_JAX": False,
+    "JAX_SOLVER_CACHE": False,
+    "interpolate_curve": False,
+}
+
 
 @dataclass
 class ERFResult:
+    """Container for an event-rate-function sweep.
+
+    Examples
+    --------
+    >>> result = ERFResult(x_data=[0.1, 0.2], y_data=[0.12, 0.22], solves=[], completed=True)
+    >>> result.completed
+    True
+    """
     x_data: List[float]
     y_data: List[float]
     solves: List[np.ndarray]
@@ -51,7 +68,11 @@ class SolverConvergenceError(RuntimeError):
 
 
 class RateSystem:
-    """General mean-field solver with helper utilities for ERF and fixpoints."""
+    """General mean-field solver with helper utilities for ERF and fixpoints.
+
+    Subclasses implement `_build_dynamics(...)` and then inherit the fixed-point
+    solver, ERF sweep, and fixpoint analysis helpers.
+    """
     # Minimum allowed variance to prevent numerical instabilities.
     # Chosen small enough to avoid affecting dynamics, only avoids divide-by-zero.
     VAR_EPS = 1e-12
@@ -232,6 +253,18 @@ class RateSystem:
         return reduction @ residual
 
     def solve(self, initial_guess: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, bool]:
+        """Solve for a fixed point of the reduced mean-field system.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray, bool]
+            `(x, residual, success)` where `x` is the reduced solution vector.
+
+        Expected output
+        ---------------
+        `success` is `True` when the nonlinear solver converged and `residual`
+        is close to zero.
+        """
         initial = self._coerce_initial(initial_guess)
         if self.dim == 0:
             residual = self.residual_numpy(initial)
@@ -303,17 +336,36 @@ class RateSystem:
         return entry
 
     def phi_numpy(self, x: np.ndarray) -> np.ndarray:
+        """Evaluate the transfer function on the full-rate state implied by `x`.
+
+        Expected output
+        ---------------
+        Returns one activity value per population in the interval `[0, 1]`.
+        """
         rates = self._full_rates_numpy(np.asarray(x, dtype=float))
         return self._phi_numpy(rates)
 
     def full_rates_numpy(self, x: np.ndarray) -> np.ndarray:
+        """Expand a reduced solver vector into one rate per population.
+
+        Expected output
+        ---------------
+        The returned array has length `population_count`.
+        """
         return self._full_rates_numpy(np.asarray(x, dtype=float))
 
     def jacobian_numpy(self, x: np.ndarray) -> np.ndarray:
+        """Return the Jacobian of the full mean-field residual at `x`.
+
+        Expected output
+        ---------------
+        The returned matrix has shape `(population_count, population_count)`.
+        """
         rates = self._full_rates_numpy(np.asarray(x, dtype=float))
         return (self._phi_jacobian_numpy(rates) - np.eye(self.population_count)) / self.tau[:, np.newaxis]
 
     def focus_output(self, rates: np.ndarray) -> float:
+        """Average the rates over the configured focus populations."""
         values = np.asarray(rates, dtype=float)[self.focus_indices]
         return float(values.mean()) if values.size else float(rates[0])
 
@@ -354,6 +406,13 @@ class RateSystem:
         v_focus_values: Sequence[float],
         initial_guess: Optional[np.ndarray] = None,
     ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Solve a sequence of focus inputs with the accelerated JAX path.
+
+        Expected output
+        ---------------
+        Returns `(solutions, success_flags)` when the JAX solver is available,
+        otherwise `None`.
+        """
         values = np.asarray(list(v_focus_values), dtype=float)
         if values.size == 0:
             return np.zeros((0, self.dim)), np.zeros((0,), dtype=bool)
@@ -411,6 +470,11 @@ class RateSystem:
         step_number : int, optional
             Number of steps between ``start`` and ``end`` (default: 20).
         ...
+
+        Expected output
+        ---------------
+        Returns an :class:`ERFResult` whose `x_data` stores the driven focus
+        inputs and whose `y_data` stores the corresponding mean-field outputs.
         """
         ERF_EPS = 1e-12  # Tolerance for floating-point comparison of v_in against end
         x_data: List[float] = []
@@ -575,6 +639,11 @@ class RateSystem:
             Number of interpolation points used to refine the ERF before searching
             for crossings. Larger values increase accuracy but also cost. Default
             is 10_000.
+
+        Expected output
+        ---------------
+        Returns a dictionary keyed by fixed-point location. Each value contains
+        at least `stability`, `rates`, `residual_norm`, and `solver_success`.
         """
         SLOPE_STABILITY_THRESHOLD = 1.0 # |d(ERF)/dv| < 1 ⇒ stable in 1D; > 1 ⇒ unstable
         x_data, y_data, solves, parameter = sweep_entry
@@ -739,6 +808,14 @@ def interpolate_curve(x: Sequence[float], y: Sequence[float], *, steps: int = 20
 
 
 def ensure_output_folder(parameter: Dict, *, tag: Optional[str] = None) -> str:
+    """Create and return the cache folder for a mean-field parameter set.
+
+    Examples
+    --------
+    >>> folder = ensure_output_folder({"connection_type": "bernoulli", "R_j": 0.8, "Q": 2})
+    >>> folder.startswith("data/Bernoulli/Rj00_80/")
+    True
+    """
     conn_name = str(parameter.get("connection_type", "bernoulli")).strip()
     conn_label = conn_name.capitalize()
     r_j = float(parameter.get("R_j", 0.0))
@@ -758,6 +835,13 @@ def serialize_erf(
     *,
     focus_count: Optional[int] = None,
 ) -> Optional[str]:
+    """Serialize a completed ERF sweep to a pickle file.
+
+    Expected output
+    ---------------
+    Returns `file_path` on success and `None` when `result.completed` is
+    `False`.
+    """
     if not result.completed:
         return None
     R_value = float(parameter["R_Eplus"])
@@ -774,6 +858,12 @@ def serialize_erf(
 
 
 def aggregate_data(folder: str) -> str:
+    """Merge individual ERF pickle files into one combined pickle.
+
+    Expected output
+    ---------------
+    Returns the path to `all_data_P_Eplus.pkl` inside `folder`.
+    """
     import glob
     import pickle
 
@@ -798,7 +888,6 @@ def aggregate_data(folder: str) -> str:
 __all__ = [
     "RateSystem",
     "ERFResult",
-    "interpolate_curve",
     "ensure_output_folder",
     "serialize_erf",
     "aggregate_data",
