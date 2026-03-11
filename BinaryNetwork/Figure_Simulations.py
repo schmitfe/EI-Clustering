@@ -53,13 +53,6 @@ def _build_parameter(
     }
 
 
-def _configure_sampling(network: ClusteredEI_network, *, use_update_queue: bool) -> None:
-    if use_update_queue:
-        network.configure_cell_type_queue(excitatory_repeat=1, inhibitory_repeat=2)
-    else:
-        network.configure_update_queue(None)
-
-
 def _simulate_recording(
     parameter: dict[str, float | int | str],
     *,
@@ -67,11 +60,9 @@ def _simulate_recording(
     samples: int,
     sample_stride: int,
     batch_size: int,
-    use_update_queue: bool,
 ) -> np.ndarray:
     network = ClusteredEI_network(parameter)
     network.initialize(weight_mode="dense")
-    _configure_sampling(network, use_update_queue=use_update_queue)
     for _ in _progress(range(max(0, warmup_iterations)), desc="Warmup"):
         network.run(sample_stride, batch_size=batch_size)
     recording = np.zeros((network.N, samples), dtype=np.int8)
@@ -111,7 +102,6 @@ def _simulate_homogenized_recording(
     samples: int,
     sample_stride: int,
     batch_size: int,
-    use_update_queue: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     network = ClusteredEI_network(parameter)
     network.initialize(weight_mode="dense")
@@ -120,7 +110,6 @@ def _simulate_homogenized_recording(
     weights_within = network.weights_dense.copy()
     _homogenize_blocks(network, diagonal_only=False)
     weights_between = network.weights_dense.copy()
-    _configure_sampling(network, use_update_queue=use_update_queue)
     for _ in _progress(range(max(0, warmup_iterations)), desc="Warmup"):
         network.run(sample_stride, batch_size=batch_size)
     recording = np.zeros((network.N, samples), dtype=np.int8)
@@ -187,11 +176,6 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="R_Eplus for the homogenization test.",
     )
     parser.add_argument(
-        "--no-update-queue",
-        action="store_true",
-        help="Disable the cell-type update queue and sample neurons directly from update_prob.",
-    )
-    parser.add_argument(
         "--output-prefix",
         type=Path,
         default=Path("BinaryNetwork/module_test"),
@@ -203,7 +187,6 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _parse_args(argv)
-    use_update_queue = not bool(args.no_update_queue)
     output_prefix = args.output_prefix
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
 
@@ -228,7 +211,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             samples=args.samples,
             sample_stride=args.sample_stride,
             batch_size=args.batch_size,
-            use_update_queue=use_update_queue,
         )
         prob_recording = _simulate_recording(
             prob_parameter,
@@ -236,7 +218,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             samples=args.samples,
             sample_stride=args.sample_stride,
             batch_size=args.batch_size,
-            use_update_queue=use_update_queue,
         )
         fig, axes = plt.subplots(2, 1, figsize=(10, 6), constrained_layout=True)
         _plot_active_state_raster(axes[0], weight_recording, "Weight-mixed (kappa=1)")
@@ -257,7 +238,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             samples=args.samples,
             sample_stride=args.sample_stride,
             batch_size=args.batch_size,
-            use_update_queue=use_update_queue,
         )
         fig, axes = plt.subplots(1, 4, figsize=(15, 4), constrained_layout=True)
         cmap = "coolwarm"

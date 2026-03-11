@@ -317,11 +317,6 @@ class BinaryNetwork:
         self._diff_log_index = 0
         self._diff_log_dummy_updates = np.zeros(0, dtype=np.uint16)
         self._diff_log_dummy_deltas = np.zeros(0, dtype=np.int8)
-        self._update_queue_enabled = False
-        self._update_queue_pool = np.zeros(0, dtype=np.int64)
-        self._update_queue_buffer = np.zeros(0, dtype=np.int64)
-        self._update_queue_chunk = 0
-        self._update_queue_position = 0
 
     def add_population(self, population: Neuron):
         self.population.append(population)
@@ -449,8 +444,6 @@ class BinaryNetwork:
     def _select_neurons(self, count: int) -> np.ndarray:
         if count <= 0:
             return np.zeros(0, dtype=np.int64)
-        if self._update_queue_enabled:
-            return self._draw_from_update_queue(count)
         return np.random.choice(self.N, size=count, p=self.update_prob)
 
     def _update_batch_dense(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
@@ -590,67 +583,112 @@ class BinaryNetwork:
         self._diff_log_index = 0
         return updates, deltas
 
-    def configure_update_queue(
-        self,
-        pool_indices: Sequence[int] | np.ndarray | None,
+    @staticmethod
+    def reconstruct_states_from_diff_logs(
+        initial_state: np.ndarray,
+        updates: np.ndarray,
+        deltas: np.ndarray,
         *,
-        chunk_size: int | None = None,
-    ):
-        if pool_indices is None:
-            self._update_queue_enabled = False
-            self._update_queue_pool = np.zeros(0, dtype=np.int64)
-            self._update_queue_buffer = np.zeros(0, dtype=np.int64)
-            self._update_queue_chunk = 0
-            self._update_queue_position = 0
-            return
-        pool = np.asarray(pool_indices, dtype=np.int64)
-        if pool.ndim != 1:
-            raise ValueError("pool_indices must form a flat sequence of neuron indexes.")
-        if pool.size == 0:
-            raise ValueError("pool_indices must contain at least one neuron index.")
-        if np.any(pool < 0) or np.any(pool >= self.N):
-            raise ValueError("pool_indices must contain valid neuron indexes.")
-        self._update_queue_pool = pool
-        max_chunk = pool.size
-        if chunk_size is None or chunk_size <= 0 or chunk_size > max_chunk:
-            chunk = max_chunk
-        else:
-            chunk = int(chunk_size)
-        self._update_queue_chunk = chunk
-        self._update_queue_buffer = np.empty(chunk, dtype=np.int64)
-        self._update_queue_position = chunk
-        self._update_queue_enabled = True
+        sample_interval: int = 1,
+    ) -> np.ndarray:
+        update_arr = np.asarray(updates, dtype=np.int64)
+        delta_arr = np.asarray(deltas, dtype=np.int8)
+        if update_arr.ndim == 1:
+            update_arr = update_arr[None, :]
+        if delta_arr.ndim == 1:
+            delta_arr = delta_arr[None, :]
+        state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
+        if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+            return np.zeros((0, state.size), dtype=np.uint8)
+        stride = max(1, int(sample_interval))
+        states: List[np.ndarray] = []
+        for step in range(update_arr.shape[1]):
+            units = update_arr[:, step]
+            delta_step = delta_arr[:, step]
+            for unit, delta in zip(units, delta_step):
+                delta_val = int(delta)
+                if delta_val == 0:
+                    continue
+                unit_idx = int(unit)
+                state_value = int(state[unit_idx]) + delta_val
+                state[unit_idx] = 1 if state_value > 0 else 0
+            if step % stride == 0:
+                states.append(state.astype(np.uint8, copy=True))
+        if not states:
+            return np.zeros((0, state.size), dtype=np.uint8)
+        return np.stack(states, axis=0)
 
-    def _refill_update_queue(self):
-        if not self._update_queue_enabled or self._update_queue_chunk <= 0:
-            raise RuntimeError("Update queue is not configured.")
-        selection = np.random.choice(
-            self._update_queue_pool,
-            size=self._update_queue_chunk,
-            replace=False,
-        )
-        self._update_queue_buffer[:] = selection
-        self._update_queue_position = 0
+    def population_rates_from_diff_logs(
+        self,
+        initial_state: np.ndarray,
+        updates: np.ndarray,
+        deltas: np.ndarray,
+        *,
+        sample_interval: int = 1,
+        populations: Sequence[Neuron] | None = None,
+    ) -> np.ndarray:
+        pops = list(self.population if populations is None else populations)
+        if not pops:
+            return np.zeros((0, 0), dtype=np.float32)
+        update_arr = np.asarray(updates, dtype=np.int64)
+        delta_arr = np.asarray(deltas, dtype=np.int8)
+        if update_arr.ndim == 1:
+            update_arr = update_arr[None, :]
+        if delta_arr.ndim == 1:
+            delta_arr = delta_arr[None, :]
+        if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+            return np.zeros((0, len(pops)), dtype=np.float32)
+        state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
+        pop_count = len(pops)
+        sizes = np.zeros(pop_count, dtype=np.float32)
+        cluster_of = np.empty(state.size, dtype=np.int32)
+        cluster_sums = np.zeros(pop_count, dtype=np.int64)
+        for idx, pop in enumerate(pops):
+            start, end = int(pop.view[0]), int(pop.view[1])
+            cluster_of[start:end] = idx
+            sizes[idx] = max(1, end - start)
+            cluster_sums[idx] = int(state[start:end].sum())
+        stride = max(1, int(sample_interval))
+        samples: List[np.ndarray] = []
+        for step in range(update_arr.shape[1]):
+            units = update_arr[:, step]
+            delta_step = delta_arr[:, step]
+            for unit, delta in zip(units, delta_step):
+                delta_val = int(delta)
+                if delta_val == 0:
+                    continue
+                unit_idx = int(unit)
+                cluster_idx = int(cluster_of[unit_idx])
+                cluster_sums[cluster_idx] += delta_val
+                state_value = int(state[unit_idx]) + delta_val
+                state[unit_idx] = 1 if state_value > 0 else 0
+            if step % stride == 0:
+                samples.append((cluster_sums.astype(np.float32, copy=False) / sizes).copy())
+        if not samples:
+            return np.zeros((0, pop_count), dtype=np.float32)
+        return np.stack(samples, axis=0)
 
-    def _draw_from_update_queue(self, count: int) -> np.ndarray:
-        if count <= 0:
-            return np.zeros(0, dtype=np.int64)
-        if self._update_queue_chunk <= 0:
-            raise RuntimeError("Update queue is not configured.")
-        result = np.empty(count, dtype=np.int64)
-        filled = 0
-        while filled < count:
-            remaining = self._update_queue_chunk - self._update_queue_position
-            if remaining <= 0:
-                self._refill_update_queue()
-                remaining = self._update_queue_chunk
-            take = min(remaining, count - filled)
-            start = self._update_queue_position
-            end = start + take
-            result[filled:filled + take] = self._update_queue_buffer[start:end]
-            self._update_queue_position = end
-            filled += take
-        return result
+    @staticmethod
+    def extract_spike_events_from_diff_logs(
+        updates: np.ndarray,
+        deltas: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        update_arr = np.asarray(updates, dtype=np.int64)
+        delta_arr = np.asarray(deltas, dtype=np.int8)
+        if update_arr.ndim == 1:
+            update_arr = update_arr[None, :]
+        if delta_arr.ndim == 1:
+            delta_arr = delta_arr[None, :]
+        if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+            return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
+        mask = delta_arr > 0
+        if not mask.any():
+            return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
+        per_step, steps = update_arr.shape
+        times = np.repeat(np.arange(steps, dtype=np.int64), per_step)
+        flat_updates = update_arr.reshape(-1, order="F")
+        flat_mask = mask.reshape(-1, order="F")
+        return times[flat_mask].astype(np.float64, copy=False), flat_updates[flat_mask].astype(np.int64, copy=False)
 
 
 def _build_demo_network(weight_mode: str) -> BinaryNetwork:

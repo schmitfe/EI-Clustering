@@ -146,7 +146,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Matplotlib colormap name for line focus colors; use categorical "
-            "maps like 'tab10' or continuous maps like 'viridis' (default: legacy palette)."
+            "maps like 'tab10' or continuous maps like 'viridis' (default: built-in figure palette)."
         ),
     )
     parser.add_argument(

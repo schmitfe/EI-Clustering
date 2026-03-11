@@ -57,41 +57,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-DEFAULT_LOG_DECIMATE_FACTOR = 10
-DEFAULT_QUEUE_CHUNK_SIZE = 5000
-DEFAULT_INHIBITORY_REPEAT = 2
-
-
 def ensure_binary_behavior_defaults(cfg: Dict[str, Any] | None) -> Dict[str, Any]:
-    """Ensure logging/queue defaults match the legacy binary simulation behavior."""
+    """Normalize the small set of binary options used by the current pipeline."""
     normalized = dict(cfg or {})
-    if "log_step_states" not in normalized:
-        normalized["log_step_states"] = True
-    else:
-        normalized["log_step_states"] = bool(normalized["log_step_states"])
-    raw_factor = normalized["log_decimate_factor"] if "log_decimate_factor" in normalized else DEFAULT_LOG_DECIMATE_FACTOR
-    if raw_factor in (None, "", 0):
-        normalized["log_decimate_factor"] = None
-    else:
-        normalized["log_decimate_factor"] = max(1, int(raw_factor))
-    normalized["log_decimate_zero_phase"] = bool(normalized.get("log_decimate_zero_phase", True))
-    normalized["log_decimate_ftype"] = str(normalized.get("log_decimate_ftype", "iir"))
-    queue_cfg = dict(normalized.get("update_queue") or {})
-    if "enabled" not in queue_cfg:
-        queue_cfg["enabled"] = True
-    else:
-        queue_cfg["enabled"] = bool(queue_cfg["enabled"])
-    raw_chunk = queue_cfg.get("chunk_size", DEFAULT_QUEUE_CHUNK_SIZE)
-    if raw_chunk in (None, "", 0):
-        queue_cfg["chunk_size"] = DEFAULT_QUEUE_CHUNK_SIZE
-    else:
-        queue_cfg["chunk_size"] = max(1, int(raw_chunk))
-    queue_cfg["excitatory_repeat"] = max(1, int(queue_cfg.get("excitatory_repeat", 1) or 1))
-    queue_cfg["inhibitory_repeat"] = max(
-        1,
-        int(queue_cfg.get("inhibitory_repeat", DEFAULT_INHIBITORY_REPEAT) or 1),
-    )
-    normalized["update_queue"] = queue_cfg
+    normalized["plot_activity"] = bool(normalized.get("plot_activity", False))
     if "population_rate_init" in normalized:
         entry = normalized["population_rate_init"]
         if entry is None:
@@ -126,136 +95,7 @@ def _resolve_binary_config(parameter: Dict, args: argparse.Namespace) -> Dict:
         cfg["population_rate_init"] = float(args.population_rate_init)
     else:
         cfg["population_rate_init"] = cfg.get("population_rate_init", 0.1)
-    queue_cfg = cfg.get("update_queue")
-    if queue_cfg is not None and not isinstance(queue_cfg, dict):
-        raise ValueError("binary.update_queue must be a mapping when provided.")
     return ensure_binary_behavior_defaults(cfg)
-
-
-def _sample_populations(network: ClusteredEI_network) -> Tuple[List[str], np.ndarray]:
-    pops = network.E_pops + network.I_pops
-    names = [pop.name for pop in pops]
-    values = np.array(
-        [float(network.state[pop.view[0]:pop.view[1]].mean()) for pop in pops],
-        dtype=float,
-    )
-    return names, values
-
-
-def _population_metadata(pops: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    pop_count = len(pops)
-    starts = np.zeros(pop_count, dtype=np.int64)
-    ends = np.zeros(pop_count, dtype=np.int64)
-    sizes = np.zeros(pop_count, dtype=np.float32)
-    for idx, pop in enumerate(pops):
-        start = int(pop.view[0])
-        end = int(pop.view[1])
-        starts[idx] = start
-        ends[idx] = end
-        sizes[idx] = max(1, end - start)
-    return starts, ends, sizes
-
-
-def _population_rates_from_diff_logs(
-    initial_state: np.ndarray,
-    updates: np.ndarray,
-    deltas: np.ndarray,
-    pops: Sequence,
-    *,
-    sample_interval: int,
-) -> np.ndarray:
-    if not pops:
-        return np.zeros((0, 0), dtype=np.float32)
-    update_arr = np.asarray(updates, dtype=np.int64)
-    delta_arr = np.asarray(deltas, dtype=np.int8)
-    if update_arr.ndim == 1:
-        update_arr = update_arr[None, :]
-    if delta_arr.ndim == 1:
-        delta_arr = delta_arr[None, :]
-    if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
-        return np.zeros((0, len(pops)), dtype=np.float32)
-    starts, ends, sizes = _population_metadata(pops)
-    state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
-    pop_count = len(pops)
-    cluster_of = np.empty(state.size, dtype=np.int32)
-    cluster_sums = np.zeros(pop_count, dtype=np.int64)
-    for idx, (start, end) in enumerate(zip(starts, ends)):
-        cluster_of[start:end] = idx
-        cluster_sums[idx] = int(state[start:end].sum())
-    steps = update_arr.shape[1]
-    stride = max(1, int(sample_interval))
-    samples: List[np.ndarray] = []
-    for step in range(steps):
-        units = update_arr[:, step]
-        delta_step = delta_arr[:, step]
-        for unit, delta in zip(units, delta_step):
-            unit_idx = int(unit)
-            delta_val = int(delta)
-            if delta_val == 0:
-                continue
-            cluster_idx = int(cluster_of[unit_idx])
-            cluster_sums[cluster_idx] += delta_val
-            state_value = int(state[unit_idx]) + delta_val
-            state[unit_idx] = 1 if state_value > 0 else 0
-        if step % stride == 0:
-            samples.append((cluster_sums.astype(np.float32, copy=False) / sizes).copy())
-    if not samples:
-        return np.zeros((0, pop_count), dtype=np.float32)
-    return np.stack(samples, axis=0)
-
-
-def _reconstruct_states_from_diff_logs(
-    initial_state: np.ndarray,
-    updates: np.ndarray,
-    deltas: np.ndarray,
-    *,
-    sample_interval: int,
-) -> np.ndarray:
-    update_arr = np.asarray(updates, dtype=np.int64)
-    delta_arr = np.asarray(deltas, dtype=np.int8)
-    if update_arr.ndim == 1:
-        update_arr = update_arr[None, :]
-    if delta_arr.ndim == 1:
-        delta_arr = delta_arr[None, :]
-    if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
-        return np.zeros((0, np.asarray(initial_state).size), dtype=np.uint8)
-    state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
-    stride = max(1, int(sample_interval))
-    states: List[np.ndarray] = []
-    for step in range(update_arr.shape[1]):
-        units = update_arr[:, step]
-        delta_step = delta_arr[:, step]
-        for unit, delta in zip(units, delta_step):
-            delta_val = int(delta)
-            if delta_val == 0:
-                continue
-            unit_idx = int(unit)
-            state_value = int(state[unit_idx]) + delta_val
-            state[unit_idx] = 1 if state_value > 0 else 0
-        if step % stride == 0:
-            states.append(state.astype(np.uint8, copy=True))
-    if not states:
-        return np.zeros((0, state.size), dtype=np.uint8)
-    return np.stack(states, axis=0)
-
-
-def _extract_spike_events(updates: np.ndarray, deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    update_arr = np.asarray(updates, dtype=np.int64)
-    delta_arr = np.asarray(deltas, dtype=np.int8)
-    if update_arr.ndim == 1:
-        update_arr = update_arr[None, :]
-    if delta_arr.ndim == 1:
-        delta_arr = delta_arr[None, :]
-    if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
-        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
-    mask = delta_arr > 0
-    if not mask.any():
-        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
-    per_step, steps = update_arr.shape
-    times = np.repeat(np.arange(steps, dtype=np.int64), per_step)
-    flat_updates = update_arr.reshape(-1, order="F")
-    flat_mask = mask.reshape(-1, order="F")
-    return times[flat_mask].astype(np.float64, copy=False), flat_updates[flat_mask].astype(np.int64, copy=False)
 
 
 def _apply_population_rate_initialization(
@@ -415,19 +255,6 @@ def run_binary_simulation(
         else:
             inferred = np.full(len(pops), float(default_rate), dtype=float)
         population_rate_inits = inferred
-    queue_cfg = dict(binary_cfg.get("update_queue") or {})
-    if queue_cfg.get("enabled"):
-        excit_repeat = int(queue_cfg.get("excitatory_repeat", 1) or 1)
-        inhib_repeat = int(queue_cfg.get("inhibitory_repeat", 1) or 1)
-        chunk_size = queue_cfg.get("chunk_size")
-        chunk_cast = int(chunk_size) if chunk_size not in (None, "") else None
-        network.configure_cell_type_queue(
-            excitatory_repeat=max(1, excit_repeat),
-            inhibitory_repeat=max(1, inhib_repeat),
-            chunk_size=chunk_cast,
-        )
-    else:
-        network.configure_update_queue(None)
     if population_rate_inits is not None:
         _apply_population_rate_initialization(network, population_rate_inits)
     warmup_steps = int(binary_cfg["warmup_steps"])
@@ -454,7 +281,7 @@ def run_binary_simulation(
         write_yaml_config({"parameter": parameter, "binary": binary_cfg}, binary_params_path)
     resolved_output_name = output_name or str(binary_cfg["output_name"])
     if int(binary_cfg.get("state_chunk_size", 0) or 0) > 0:
-        print("Ignoring binary.state_chunk_size: binary traces now use legacy-style diff logs only.")
+        print("Ignoring binary.state_chunk_size: binary traces use diff logs only.")
     names: List[str] = []
     pops = network.E_pops + network.I_pops
     pop_count = len(pops)
@@ -466,15 +293,15 @@ def run_binary_simulation(
     state_updates, state_deltas = network.consume_diff_log()
     if state_updates.shape[1] != total_steps or state_deltas.shape[1] != total_steps:
         raise RuntimeError("Diff logging did not capture the expected number of simulation steps.")
-    rates = _population_rates_from_diff_logs(
+    rates = network.population_rates_from_diff_logs(
         initial_state,
         state_updates,
         state_deltas,
-        pops,
         sample_interval=interval,
+        populations=pops,
     )
     times = np.arange(rates.shape[0], dtype=np.int64) * interval
-    spike_times, spike_ids = _extract_spike_events(state_updates, state_deltas)
+    spike_times, spike_ids = network.extract_spike_events_from_diff_logs(state_updates, state_deltas)
     if interval > 1 and state_updates.shape[1] > 0:
         state_updates = state_updates[:, ::interval]
         state_deltas = state_deltas[:, ::interval]
@@ -501,7 +328,7 @@ def run_binary_simulation(
     plot_path = None
     onset_plot_path = None
     if binary_cfg.get("plot_activity"):
-        states = _reconstruct_states_from_diff_logs(
+        states = network.reconstruct_states_from_diff_logs(
             initial_state,
             state_updates,
             state_deltas,

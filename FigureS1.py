@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Sequence
@@ -14,6 +13,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.patches import Circle  # noqa: E402
 
+from BinaryNetwork.ClusteredEI_network import ClusteredEI_network  # noqa: E402
 from plotting import FontCfg, add_panel_label, style_axes  # noqa: E402
 from sim_config import add_override_arguments, deep_update, load_from_args, parse_overrides  # noqa: E402
 
@@ -23,13 +23,6 @@ plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 REPO_ROOT = Path(__file__).resolve().parent
 FIGURES_DIR = REPO_ROOT / "Figures"
 DEFAULT_OUTPUT = FIGURES_DIR / "FigureEigenvalues"
-
-BINET_SRC = REPO_ROOT / "legacy" / "Rost" / "code" / "BiNet" / "src"
-if str(BINET_SRC) not in sys.path:
-    sys.path.insert(0, str(BINET_SRC))
-
-from BiNet import weights  # noqa: E402
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -102,48 +95,6 @@ def _parse_column_overrides(
     return parsed
 
 
-def _cluster_specs(parameter: Dict[str, object], kappa: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    n_exc = int(parameter.get("N_E", 0))
-    n_inh = int(parameter.get("N_I", 0))
-    if n_exc <= 0 or n_inh <= 0:
-        raise ValueError("N_E and N_I must be positive to build the weight matrix.")
-    q_value = int(parameter.get("Q", 0))
-    if q_value <= 0:
-        raise ValueError("Q must be a positive integer.")
-    if n_exc % q_value != 0 or n_inh % q_value != 0:
-        raise ValueError("N_E and N_I must be divisible by Q for EI_jplus_cluster_specs.")
-
-    v_th = float(parameter.get("V_th", 0.0))
-    g_value = float(parameter.get("g", 0.0))
-    tau_e = float(parameter.get("tau_e", 1.0))
-    tau_i = float(parameter.get("tau_i", 1.0))
-    p0_ee = float(parameter.get("p0_ee", 0.0))
-    p0_ei = float(parameter.get("p0_ei", 0.0))
-    p0_ie = float(parameter.get("p0_ie", 0.0))
-    p0_ii = float(parameter.get("p0_ii", 0.0))
-    r_eplus = _resolve_r_eplus(parameter)
-    r_j = float(parameter.get("R_j", 0.0))
-    r_iplus = 1.0 + r_j * (r_eplus - 1.0)
-
-    Ns = np.array([n_exc, n_inh], dtype=int)
-    ps = np.array([[p0_ee, p0_ei], [p0_ie, p0_ii]], dtype=float)
-    Ts = np.array([v_th, v_th], dtype=float)
-    taus = np.array([tau_e, tau_i], dtype=float)
-    jplus = np.array([[r_eplus, r_iplus], [r_iplus, r_iplus]], dtype=float)
-
-    cNs, cps, cjs, _, _ = weights.EI_jplus_cluster_specs(
-        Ns=Ns,
-        ps=ps,
-        Ts=Ts,
-        taus=taus,
-        g=g_value,
-        Q=q_value,
-        jplus=jplus,
-        kappa=kappa,
-    )
-    return np.asarray(cNs, dtype=int), np.asarray(cps, dtype=float), np.asarray(cjs, dtype=float)
-
-
 def _compute_eigenvalues(
     parameter: Dict[str, object],
     kappa_values: Sequence[float],
@@ -155,14 +106,13 @@ def _compute_eigenvalues(
     for idx, kappa in enumerate(kappa_values):
         if base_seed is not None:
             np.random.seed(int(base_seed) + idx)
-        cNs, cps, cjs = _cluster_specs(parameter, float(kappa))
-        weight_matrix = weights.generate_weight_matrix(
-            cNs,
-            cps,
-            cjs,
-            delta_j=None,
-            connection_type=conn_type,
-        )
+        current_parameter = deepcopy(parameter)
+        current_parameter["kappa"] = float(kappa)
+        current_parameter["R_Eplus"] = _resolve_r_eplus(current_parameter)
+        current_parameter["connection_type"] = conn_type
+        network = ClusteredEI_network(current_parameter)
+        network.initialize(weight_mode="dense")
+        weight_matrix = np.asarray(network.weights_dense, dtype=float)
         eigvals.append(np.linalg.eigvals(weight_matrix))
     return eigvals
 

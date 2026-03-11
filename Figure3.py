@@ -393,9 +393,6 @@ def _resolve_binary_config(parameter: Dict[str, Any], overrides: BinaryRunSettin
         cfg["batch_size"] = int(cfg.get("batch_size", 1))
     cfg["seed"] = overrides.seed if overrides.seed is not None else cfg.get("seed")
     cfg["output_name"] = overrides.output_name or cfg.get("output_name", "activity_trace")
-    queue_cfg = cfg.get("update_queue")
-    if queue_cfg is not None and not isinstance(queue_cfg, dict):
-        raise ValueError("binary.update_queue must be a mapping when provided.")
     return ensure_binary_behavior_defaults(cfg)
 
 

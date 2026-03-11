@@ -14,7 +14,6 @@ import numpy as np
 from BinaryNetwork.ClusteredEI_network import ClusteredEI_network
 from MeanField.rate_system import ensure_output_folder
 from pipelines.binary import (
-    _reconstruct_states_from_diff_logs,
     ensure_binary_behavior_defaults,
     run_binary_simulation,
 )
@@ -100,9 +99,6 @@ def resolve_binary_config(parameter: Dict[str, Any], overrides: BinaryRunSetting
         cfg["batch_size"] = int(cfg.get("batch_size", 1))
     cfg["seed"] = overrides.seed if overrides.seed is not None else cfg.get("seed")
     cfg["output_name"] = overrides.output_name or cfg.get("output_name", "activity_trace")
-    queue_cfg = cfg.get("update_queue")
-    if queue_cfg is not None and not isinstance(queue_cfg, dict):
-        raise ValueError("binary.update_queue must be a mapping when provided.")
     return ensure_binary_behavior_defaults(cfg)
 
 
@@ -638,7 +634,7 @@ def _sampled_states_from_payload(payload: Dict[str, Any], *, stride: int) -> np.
         if updates is None or deltas is None or initial_state is None:
             return np.zeros((0, 0), dtype=np.uint8)
         interval = int(payload.get("sample_interval", 1) or 1)
-        base_states = _reconstruct_states_from_diff_logs(
+        base_states = ClusteredEI_network.reconstruct_states_from_diff_logs(
             initial_state,
             updates,
             deltas,
