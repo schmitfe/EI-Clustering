@@ -9,7 +9,10 @@ import numpy as np
 
 import sys
 
-REPO_ROOT = Path(__file__).resolve().parent
+# pipelines/spiking.py lives one level below the repository root.
+# The NEST reference code uses plain module imports such as `import helper`,
+# so we need to add the actual NEST module directory itself to sys.path.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 NEST_MODULE_DIR = REPO_ROOT / "NEST" / "EI_clustered_network"
 if str(NEST_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(NEST_MODULE_DIR))

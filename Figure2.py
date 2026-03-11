@@ -47,13 +47,13 @@ PANEL_LABEL_ABOVE_ALIGN = ("center", "bottom")
 
 PROB_KEYS = ("p0_ee", "p0_ei", "p0_ie", "p0_ii")
 BRANCH_GROUP_TOL = 1e-6
-BRANCH_MAX_JUMP = 0.3
+BRANCH_MAX_JUMP = 0.2
 BRANCH_MAX_MISSING_STEPS = 2
 BIF_COLUMN_TOL = 1e-6
 MIN_PROBABILITY = 1e-6
 BIF_MARKERS = ("o", "s", "D", "^", "v", "<", ">", "P", "X")
 LINE_WIDTH = 1.5
-MARKER_STRIDE = 8
+MARKER_STRIDE = 2
 BIF_LINESTYLE_CYCLE = ("-", "--", ":", "-.")
 BIF_REFERENCE_ROWS = (0, 1)
 BIF_REFERENCE_MARKER = "^"
