@@ -5,20 +5,24 @@ import argparse
 from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib import colors as mpl_colors  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib import ticker as mpl_ticker  # noqa: E402
 import numpy as np  # noqa: E402
 
-import figure_helpers as helpers  # noqa: E402
-import binary_simulation_multi_init as binary_multi  # noqa: E402
-from plotting import FontCfg, add_panel_label, style_axes  # noqa: E402
+from pipelines import figure_helpers as helpers  # noqa: E402
+from plotting import (  # noqa: E402
+    FontCfg,
+    _prepare_value_color_map,
+    add_panel_label,
+    draw_listed_colorbar,
+    style_axes,
+)
 from sim_config import add_override_arguments, load_from_args  # noqa: E402
 
 
@@ -49,7 +53,7 @@ class ConnectivityInstance:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate Figure 4 by sweeping kappa values, running the multi-initialization legacy workflow, "
+            "Generate Figure 4 by sweeping kappa values, running the multi-initialization BinaryNetwork workflow, "
             "and plotting state/subthreshold correlations."
         )
     )
@@ -160,6 +164,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="Figures/Figure4",
         help="Prefix for the saved figure files (default: %(default)s.{png,pdf}).",
+    )
+    parser.add_argument(
+        "--no-std-shading",
+        action="store_true",
+        help="Disable the shaded confidence regions around the correlation traces.",
     )
     return parser.parse_args()
 
@@ -346,7 +355,6 @@ def _series_stats_from_values(values: Sequence[float], bootstrap_samples: int, r
 def _run_network_initializations(
     parameter: Dict[str, Any],
     *,
-    folder_hint: str,
     bundle_path: str,
     focus_counts: Sequence[int],
     stability_filter: str,
@@ -364,29 +372,6 @@ def _run_network_initializations(
 ) -> List[str]:
     if len(network_seeds) != len(init_seed_bases):
         raise ValueError("Network seed and initialization seed lists must have the same length.")
-    target_rep = parameter.get("R_Eplus")
-    if target_rep is None:
-        raise ValueError("Parameter 'R_Eplus' must be defined before scheduling simulations.")
-    target_rep = float(target_rep)
-    bundle = binary_multi._load_fixpoint_bundle(bundle_path)
-    Q_value = int(parameter.get("Q", 0) or 0)
-    pop_length = 2 * Q_value
-    candidates = binary_multi._load_fixpoint_candidates(
-        bundle,
-        focus_counts,
-        stability_filter,
-        pop_length,
-        target_rep,
-    )
-    assembly_ids, assembly_names = binary_multi._assembly_membership(parameter)
-    worker_args = SimpleNamespace(
-        analysis_only=analysis_only,
-        overwrite_simulation=overwrite_simulation,
-        overwrite_analysis=overwrite_analysis,
-        stride_sweeps_analysis=stride_analysis,
-        max_pairs=max_pairs,
-    )
-    all_tasks = []
     analysis_dirs: List[str] = []
     for net_idx, (network_seed, init_seed) in enumerate(zip(network_seeds, init_seed_bases)):
         run_param = deepcopy(parameter)
@@ -396,44 +381,27 @@ def _run_network_initializations(
         run_param["binary"] = run_param_binary
         per_run_overrides = _with_output_name(binary_overrides, output_name)
         binary_cfg = helpers.resolve_binary_config(run_param, per_run_overrides)
-        binary_cfg["seed"] = int(network_seed)
-        _, binary_dir, analysis_dir = binary_multi._prepare_multi_init_folder(run_param, folder_hint)
-        binary_multi._prepare_metadata(
-            analysis_dir,
-            base_output=binary_cfg.get("output_name", output_name),
-            fixpoints_path=bundle_path,
+        result = helpers.run_multi_init_correlation(
+            run_param,
+            binary_cfg=binary_cfg,
+            bundle_path=bundle_path,
             focus_counts=focus_counts,
             stability_filter=stability_filter,
+            n_inits=n_inits,
+            seed_inits=int(init_seed),
             seed_network=int(network_seed),
-            binary_cfg=binary_cfg,
-            target_rep=target_rep,
-        )
-        picks = binary_multi._select_fixpoints(candidates, seed=int(init_seed), count=n_inits)
-        tasks = binary_multi._prepare_tasks(
-            picks,
-            binary_dir=binary_dir,
-            analysis_dir=analysis_dir,
-            binary_cfg=binary_cfg,
-            parameter=run_param,
-            assembly_ids=assembly_ids,
-            assembly_names=assembly_names,
-            args=worker_args,
+            stride_analysis=stride_analysis,
+            max_pairs=max_pairs,
+            jobs=jobs,
+            analysis_only=analysis_only,
+            overwrite_simulation=overwrite_simulation,
+            overwrite_analysis=overwrite_analysis,
         )
         print(
             f"     network {net_idx + 1:03d}/{len(network_seeds)} "
             f"(seed={int(network_seed)}, init-seed={int(init_seed)}, output={output_name})"
         )
-        all_tasks.extend(tasks)
-        analysis_dirs.append(analysis_dir)
-    if not all_tasks:
-        raise RuntimeError("No initialization tasks were prepared for the correlation workflow.")
-    results = binary_multi._execute_tasks(all_tasks, max(1, int(jobs)))
-    for entry in results:
-        idx = entry.get("index")
-        for line in entry.get("logs", []):
-            print(f"[init {idx:04d}] {line}")
-        if not entry.get("success", False):
-            print(f"[init {idx:04d}] Failed: {entry.get('error')}")
+        analysis_dirs.append(result.analysis_dir)
     return analysis_dirs
 
 
@@ -444,6 +412,7 @@ def _plot_series(
     *,
     color: Any,
     style: Dict[str, Any],
+    show_std_shading: bool,
 ) -> None:
     if not kappa:
         return
@@ -457,7 +426,8 @@ def _plot_series(
         fillstyle=style.get("fillstyle", "full"),
         markersize=4,
     )
-    ax.fill_between(kappa, tracker["lower"], tracker["upper"], color=color, alpha=BAND_ALPHA, linewidth=0)
+    if show_std_shading:
+        ax.fill_between(kappa, tracker["lower"], tracker["upper"], color=color, alpha=BAND_ALPHA, linewidth=0)
 
 
 def _plot_correlation_figure(
@@ -465,30 +435,59 @@ def _plot_correlation_figure(
     *,
     font_cfg: FontCfg,
     output_prefix: str,
+    show_std_shading: bool,
 ) -> None:
     if not results:
         raise ValueError("No simulation data available to plot.")
     fig, (ax_input, ax_output) = plt.subplots(1, 2, sharey=True, figsize=(13 / 2, 4.0))
 
-    plt.subplots_adjust(top=0.85,
-                        bottom=0.15,
-                        left=0.125,
-                        right=0.9,)
-    connectivity_values = [payload["connectivity"] for payload in results.values()]
-    cmap = plt.cm.viridis
-    norm = mpl_colors.Normalize(
-        vmin=min(connectivity_values), vmax=max(connectivity_values) if connectivity_values else 1.0
+    plt.subplots_adjust(
+        top=0.85,
+        bottom=0.15,
+        left=0.125,
+        right=0.82,
     )
+    connectivity_values = [payload["connectivity"] for payload in results.values()]
+    color_map, colorbar_entries = _prepare_value_color_map(connectivity_values)
     for ax in (ax_input, ax_output):
         ax.axhline(0.0, color="0.6", linestyle="--", linewidth=0.8, zorder=0)
     for payload in results.values():
-        color = cmap(norm(payload["connectivity"]))
+        connectivity_value = float(payload["connectivity"])
+        color = color_map[connectivity_value]
         kappa = payload["kappa"]
         metrics = payload["metrics"]
-        _plot_series(ax_input, kappa, metrics["input"]["within"], color=color, style=WITHIN_STYLE)
-        _plot_series(ax_input, kappa, metrics["input"]["across"], color=color, style=ACROSS_STYLE)
-        _plot_series(ax_output, kappa, metrics["output"]["within"], color=color, style=WITHIN_STYLE)
-        _plot_series(ax_output, kappa, metrics["output"]["across"], color=color, style=ACROSS_STYLE)
+        _plot_series(
+            ax_input,
+            kappa,
+            metrics["input"]["within"],
+            color=color,
+            style=WITHIN_STYLE,
+            show_std_shading=show_std_shading,
+        )
+        _plot_series(
+            ax_input,
+            kappa,
+            metrics["input"]["across"],
+            color=color,
+            style=ACROSS_STYLE,
+            show_std_shading=show_std_shading,
+        )
+        _plot_series(
+            ax_output,
+            kappa,
+            metrics["output"]["within"],
+            color=color,
+            style=WITHIN_STYLE,
+            show_std_shading=show_std_shading,
+        )
+        _plot_series(
+            ax_output,
+            kappa,
+            metrics["output"]["across"],
+            color=color,
+            style=ACROSS_STYLE,
+            show_std_shading=show_std_shading,
+        )
     ax_input.set_ylabel(r"$\overline{r_{\mathrm{in}}}$")
     ax_output.set_ylabel(r"$\overline{r_{\mathrm{out}}}$")
     for ax in (ax_output, ax_input):
@@ -527,10 +526,20 @@ def _plot_correlation_figure(
         frameon=False,
         fontsize=font_cfg.legend,
     )
-    if len(connectivity_values) > 1:
-        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-        cbar = fig.colorbar(sm, ax=[ax_input, ax_output], fraction=0.05, pad=0.04)
-        cbar.set_label(r"$\overline{p}$", fontsize=font_cfg.legend)
+    if len(colorbar_entries) > 1:
+        colorbar_ax = fig.add_axes([0.84, 0.15, 0.06, 0.7])
+        colorbar = draw_listed_colorbar(
+            fig,
+            colorbar_ax,
+            colorbar_entries,
+            font_cfg=font_cfg,
+            label=r"$\overline{p}$",
+            height_fraction=0.5,
+            width_fraction=0.25,
+            label_kwargs={"labelpad": 8},
+        )
+        if colorbar is not None:
+            colorbar.ax.yaxis.set_major_formatter(mpl_ticker.FormatStrFormatter("%.2f"))
     #fig.tight_layout(rect=(0, 0, 1, 0.95))
     base = Path(output_prefix)
     base.parent.mkdir(parents=True, exist_ok=True)
@@ -592,7 +601,7 @@ def main() -> None:
             if r_value is None:
                 raise ValueError("Parameter 'R_Eplus' must be defined (or overridden via -O).")
             print(f"  -> kappa = {kappa:.4f}, R_Eplus = {float(r_value):.4f}")
-            folder, bundle_path = helpers.ensure_fixpoint_bundle(
+            _, bundle_path = helpers.ensure_fixpoint_bundle(
                 deepcopy(param_kappa),
                 focus_counts,
                 [float(r_value)],
@@ -600,7 +609,6 @@ def main() -> None:
             )
             analysis_dirs = _run_network_initializations(
                 deepcopy(param_kappa),
-                folder_hint=folder,
                 bundle_path=bundle_path,
                 focus_counts=focus_counts,
                 stability_filter=args.stability_filter,
@@ -634,7 +642,12 @@ def main() -> None:
                     _append_metric(instance_store["metrics"], measure, category, stats)
             instance_store["kappa"].append(float(kappa))
         results[label] = instance_store
-    _plot_correlation_figure(results, font_cfg=font_cfg, output_prefix=args.output_prefix)
+    _plot_correlation_figure(
+        results,
+        font_cfg=font_cfg,
+        output_prefix=args.output_prefix,
+        show_std_shading=not args.no_std_shading,
+    )
 
 
 if __name__ == "__main__":

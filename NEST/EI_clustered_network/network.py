@@ -337,7 +337,7 @@ class ClusteredNetwork:
 
     @staticmethod
     def _determine_kappa(kappa_value, clustering_value):
-        """Resolve the effective kappa parameter from legacy inputs."""
+        """Resolve the effective kappa parameter from the configured inputs."""
 
         if kappa_value is not None:
             return float(kappa_value)

@@ -24,7 +24,7 @@ from plotting import (
     style_axes,
     style_legend,
 )
-from ei_pipeline import (
+from pipelines.mean_field import (
     _filter_fixpoint_candidates,
     _key_to_r_eplus,
     _taggable_configuration,
@@ -53,7 +53,7 @@ BIF_COLUMN_TOL = 1e-6
 MIN_PROBABILITY = 1e-6
 BIF_MARKERS = ("o", "s", "D", "^", "v", "<", ">", "P", "X")
 LINE_WIDTH = 1.5
-MARKER_STRIDE = 2
+MARKER_STRIDE = 8
 BIF_LINESTYLE_CYCLE = ("-", "--", ":", "-.")
 BIF_REFERENCE_ROWS = (0, 1)
 BIF_REFERENCE_MARKER = "^"
@@ -146,7 +146,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Matplotlib colormap name for line focus colors; use categorical "
-            "maps like 'tab10' or continuous maps like 'viridis' (default: legacy palette)."
+            "maps like 'tab10' or continuous maps like 'viridis' (default: built-in figure palette)."
         ),
     )
     parser.add_argument(

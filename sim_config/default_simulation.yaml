@@ -1,13 +1,13 @@
-N_E: 4000
-N_I: 1000
+N_E: 8000
+N_I: 2000
 Q: 20
 focus_count: 1
 V_th: 1.0
 g: 1.2
-p0_ee: 0.2 #0.1
-p0_ie: 0.5 #0.2
-p0_ei: 0.5 #0.2
-p0_ii: 0.5 #0.2
+p0_ee: 0.3
+p0_ie: 0.3
+p0_ei: 0.3
+p0_ii: 0.3
 tau_e: 10.0
 tau_i: 5.0
 R_Eplus: null
@@ -30,12 +30,3 @@ binary:
   seed: null
   output_name: activity_trace
   plot_activity: false
-  log_step_states: true
-  log_decimate_factor: 10
-  log_decimate_zero_phase: true
-  log_decimate_ftype: iir
-  update_queue:
-    enabled: true
-    chunk_size: 5000
-    excitatory_repeat: 1
-    inhibitory_repeat: 2

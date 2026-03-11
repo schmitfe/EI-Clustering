@@ -19,6 +19,13 @@ from sympy import Matrix, Symbol, diff
 
 logger = logging.getLogger(__name__)
 
+__all__: list[str] = []
+__pdoc__ = {
+    "HAS_JAX": False,
+    "SystemFunctions": False,
+    "prepare_system_functions": False,
+}
+
 
 def _is_debug_mode() -> bool:
     """Check if debug mode is enabled via environment variable."""
@@ -142,6 +149,11 @@ def prepare_system_functions(
     prefer_autodiff:
         Try to compile the expressions via JAX autodiff when available.  Falls back to
         cached SymPy derivatives when JAX cannot be used.
+
+    Returns
+    -------
+    SystemFunctions
+        Bundle of numerical residual, Jacobian, Hessian, and helper callables.
     """
     var_names = tuple(str(v) for v in var)
     use_autodiff = prefer_autodiff and HAS_JAX
@@ -178,5 +190,3 @@ def prepare_system_functions(
     _SYSTEM_CACHE[key] = bundle
     return bundle
 
-
-__all__ = ["SystemFunctions", "prepare_system_functions", "HAS_JAX"]

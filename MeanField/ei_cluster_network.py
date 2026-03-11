@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
 from .rate_system import RateSystem
+
+__pdoc__ = {"_total_population": False}
 
 
 def _total_population(parameter: Dict) -> float:
@@ -15,16 +17,40 @@ def _total_population(parameter: Dict) -> float:
 
 
 class EIClusterNetwork(RateSystem):
-    """Specialized rate system for the EI-cluster network."""
+    """Specialized mean-field system for the clustered E/I network.
+
+    Examples
+    --------
+    >>> parameter = {
+    ...     "Q": 2,
+    ...     "N_E": 4000,
+    ...     "N_I": 1000,
+    ...     "V_th": 1.0,
+    ...     "g": 1.0,
+    ...     "p0_ee": 0.2,
+    ...     "p0_ei": 0.2,
+    ...     "p0_ie": 0.2,
+    ...     "p0_ii": 0.2,
+    ...     "R_Eplus": 1.0,
+    ...     "R_j": 0.8,
+    ...     "m_X": 0.1,
+    ...     "tau_e": 1.0,
+    ...     "tau_i": 2.0,
+    ... }
+    >>> system = EIClusterNetwork(parameter, v_focus=0.2, prefer_jax=False)
+    >>> system.population_count
+    4
+    """
 
     def __init__(
         self,
         parameter: Dict,
         v_focus: float,
         *,
-        kappa: float | None = None,
-        connection_type: str | None = None,
+        kappa: Optional[float] = None,
+        connection_type: Optional[str] = None,
         use_temporal_variance: bool = True,
+        use_quadratic_variance: bool = True,
         focus_population=None,
         prefer_jax: bool = True,
         max_steps: int = 256,
@@ -42,19 +68,23 @@ class EIClusterNetwork(RateSystem):
             kappa=kappa,
             connection_type=connection_type,
             use_temporal_variance=use_temporal_variance,
+            use_quadratic_variance=use_quadratic_variance,
         )
 
     def _build_dynamics(
         self, parameter: Dict, **network_kwargs
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | Tuple[
-        np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+    ) -> Union[
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     ]:
         kappa_value = network_kwargs.get("kappa")
         if kappa_value is None:
             kappa_value = parameter.get("kappa", 0.0)
         conn_kind = network_kwargs.get("connection_type") or parameter.get("connection_type", "bernoulli")
         use_temporal_variance = bool(network_kwargs.get("use_temporal_variance", True))
-        connectivity = self._build_connectivity(parameter, float(kappa_value), str(conn_kind), use_temporal_variance)
+        use_quadratic_variance = bool(network_kwargs.get("use_quadratic_variance", True))
+
+        connectivity = self._build_connectivity(parameter, float(kappa_value), str(conn_kind), use_temporal_variance, use_quadratic_variance)
         tau = np.ones(2 * self.Q, dtype=float)
         tau[: self.Q] *= parameter["tau_e"]
         tau[self.Q :] *= parameter["tau_i"]
@@ -121,8 +151,11 @@ class EIClusterNetwork(RateSystem):
         return groups
 
     def _build_connectivity(
-        self, parameter: Dict, kappa: float, connection_type: str, use_temporal_variance: bool
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray] | Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        self, parameter: Dict, kappa: float, connection_type: str, use_temporal_variance: bool, use_quadratic_variance: bool,
+    ) -> Union[
+        Tuple[np.ndarray, np.ndarray, np.ndarray],
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ]:
         N_E = parameter["N_E"]
         N_I = parameter["N_I"]
         N = _total_population(parameter)
@@ -217,14 +250,14 @@ class EIClusterNetwork(RateSystem):
         A = self._structured_matrix(mean_values)
 
         var_coeffs = dict(
-            EE_IN=self._variance_coeffs(P_EE, J_EE, n_e, connection_type, use_temporal_variance),
-            EE_OUT=self._variance_coeffs(p_ee, j_ee, n_e, connection_type, use_temporal_variance),
-            IE_IN=self._variance_coeffs(P_IE, J_IE, n_e, connection_type, use_temporal_variance),
-            IE_OUT=self._variance_coeffs(p_ie, j_ie, n_e, connection_type, use_temporal_variance),
-            EI_IN=self._variance_coeffs(P_EI, J_EI, n_i, connection_type, use_temporal_variance),
-            EI_OUT=self._variance_coeffs(p_ei, j_ei, n_i, connection_type, use_temporal_variance),
-            II_IN=self._variance_coeffs(P_II, J_II, n_i, connection_type, use_temporal_variance),
-            II_OUT=self._variance_coeffs(p_ii, j_ii, n_i, connection_type, use_temporal_variance),
+            EE_IN=self._variance_coeffs(P_EE, J_EE, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            EE_OUT=self._variance_coeffs(p_ee, j_ee, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            IE_IN=self._variance_coeffs(P_IE, J_IE, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            IE_OUT=self._variance_coeffs(p_ie, j_ie, n_e, connection_type, use_temporal_variance, use_quadratic_variance),
+            EI_IN=self._variance_coeffs(P_EI, J_EI, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
+            EI_OUT=self._variance_coeffs(p_ei, j_ei, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
+            II_IN=self._variance_coeffs(P_II, J_II, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
+            II_OUT=self._variance_coeffs(p_ii, j_ii, n_i, connection_type, use_temporal_variance, use_quadratic_variance),
         )
         b_values = {key: coeffs[0] for key, coeffs in var_coeffs.items()}
         B = self._structured_matrix(b_values)
@@ -274,12 +307,16 @@ class EIClusterNetwork(RateSystem):
         population: float,
         connection_type: str,
         use_temporal_variance: bool,
+        use_quadratic_variance: bool,
     ) -> tuple[float, float]:
         #if not use_temporal_variance:
         #    return EIClusterNetwork._variance(prob, weight, population, connection_type), 0.0
         conn_kind = connection_type.lower()
         if conn_kind == "poisson":
-            b = (prob + prob ** 2) * weight ** 2 * population
+            if use_quadratic_variance:
+                b= (prob + prob ** 2) * weight ** 2 * population
+            else:
+                b = (prob) * weight ** 2 * population
             c = -(prob ** 2) * weight ** 2 * population
             return b, c
         if conn_kind == "fixed-indegree":

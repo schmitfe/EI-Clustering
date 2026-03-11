@@ -1,3 +1,5 @@
+"""Transform spike trains or time-resolved signals onto new time axes."""
+
 from __future__ import annotations
 
 import pylab
@@ -10,12 +12,52 @@ __all__ = [
 
 
 def time_warp(events, told, tnew):
-    """Transform events from axis *told* into *tnew*."""
+    """Map event times from one timeline onto another by interpolation.
+
+    Parameters
+    ----------
+    events:
+        Event times to transform.
+    told:
+        Original reference time axis.
+    tnew:
+        New reference axis aligned to `told`.
+
+    Returns
+    -------
+    np.ndarray
+        Warped event times. Values outside the interpolation range become `nan`.
+
+    Examples
+    --------
+    >>> time_warp([0.0, 5.0, 10.0], [0.0, 10.0], [0.0, 20.0]).tolist()
+    [0.0, 10.0, 20.0]
+    """
     return pylab.interp(events, told, tnew, left=pylab.nan, right=pylab.nan)
 
 
 def time_stretch(spiketimes, stretchstart, stretchend, endtime=None):
-    """Stretch spike times between start and end markers to a common scale."""
+    """Stretch trial-wise spike times between two markers to a common duration.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation. The function modifies and returns this
+        array in place.
+    stretchstart:
+        One start time per trial.
+    stretchend:
+        One end time per trial.
+    endtime:
+        Common target end time. Defaults to the mean of `stretchend`.
+
+    Examples
+    --------
+    >>> spikes = pylab.array([[1.0, 3.0, 2.0], [0.0, 0.0, 1.0]])
+    >>> stretched = time_stretch(spikes.copy(), pylab.array([0.0, 0.0]), pylab.array([4.0, 2.0]), endtime=4.0)
+    >>> stretched[0].tolist()
+    [1.0, 3.0, 4.0]
+    """
     if endtime is None:
         endtime = stretchend.mean()
 
@@ -35,7 +77,22 @@ def time_stretch(spiketimes, stretchstart, stretchend, endtime=None):
 
 
 def resample(vals, time, new_time):
-    """Interpolate time-resolved quantities onto *new_time*."""
+    """Interpolate a time-resolved signal onto a new time axis.
+
+    Parameters
+    ----------
+    vals:
+        Values sampled on `time`.
+    time:
+        Original sampling points.
+    new_time:
+        Target sampling points.
+
+    Examples
+    --------
+    >>> resample([0.0, 1.0], [0.0, 2.0], [0.0, 1.0, 2.0]).tolist()
+    [0.0, 0.5, 1.0]
+    """
     if len(vals) > 0:
         return pylab.interp(new_time, time, vals, right=pylab.nan, left=pylab.nan)
     return pylab.ones(new_time.shape) * pylab.nan

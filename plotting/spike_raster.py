@@ -41,6 +41,20 @@ class RasterGroup:
         Marker size passed to ``Axes.scatter``.
     label:
         Optional display label overriding automatic label resolution.
+
+    Examples
+    --------
+    ```python
+    groups = [
+        RasterGroup("exc_a", ids=range(0, 5), color="#1f77b4", label="Exc A"),
+        RasterGroup("inh", ids=range(5, 7), color="#8B0000", label="Inh"),
+    ]
+    ```
+
+    Expected output
+    ---------------
+    Passing `groups` into `plot_spike_raster(...)` draws each group with its own
+    color, marker, and label.
     """
 
     name: str
@@ -73,6 +87,21 @@ class RasterLabels:
         Fraction of the x-range used to offset labels from the axis boundary.
     kwargs:
         Additional keyword arguments forwarded to ``Axes.text``.
+
+    Examples
+    --------
+    ```python
+    labels = RasterLabels(
+        mapping={"exc_a": "Exc A", "inh": "Inh"},
+        location="right",
+        kwargs={"fontsize": 9},
+    )
+    ```
+
+    Expected output
+    ---------------
+    The raster receives one text label per group at the chosen side of the
+    axes.
     """
 
     show: bool = True
@@ -148,6 +177,29 @@ def plot_spike_raster(
         Default colors for excitatory/inhibitory groups.
     labels:
         Optional :class:`RasterLabels` controlling group annotations.
+
+    Examples
+    --------
+    ```python
+    fig, ax = plt.subplots(figsize=(4, 2))
+    groups = [
+        RasterGroup("exc_a", ids=range(0, 3), color="#1f77b4", label="Exc A"),
+        RasterGroup("exc_b", ids=range(3, 5), color="#2ca02c", label="Exc B"),
+        RasterGroup("inh", ids=range(5, 7), color="#8B0000", label="Inh"),
+    ]
+    plot_spike_raster(
+        ax,
+        spike_times_ms=[5, 8, 11, 13, 21, 23, 29],
+        spike_ids=[0, 1, 2, 3, 4, 5, 6],
+        groups=groups,
+        labels=RasterLabels(location="right", kwargs={"fontsize": 8}),
+    )
+    ```
+
+    Expected output
+    ---------------
+    The axes contains one grouped raster with group-specific colors and three
+    group labels at the right margin.
     """
     times = np.asarray(spike_times_ms, dtype=float)
     neuron_ids = np.asarray(spike_ids, dtype=int)

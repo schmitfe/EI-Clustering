@@ -1,10 +1,16 @@
 # Created by Felix J. Schmitt on 05/30/2023.
 # Class for binary networks (state is 0 or 1)
+"""Core binary-network data structures and simulation engine.
+
+The module provides generic neuron populations, synapse generators, and the
+`BinaryNetwork` simulation class used by the repository-specific clustered E/I
+wrapper.
+"""
 
 from __future__ import annotations
 
 import math
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 import numpy as np
 from numba import njit
@@ -14,9 +20,38 @@ try:  # pragma: no cover - optional dependency
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     sp = None
 
+__pdoc__ = {
+    "NetworkElement": False,
+    "Neuron": False,
+    "Synapse": False,
+}
+
+__all__ = [
+    "BinaryNeuronPopulation",
+    "BackgroundActivity",
+    "PairwiseBernoulliSynapse",
+    "PoissonSynapse",
+    "FixedIndegreeSynapse",
+    "AllToAllSynapse",
+    "BinaryNetwork",
+]
+
 
 @njit(cache=True)
-def _dense_batch_kernel(neurons, state, field, thresholds, weights, log_states, log_enabled, log_offset):
+def _dense_batch_kernel(
+    neurons,
+    state,
+    field,
+    thresholds,
+    weights,
+    log_states,
+    log_enabled,
+    log_offset,
+    update_log,
+    delta_log,
+    diff_enabled,
+    diff_offset,
+):
     """
     Update neurons in-place for dense weight matrices.
     Parameters
@@ -37,21 +72,37 @@ def _dense_batch_kernel(neurons, state, field, thresholds, weights, log_states, 
         neuron = neurons[idx]
         old_state = state[neuron]
         potential = field[neuron]
-        if old_state == 0:
-            new_state = 1 if potential >= thresholds[neuron] else 0
-        else:
-            new_state = 0
+        new_state = 1 if potential > thresholds[neuron] else 0
+        delta = 0
         if new_state != old_state:
             delta = new_state - old_state
             state[neuron] = new_state
             for target in range(neuron_count):
                 field[target] += delta * weights[target, neuron]
+        if diff_enabled:
+            update_log[diff_offset + idx] = neuron
+            delta_log[diff_offset + idx] = delta
         if log_enabled:
             log_states[log_offset + idx, :] = state
 
 
 @njit(cache=True)
-def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indptr, log_states, log_enabled, log_offset):
+def _sparse_batch_kernel(
+    neurons,
+    state,
+    field,
+    thresholds,
+    data,
+    indices,
+    indptr,
+    log_states,
+    log_enabled,
+    log_offset,
+    update_log,
+    delta_log,
+    diff_enabled,
+    diff_offset,
+):
     """
     Update neurons for sparse CSC weights.
     Parameters
@@ -63,10 +114,8 @@ def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indpt
         neuron = neurons[idx]
         old_state = state[neuron]
         potential = field[neuron]
-        if old_state == 0:
-            new_state = 1 if potential >= thresholds[neuron] else 0
-        else:
-            new_state = 0
+        new_state = 1 if potential > thresholds[neuron] else 0
+        delta = 0
         if new_state != old_state:
             delta = new_state - old_state
             state[neuron] = new_state
@@ -75,11 +124,15 @@ def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indpt
             for ptr in range(start, end):
                 row = indices[ptr]
                 field[row] += delta * data[ptr]
+        if diff_enabled:
+            update_log[diff_offset + idx] = neuron
+            delta_log[diff_offset + idx] = delta
         if log_enabled:
             log_states[log_offset + idx, :] = state
 
 
 class NetworkElement:
+    """Base class for network elements that occupy a slice in the global state."""
     def __init__(self, reference, name="Some Network Element"):
         self.name = name
         self.reference = reference
@@ -93,6 +146,7 @@ class NetworkElement:
 
 
 class Neuron(NetworkElement):
+    """Base class for neuron populations stored in contiguous slices."""
     def __init__(self, reference, N=1, name="Some Neuron", tau=1.0):
         super().__init__(reference, name)
         self.N = N
@@ -111,6 +165,15 @@ class Neuron(NetworkElement):
 
 
 class BinaryNeuronPopulation(Neuron):
+    """Binary neuron population with threshold activation and configurable initializer.
+
+    Examples
+    --------
+    >>> net = BinaryNetwork("demo")
+    >>> pop = BinaryNeuronPopulation(net, N=3, threshold=0.5, initializer=0)
+    >>> net.add_population(pop)
+    <...BinaryNeuronPopulation object...>
+    """
     def __init__(
         self,
         reference,
@@ -149,7 +212,7 @@ class BinaryNeuronPopulation(Neuron):
 
 
 class BackgroundActivity(Neuron):
-    # Neuron which
+    """Background population that provides a constant or stochastic drive."""
     def __init__(self, reference, N=1, Activity=0.5, Stochastic=False, name="Background Activity", tau=1.0):
         super().__init__(reference, N, name, tau=tau)
         self.Activity = Activity
@@ -176,6 +239,7 @@ class BackgroundActivity(Neuron):
 
 
 class Synapse(NetworkElement):
+    """Base class for synapse objects that write weight blocks into the network."""
     def __init__(self, reference, pre, post, name="Some Synapse"):
         super().__init__(reference, name=post.name + " <- " + pre.name)
         self.pre = pre
@@ -195,6 +259,13 @@ class Synapse(NetworkElement):
 
 
 class PairwiseBernoulliSynapse(Synapse):
+    """Sample independent Bernoulli connections for every pre/post pair.
+
+    Expected output
+    ---------------
+    After `network.initialize(...)`, the addressed weight block contains zeros
+    and `j`-valued entries sampled independently with probability `p`.
+    """
     def __init__(self, reference, pre, post, p=0.5, j=1.0):
         super().__init__(reference, pre, post)
         self.p = float(p)
@@ -215,6 +286,13 @@ class PairwiseBernoulliSynapse(Synapse):
 
 
 class PoissonSynapse(Synapse):
+    """Sample Poisson-distributed multi-edge counts per pre/post pair.
+
+    Expected output
+    ---------------
+    The addressed weight block contains non-negative multiples of `j` with
+    Poisson-distributed counts.
+    """
     def __init__(self, reference, pre, post, rate=0.5, j=1.0):
         super().__init__(reference, pre, post)
         self.rate = float(rate)
@@ -227,6 +305,12 @@ class PoissonSynapse(Synapse):
 
 
 class FixedIndegreeSynapse(Synapse):
+    """Connect each target neuron to a fixed number of randomly drawn inputs.
+
+    Expected output
+    ---------------
+    Each target row receives approximately `round(p * N_pre)` incoming entries.
+    """
     def __init__(self, reference, pre, post, p=0.5, j=1.0):
         super().__init__(reference, pre, post)
         self.p = float(p)
@@ -247,6 +331,12 @@ class FixedIndegreeSynapse(Synapse):
 
 
 class AllToAllSynapse(Synapse):
+    """Dense all-to-all block with constant weight value.
+
+    Expected output
+    ---------------
+    The addressed weight block is filled with the constant value `j`.
+    """
     def __init__(self, reference, pre, post, j=1.0):
         super().__init__(reference, pre, post)
         self.j = float(j)
@@ -257,13 +347,30 @@ class AllToAllSynapse(Synapse):
 
 
 class BinaryNetwork:
+    """Binary network simulator with dense/sparse backends and diff-log tracing.
+
+    Examples
+    --------
+    >>> np.random.seed(0)
+    >>> net = BinaryNetwork("demo")
+    >>> exc = BinaryNeuronPopulation(net, N=2, threshold=0.5, tau=5.0, initializer=[0, 1])
+    >>> inh = BinaryNeuronPopulation(net, N=1, threshold=0.5, tau=5.0, initializer=[0])
+    >>> net.add_population(exc)
+    <...BinaryNeuronPopulation object...>
+    >>> net.add_population(inh)
+    <...BinaryNeuronPopulation object...>
+    >>> net.add_synapse(AllToAllSynapse(net, exc, exc, j=0.6))
+    >>> net.initialize(weight_mode="dense", autapse=False)
+    >>> net.state.shape
+    (3,)
+    """
     def __init__(self, name="Some Binary Network"):
         self.name = name
         self.N = 0
         self.population: List[Neuron] = []
         self.synapses: List[Synapse] = []
-        self.state: np.ndarray | None = None
-        self.weights_dense: np.ndarray | None = None
+        self.state: Optional[np.ndarray] = None
+        self.weights_dense: Optional[np.ndarray] = None
         self.weights_csr = None
         self.weights_csc = None
         self.weights = None  # compatibility alias
@@ -279,14 +386,14 @@ class BinaryNetwork:
         self._sparse_rows: List[np.ndarray] = []
         self._sparse_cols: List[np.ndarray] = []
         self._sparse_data: List[np.ndarray] = []
-        self._step_log_buffer: np.ndarray | None = None
+        self._step_log_buffer: Optional[np.ndarray] = None
         self._step_log_index = 0
         self._step_log_dummy = np.zeros((0, 0), dtype=np.int8)
-        self._update_queue_enabled = False
-        self._update_queue_pool = np.zeros(0, dtype=np.int64)
-        self._update_queue_buffer = np.zeros(0, dtype=np.int64)
-        self._update_queue_chunk = 0
-        self._update_queue_position = 0
+        self._diff_log_updates: Optional[np.ndarray] = None
+        self._diff_log_deltas: Optional[np.ndarray] = None
+        self._diff_log_index = 0
+        self._diff_log_dummy_updates = np.zeros(0, dtype=np.uint16)
+        self._diff_log_dummy_deltas = np.zeros(0, dtype=np.int8)
 
     def add_population(self, population: Neuron):
         self.population.append(population)
@@ -303,6 +410,19 @@ class BinaryNetwork:
         ram_budget_gb: float = 12.0,
         weight_dtype=np.float32,
     ):
+        """Allocate state, sample connectivity, and prepare the cached input field.
+
+        Examples
+        --------
+        >>> np.random.seed(1)
+        >>> net = BinaryNetwork("init-demo")
+        >>> pop = BinaryNeuronPopulation(net, N=2, threshold=0.1, initializer=[1, 0])
+        >>> net.add_population(pop)
+        <...BinaryNeuronPopulation object...>
+        >>> net.initialize(weight_mode="dense")
+        >>> net.field.shape
+        (2,)
+        """
         if self.N == 0:
             raise RuntimeError("Cannot initialize network without populations.")
         self.weight_dtype = np.dtype(weight_dtype)
@@ -414,13 +534,20 @@ class BinaryNetwork:
     def _select_neurons(self, count: int) -> np.ndarray:
         if count <= 0:
             return np.zeros(0, dtype=np.int64)
-        if self._update_queue_enabled:
-            return self._draw_from_update_queue(count)
         return np.random.choice(self.N, size=count, p=self.update_prob)
 
     def _update_batch_dense(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
         if neurons.size == 0:
             return
+        diff_enabled = self._diff_log_updates is not None and self._diff_log_deltas is not None
+        if diff_enabled:
+            diff_updates = self._diff_log_updates
+            diff_deltas = self._diff_log_deltas
+            diff_offset = self._diff_log_index
+        else:
+            diff_updates = self._diff_log_dummy_updates
+            diff_deltas = self._diff_log_dummy_deltas
+            diff_offset = 0
         _dense_batch_kernel(
             neurons,
             self.state,
@@ -430,11 +557,24 @@ class BinaryNetwork:
             log_states,
             log_enabled,
             log_offset,
+            diff_updates,
+            diff_deltas,
+            diff_enabled,
+            diff_offset,
         )
 
     def _update_batch_sparse(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
         if neurons.size == 0:
             return
+        diff_enabled = self._diff_log_updates is not None and self._diff_log_deltas is not None
+        if diff_enabled:
+            diff_updates = self._diff_log_updates
+            diff_deltas = self._diff_log_deltas
+            diff_offset = self._diff_log_index
+        else:
+            diff_updates = self._diff_log_dummy_updates
+            diff_deltas = self._diff_log_dummy_deltas
+            diff_offset = 0
         _sparse_batch_kernel(
             neurons,
             self.state,
@@ -446,6 +586,10 @@ class BinaryNetwork:
             log_states,
             log_enabled,
             log_offset,
+            diff_updates,
+            diff_deltas,
+            diff_enabled,
+            diff_offset,
         )
 
     def update(self):
@@ -464,15 +608,34 @@ class BinaryNetwork:
             log_buffer = self._step_log_buffer
         else:
             log_buffer = self._step_log_dummy
+        if self._diff_log_updates is not None and self._diff_log_deltas is not None:
+            if self._diff_log_index + neurons.size > self._diff_log_updates.shape[0]:
+                raise RuntimeError("Diff logging buffer exhausted. Increase allocated steps when enabling diff logging.")
         if self.weight_mode == "dense":
             self._update_batch_dense(neurons, log_buffer, log_enabled, log_offset)
         else:
             self._update_batch_sparse(neurons, log_buffer, log_enabled, log_offset)
         if log_enabled:
             self._step_log_index += neurons.size
+        if self._diff_log_updates is not None and self._diff_log_deltas is not None:
+            self._diff_log_index += neurons.size
         self.sim_steps += neurons.size
 
     def run(self, steps=1000, batch_size=1):
+        """Advance the network for `steps` asynchronous updates.
+
+        Examples
+        --------
+        >>> np.random.seed(2)
+        >>> net = BinaryNetwork("run-demo")
+        >>> pop = BinaryNeuronPopulation(net, N=2, threshold=0.1, initializer=[1, 0])
+        >>> net.add_population(pop)
+        <...BinaryNeuronPopulation object...>
+        >>> net.initialize(weight_mode="dense")
+        >>> net.run(steps=4, batch_size=2)
+        >>> int(net.sim_steps)
+        4
+        """
         if self.state is None or self.update_prob is None:
             raise RuntimeError("Call initialize() before run().")
         if batch_size <= 0:
@@ -502,67 +665,200 @@ class BinaryNetwork:
         self._step_log_index = 0
         return data
 
-    def configure_update_queue(
-        self,
-        pool_indices: Sequence[int] | np.ndarray | None,
-        *,
-        chunk_size: int | None = None,
-    ):
-        if pool_indices is None:
-            self._update_queue_enabled = False
-            self._update_queue_pool = np.zeros(0, dtype=np.int64)
-            self._update_queue_buffer = np.zeros(0, dtype=np.int64)
-            self._update_queue_chunk = 0
-            self._update_queue_position = 0
+    def enable_diff_logging(self, steps: int):
+        """Allocate a diff-log buffer for `steps` asynchronous updates.
+
+        Examples
+        --------
+        >>> net = BinaryNetwork("log-demo")
+        >>> pop = BinaryNeuronPopulation(net, N=1, threshold=0.0, initializer=[0])
+        >>> net.add_population(pop)
+        <...BinaryNeuronPopulation object...>
+        >>> net.initialize(weight_mode="dense")
+        >>> net.enable_diff_logging(steps=3)
+        >>> net._diff_log_updates.shape
+        (3,)
+        """
+        steps = int(max(0, steps))
+        if steps == 0:
+            self._diff_log_updates = None
+            self._diff_log_deltas = None
+            self._diff_log_index = 0
             return
-        pool = np.asarray(pool_indices, dtype=np.int64)
-        if pool.ndim != 1:
-            raise ValueError("pool_indices must form a flat sequence of neuron indexes.")
-        if pool.size == 0:
-            raise ValueError("pool_indices must contain at least one neuron index.")
-        if np.any(pool < 0) or np.any(pool >= self.N):
-            raise ValueError("pool_indices must contain valid neuron indexes.")
-        self._update_queue_pool = pool
-        max_chunk = pool.size
-        if chunk_size is None or chunk_size <= 0 or chunk_size > max_chunk:
-            chunk = max_chunk
-        else:
-            chunk = int(chunk_size)
-        self._update_queue_chunk = chunk
-        self._update_queue_buffer = np.empty(chunk, dtype=np.int64)
-        self._update_queue_position = chunk
-        self._update_queue_enabled = True
+        self._diff_log_updates = np.zeros(steps, dtype=np.uint16)
+        self._diff_log_deltas = np.zeros(steps, dtype=np.int8)
+        self._diff_log_index = 0
 
-    def _refill_update_queue(self):
-        if not self._update_queue_enabled or self._update_queue_chunk <= 0:
-            raise RuntimeError("Update queue is not configured.")
-        selection = np.random.choice(
-            self._update_queue_pool,
-            size=self._update_queue_chunk,
-            replace=False,
-        )
-        self._update_queue_buffer[:] = selection
-        self._update_queue_position = 0
+    def consume_diff_log(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return the recorded diff log as `(updates, deltas)` row arrays.
 
-    def _draw_from_update_queue(self, count: int) -> np.ndarray:
-        if count <= 0:
-            return np.zeros(0, dtype=np.int64)
-        if self._update_queue_chunk <= 0:
-            raise RuntimeError("Update queue is not configured.")
-        result = np.empty(count, dtype=np.int64)
-        filled = 0
-        while filled < count:
-            remaining = self._update_queue_chunk - self._update_queue_position
-            if remaining <= 0:
-                self._refill_update_queue()
-                remaining = self._update_queue_chunk
-            take = min(remaining, count - filled)
-            start = self._update_queue_position
-            end = start + take
-            result[filled:filled + take] = self._update_queue_buffer[start:end]
-            self._update_queue_position = end
-            filled += take
-        return result
+        Expected output
+        ---------------
+        The returned arrays have shape `(1, recorded_steps)` for the current
+        simulation backend.
+        """
+        if self._diff_log_updates is None or self._diff_log_deltas is None:
+            return np.zeros((1, 0), dtype=np.uint16), np.zeros((1, 0), dtype=np.int8)
+        filled = min(self._diff_log_index, self._diff_log_updates.shape[0])
+        updates = self._diff_log_updates[:filled].copy()[None, :]
+        deltas = self._diff_log_deltas[:filled].copy()[None, :]
+        self._diff_log_updates = None
+        self._diff_log_deltas = None
+        self._diff_log_index = 0
+        return updates, deltas
+
+    @staticmethod
+    def reconstruct_states_from_diff_logs(
+        initial_state: np.ndarray,
+        updates: np.ndarray,
+        deltas: np.ndarray,
+        *,
+        sample_interval: int = 1,
+    ) -> np.ndarray:
+        """Reconstruct sampled full network states from diff-log traces.
+
+        Examples
+        --------
+        >>> BinaryNetwork.reconstruct_states_from_diff_logs(
+        ...     initial_state=np.array([0, 0], dtype=np.uint8),
+        ...     updates=np.array([[0, 1, 0]], dtype=np.uint16),
+        ...     deltas=np.array([[1, 1, -1]], dtype=np.int8),
+        ... )
+        array([[1, 0],
+               [1, 1],
+               [0, 1]], dtype=uint8)
+        """
+        update_arr = np.asarray(updates, dtype=np.int64)
+        delta_arr = np.asarray(deltas, dtype=np.int8)
+        if update_arr.ndim == 1:
+            update_arr = update_arr[None, :]
+        if delta_arr.ndim == 1:
+            delta_arr = delta_arr[None, :]
+        state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
+        if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+            return np.zeros((0, state.size), dtype=np.uint8)
+        stride = max(1, int(sample_interval))
+        states: List[np.ndarray] = []
+        for step in range(update_arr.shape[1]):
+            units = update_arr[:, step]
+            delta_step = delta_arr[:, step]
+            for unit, delta in zip(units, delta_step):
+                delta_val = int(delta)
+                if delta_val == 0:
+                    continue
+                unit_idx = int(unit)
+                state_value = int(state[unit_idx]) + delta_val
+                state[unit_idx] = 1 if state_value > 0 else 0
+            if step % stride == 0:
+                states.append(state.astype(np.uint8, copy=True))
+        if not states:
+            return np.zeros((0, state.size), dtype=np.uint8)
+        return np.stack(states, axis=0)
+
+    def population_rates_from_diff_logs(
+        self,
+        initial_state: np.ndarray,
+        updates: np.ndarray,
+        deltas: np.ndarray,
+        *,
+        sample_interval: int = 1,
+        populations: Optional[Sequence[Neuron]] = None,
+    ) -> np.ndarray:
+        """Compute per-population activity traces directly from diff logs.
+
+        Examples
+        --------
+        >>> net = BinaryNetwork("rates-demo")
+        >>> pop_a = BinaryNeuronPopulation(net, N=1, initializer=[0])
+        >>> pop_b = BinaryNeuronPopulation(net, N=1, initializer=[0])
+        >>> net.add_population(pop_a)
+        <...BinaryNeuronPopulation object...>
+        >>> net.add_population(pop_b)
+        <...BinaryNeuronPopulation object...>
+        >>> net.initialize(weight_mode="dense")
+        >>> rates = net.population_rates_from_diff_logs(
+        ...     np.array([0, 0], dtype=np.uint8),
+        ...     np.array([[0, 1, 0]], dtype=np.uint16),
+        ...     np.array([[1, 1, -1]], dtype=np.int8),
+        ... )
+        >>> rates.tolist()
+        [[1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        """
+        pops = list(self.population if populations is None else populations)
+        if not pops:
+            return np.zeros((0, 0), dtype=np.float32)
+        update_arr = np.asarray(updates, dtype=np.int64)
+        delta_arr = np.asarray(deltas, dtype=np.int8)
+        if update_arr.ndim == 1:
+            update_arr = update_arr[None, :]
+        if delta_arr.ndim == 1:
+            delta_arr = delta_arr[None, :]
+        if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+            return np.zeros((0, len(pops)), dtype=np.float32)
+        state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
+        pop_count = len(pops)
+        sizes = np.zeros(pop_count, dtype=np.float32)
+        cluster_of = np.empty(state.size, dtype=np.int32)
+        cluster_sums = np.zeros(pop_count, dtype=np.int64)
+        for idx, pop in enumerate(pops):
+            start, end = int(pop.view[0]), int(pop.view[1])
+            cluster_of[start:end] = idx
+            sizes[idx] = max(1, end - start)
+            cluster_sums[idx] = int(state[start:end].sum())
+        stride = max(1, int(sample_interval))
+        samples: List[np.ndarray] = []
+        for step in range(update_arr.shape[1]):
+            units = update_arr[:, step]
+            delta_step = delta_arr[:, step]
+            for unit, delta in zip(units, delta_step):
+                delta_val = int(delta)
+                if delta_val == 0:
+                    continue
+                unit_idx = int(unit)
+                cluster_idx = int(cluster_of[unit_idx])
+                cluster_sums[cluster_idx] += delta_val
+                state_value = int(state[unit_idx]) + delta_val
+                state[unit_idx] = 1 if state_value > 0 else 0
+            if step % stride == 0:
+                samples.append((cluster_sums.astype(np.float32, copy=False) / sizes).copy())
+        if not samples:
+            return np.zeros((0, pop_count), dtype=np.float32)
+        return np.stack(samples, axis=0)
+
+    @staticmethod
+    def extract_spike_events_from_diff_logs(
+        updates: np.ndarray,
+        deltas: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Extract onset events `(times, neuron_ids)` from diff-log traces.
+
+        Examples
+        --------
+        >>> times, ids = BinaryNetwork.extract_spike_events_from_diff_logs(
+        ...     np.array([[0, 1, 0]], dtype=np.uint16),
+        ...     np.array([[1, 1, -1]], dtype=np.int8),
+        ... )
+        >>> times.tolist()
+        [0.0, 1.0]
+        >>> ids.tolist()
+        [0, 1]
+        """
+        update_arr = np.asarray(updates, dtype=np.int64)
+        delta_arr = np.asarray(deltas, dtype=np.int8)
+        if update_arr.ndim == 1:
+            update_arr = update_arr[None, :]
+        if delta_arr.ndim == 1:
+            delta_arr = delta_arr[None, :]
+        if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+            return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
+        mask = delta_arr > 0
+        if not mask.any():
+            return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
+        per_step, steps = update_arr.shape
+        times = np.repeat(np.arange(steps, dtype=np.int64), per_step)
+        flat_updates = update_arr.reshape(-1, order="F")
+        flat_mask = mask.reshape(-1, order="F")
+        return times[flat_mask].astype(np.float64, copy=False), flat_updates[flat_mask].astype(np.int64, copy=False)
 
 
 def _build_demo_network(weight_mode: str) -> BinaryNetwork:

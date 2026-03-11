@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 from typing import Tuple
 
-__all__ = ["_time_axis_scale"]
+__all__: list[str] = []
+__pdoc__ = {"_time_axis_scale": False}
 
 
 def _time_axis_scale(start: float, end: float) -> Tuple[float, str]:

@@ -1,162 +1,265 @@
-from ClusteredEI_network import *
-import BinaryNetwork
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-import pylab
-import plotting
-import os
-import pickle
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Iterable, Sequence
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+
+try:  # pragma: no cover - optional dependency
+    from tqdm import tqdm
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    tqdm = None
+
+from ClusteredEI_network import ClusteredEI_network
+
+
+def _progress(iterable: Iterable[int], *, desc: str) -> Iterable[int]:
+    if tqdm is None:
+        return iterable
+    return tqdm(iterable, desc=desc)
+
+
+def _build_parameter(
+    *,
+    q_value: int,
+    r_eplus: float,
+    r_j: float,
+    kappa: float,
+    connection_type: str,
+) -> dict[str, float | int | str]:
+    return {
+        "N_E": 8000,
+        "N_I": 2000,
+        "Q": q_value,
+        "V_th": 1.0,
+        "g": 1.2,
+        "p0_ee": 0.3,
+        "p0_ei": 0.3,
+        "p0_ie": 0.3,
+        "p0_ii": 0.3,
+        "tau_e": 10.0,
+        "tau_i": 5.0,
+        "R_Eplus": r_eplus,
+        "R_j": r_j,
+        "kappa": kappa,
+        "connection_type": connection_type,
+        "m_X": 0.03,
+    }
+
+
+def _simulate_recording(
+    parameter: dict[str, float | int | str],
+    *,
+    warmup_iterations: int,
+    samples: int,
+    sample_stride: int,
+    batch_size: int,
+) -> np.ndarray:
+    network = ClusteredEI_network(parameter)
+    network.initialize(weight_mode="dense")
+    for _ in _progress(range(max(0, warmup_iterations)), desc="Warmup"):
+        network.run(sample_stride, batch_size=batch_size)
+    recording = np.zeros((network.N, samples), dtype=np.int8)
+    for idx in _progress(range(samples), desc="Recording"):
+        network.run(sample_stride, batch_size=batch_size)
+        recording[:, idx] = network.state
+    return recording
+
+
+def _cluster_views(network: ClusteredEI_network) -> list[tuple[int, int]]:
+    pops = network.E_pops + network.I_pops
+    return [(int(pop.view[0]), int(pop.view[1])) for pop in pops]
+
+
+def _homogenize_blocks(network: ClusteredEI_network, *, diagonal_only: bool) -> None:
+    if network.weight_mode != "dense" or network.weights_dense is None:
+        raise RuntimeError("Homogenization requires a dense weight matrix.")
+    views = _cluster_views(network)
+    for post_idx, (post_start, post_end) in enumerate(views):
+        for pre_idx, (pre_start, pre_end) in enumerate(views):
+            same_cluster = post_idx == pre_idx
+            if diagonal_only != same_cluster:
+                continue
+            block = network.weights_dense[post_start:post_end, pre_start:pre_end]
+            if block.size == 0:
+                continue
+            block[:] = float(block.mean())
+    if not diagonal_only:
+        np.fill_diagonal(network.weights_dense, 0.0)
+    network._recompute_field()
+
+
+def _simulate_homogenized_recording(
+    parameter: dict[str, float | int | str],
+    *,
+    warmup_iterations: int,
+    samples: int,
+    sample_stride: int,
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    network = ClusteredEI_network(parameter)
+    network.initialize(weight_mode="dense")
+    weights_initial = network.weights_dense.copy()
+    _homogenize_blocks(network, diagonal_only=True)
+    weights_within = network.weights_dense.copy()
+    _homogenize_blocks(network, diagonal_only=False)
+    weights_between = network.weights_dense.copy()
+    for _ in _progress(range(max(0, warmup_iterations)), desc="Warmup"):
+        network.run(sample_stride, batch_size=batch_size)
+    recording = np.zeros((network.N, samples), dtype=np.int8)
+    for idx in _progress(range(samples), desc="Recording"):
+        network.run(sample_stride, batch_size=batch_size)
+        recording[:, idx] = network.state
+    return weights_initial, weights_within, weights_between, recording
+
+
+def _plot_active_state_raster(ax: plt.Axes, recording: np.ndarray, title: str) -> None:
+    neuron_ids, sample_ids = np.nonzero(recording > 0)
+    if sample_ids.size:
+        ax.scatter(sample_ids, neuron_ids, s=1.0, c="black", marker=".", linewidths=0)
+        ax.set_xlim(0, recording.shape[1])
+        ax.set_ylim(-0.5, recording.shape[0] - 0.5)
+    else:
+        ax.text(0.5, 0.5, "No active states recorded", ha="center", va="center", transform=ax.transAxes)
+    ax.set_title(title)
+    ax.set_yticks([])
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="BinaryNetwork test driver.")
+    parser.add_argument(
+        "--mode",
+        choices=("compare", "homog"),
+        default="compare",
+        help="Run the kappa comparison raster test or the homogenized-weight test.",
+    )
+    parser.add_argument("--q", type=int, default=20, help="Number of E/I clusters.")
+    parser.add_argument("--r-j", type=float, default=0.8, help="Inhibitory clustering ratio.")
+    parser.add_argument(
+        "--connection-type",
+        choices=("bernoulli", "poisson", "fixed_indegree"),
+        default="poisson",
+        help="Connectivity sampler for the network.",
+    )
+    parser.add_argument("--warmup-iterations", type=int, default=500, help="Warmup iterations before recording.")
+    parser.add_argument("--samples", type=int, default=2000, help="Recorded binary snapshots.")
+    parser.add_argument("--sample-stride", type=int, default=100, help="Update steps between snapshots.")
+    parser.add_argument("--batch-size", type=int, default=10, help="Batch size passed to network.run().")
+    parser.add_argument(
+        "--weight-r-eplus",
+        type=float,
+        default=8.0,
+        help="R_Eplus for the weight-mixed comparison panel.",
+    )
+    parser.add_argument(
+        "--prob-r-eplus",
+        type=float,
+        default=8.0,
+        help="R_Eplus for the probability-mixed comparison panel.",
+    )
+    parser.add_argument(
+        "--homog-mode",
+        choices=("prob", "weight"),
+        default="prob",
+        help="Parameter set used for the homogenization test.",
+    )
+    parser.add_argument(
+        "--homog-r-eplus",
+        type=float,
+        default=8.0,
+        help="R_Eplus for the homogenization test.",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        type=Path,
+        default=Path("BinaryNetwork/module_test"),
+        help="Output prefix for the saved figure.",
+    )
+    parser.add_argument("--show", action="store_true", help="Display the figure interactively after saving.")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parse_args(argv)
+    output_prefix = args.output_prefix
+    output_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.mode == "compare":
+        weight_parameter = _build_parameter(
+            q_value=args.q,
+            r_eplus=args.weight_r_eplus,
+            r_j=args.r_j,
+            kappa=1.0,
+            connection_type=args.connection_type,
+        )
+        prob_parameter = _build_parameter(
+            q_value=args.q,
+            r_eplus=args.prob_r_eplus,
+            r_j=args.r_j,
+            kappa=0.0,
+            connection_type=args.connection_type,
+        )
+        weight_recording = _simulate_recording(
+            weight_parameter,
+            warmup_iterations=args.warmup_iterations,
+            samples=args.samples,
+            sample_stride=args.sample_stride,
+            batch_size=args.batch_size,
+        )
+        prob_recording = _simulate_recording(
+            prob_parameter,
+            warmup_iterations=args.warmup_iterations,
+            samples=args.samples,
+            sample_stride=args.sample_stride,
+            batch_size=args.batch_size,
+        )
+        fig, axes = plt.subplots(2, 1, figsize=(10, 6), constrained_layout=True)
+        _plot_active_state_raster(axes[0], weight_recording, "Weight-mixed (kappa=1)")
+        _plot_active_state_raster(axes[1], prob_recording, "Probability-mixed (kappa=0)")
+        axes[1].set_xlabel("Sample index")
+    else:
+        probability_mode = args.homog_mode == "prob"
+        parameter = _build_parameter(
+            q_value=args.q,
+            r_eplus=args.homog_r_eplus,
+            r_j=args.r_j,
+            kappa=0.0 if probability_mode else 1.0,
+            connection_type=args.connection_type,
+        )
+        weights_initial, weights_within, weights_between, recording = _simulate_homogenized_recording(
+            parameter,
+            warmup_iterations=args.warmup_iterations,
+            samples=args.samples,
+            sample_stride=args.sample_stride,
+            batch_size=args.batch_size,
+        )
+        fig, axes = plt.subplots(1, 4, figsize=(15, 4), constrained_layout=True)
+        cmap = "coolwarm"
+        axes[0].imshow(weights_initial, aspect="auto", interpolation="none", cmap=cmap)
+        axes[0].set_title("Initial weights")
+        axes[1].imshow(weights_within, aspect="auto", interpolation="none", cmap=cmap)
+        axes[1].set_title("Within-cluster homogenized")
+        axes[2].imshow(weights_between, aspect="auto", interpolation="none", cmap=cmap)
+        axes[2].set_title("Fully block-homogenized")
+        _plot_active_state_raster(axes[3], recording, f"Active-state raster ({args.homog_mode})")
+        axes[3].set_xlabel("Sample index")
+        for ax in axes[:3]:
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    fig.savefig(output_prefix.with_suffix(".png"), dpi=200)
+    fig.savefig(output_prefix.with_suffix(".pdf"))
+    if args.show:
+        plt.show()
+    else:
+        plt.close(fig)
+
 
 if __name__ == "__main__":
-    p = np.ones((2, 2)) * 0.2
-    g = 1.2
-    Q = 10
-    # jep=2.0
-    Rj = 0.75 #0.75  # 0.85
-
-
-    jep = 5.  # 1.0
-
-
-
-
-    neuron_parameters = {"N_E": 400, "N_I": 100,
-                         "threshold_E": 1.0, "threshold_I": 1.0,
-                        "tau_theta_E": 50000., "theta_q_E": 0.0,
-                         "tau_theta_I": 50000., "theta_q_I": 0.0,
-                         "tau_E": 10.0, "tau_I": 5.0,
-                         }
-
-
-
-
-    network = WeightClusteredEI_Network(Q, p, g, jep, Rj, neuron_parameters=neuron_parameters, neuron_model=BinaryNetwork.BinaryNeuronPopulation)
-
-    network.initialize()
-
-    # run x steps of the network
-    steps= 25000
-    recording = np.zeros((network.N, steps), dtype=np.int16)
-    # use tqdm to show progress bar
-    for i in tqdm(range(5000)):
-        network.run(10)
-    for i in tqdm(range(steps)):
-        network.run(50)
-        recording[:, i] = network.state
-    # plot the recording of the network with flipped y axis
-
-    #plt.imshow(recording, interpolation=None, aspect='auto', origin='lower')
-    #set colormap to black and white
-    #plt.set_cmap('binary')
-    #plt.ylabel("NeuronID")
-    #plt.xlabel("Time [a.u.]")
-    # set title to contain pep and Rj
-    # check if network is an instance of ProbClusteredEI_Network
-
-
-    ms = 4
-    mew = 1
-    plot = True
-    colors = ['k']  # plotting.make_color_list(len(Qs),cmap = 'Greys',minval  =0.25)
-
-    if plot:
-        fig = plotting.nice_figure(fig_size_mm=[plotting.biol_cyb_fig_widths[2], plotting.biol_cyb_fig_widths[2] * 0.6],
-                                   backend='ps')
-        ncols = 2
-        nrows = 2
-        gs = pylab.GridSpec(nrows, ncols, top=0.85, bottom=0.15, hspace=0.4, left=0.1, right=0.9)
-
-        ms = 4
-        mew = 1
-        y_offset = 0.04
-        x_offset = 0.18
-
-        row = 0
-        col = 0
-        subplotspec = gs.new_subplotspec((row, col), colspan=1, rowspan=1)
-        ax = plotting.simpleaxis(pylab.subplot(subplotspec))
-        plt.imshow(recording, interpolation=None, aspect='auto', origin='lower')
-        plt.set_cmap('binary')
-        plt.ylabel("weight")
-        plt.yticks([])
-        plotting.ax_label(ax, 'a')
-        plt.title("Binary neurons")
-
-    p = np.ones((2, 2)) * 0.1
-    g = 1.2
-    Q = 10
-    # jep=2.0
-    Rj = 0.75  # 0.75  # 0.85
-    pep = 5.  # 1275
-
-
-    network = ProbClusteredEI_Network(Q, p, g, pep, Rj, neuron_parameters=neuron_parameters,
-                                      neuron_model=BinaryNetwork.BinaryNeuronPopulation)
-
-    network.initialize()
-
-    # run x steps of the network
-    recording = np.zeros((network.N, steps), dtype=np.int16)
-    # use tqdm to show progress bar
-    for i in tqdm(range(5000)):
-        network.run(10)
-    for i in tqdm(range(steps)):
-        network.run(50)
-        recording[:, i] = network.state
-
-    row = 1
-    col = 0
-    subplotspec = gs.new_subplotspec((row, col), colspan=1, rowspan=1)
-    ax = plotting.simpleaxis(pylab.subplot(subplotspec))
-    plt.imshow(recording, interpolation=None, aspect='auto', origin='lower')
-    plt.set_cmap('binary')
-    plt.ylabel("prob.")
-    plt.yticks([])
-    plt.xlabel("Time [a.u.]")
-    plotting.ax_label(ax, 'c')
-
-
-    ## Spiking data
-    ms=0.0025
-    xlim=[0, 1.05]
-    row = 0
-    col = 1
-    subplotspec = gs.new_subplotspec((row, col), colspan=1, rowspan=1)
-    ax = plotting.simpleaxis(pylab.subplot(subplotspec))
-
-    with open('Data/Data_weight.pkl', 'rb') as f:
-        Result = pickle.load(f)
-
-    plt.plot(Result['spiketimes'][0]/1000, Result['spiketimes'][1], 'k.', markersize=ms)
-    plt.ylim([0, 5000])
-    plt.xlim(xlim)
-    plt.yticks([])
-    #plt.xlabel("Time [s]")
-    plotting.ax_label(ax, 'b')
-    plt.title("LIF neurons")
-
-    row = 1
-    col = 1
-    subplotspec = gs.new_subplotspec((row, col), colspan=1, rowspan=1)
-    ax = plotting.simpleaxis(pylab.subplot(subplotspec))
-
-    with open('Data/Data_prob.pkl', 'rb') as f:
-        Result = pickle.load(f)
-
-    plt.plot(Result['spiketimes'][0]/1000, Result['spiketimes'][1], 'k.', markersize=ms)
-
-    plt.yticks([])
-    plt.ylim([0,5000])
-    plt.xlim(xlim)
-    plt.xlabel("Time [s]")
-    plotting.ax_label(ax, 'd')
-
-
-    # test if figure is already saved, then iterate filename
-    name='fig_poster_simulations'
-    i=0
-    while os.path.isfile(name+str(i)+'.pdf'):
-        i+=1
-    pylab.savefig(name+str(i)+'.pdf')
-    pylab.savefig(name+'.eps')
+    main()

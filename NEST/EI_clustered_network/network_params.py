@@ -72,15 +72,15 @@ net_dict = {
     ############################################
     # number of excitatory neurons in the network
     # Neurons per cluster N_E/n_clusters
-    "N_E": 4000,
+    "N_E": 8000,
     # number of inhibitory neurons in the network
-    "N_I": 1000,
+    "N_I": 2000,
     # Number of clusters
     "n_clusters": 20,
     # connection probabilities
     # baseline_conn_prob[0, 0] E to E, baseline_conn_prob[0, 1] I to E,
     # baseline_conn_prob[1, 0] E to I, baseline_conn_prob[1, 1] I to I
-    "baseline_conn_prob": np.array([[0.2, 0.5], [0.5, 0.5]]),
+    "baseline_conn_prob": np.array([[0.3, 0.3], [0.3, 0.3]]),
     # inhibitory weight ratios - scaling like random balanced network
     "gei": 1.2,  # I to E
     "gie": 1.0,  # E to I
@@ -95,8 +95,8 @@ net_dict = {
     # ratio excitatory to inhibitory clustering,
     # rj = 0 means no clustering, which resembles a clustered network
     # with a blanket of inhibition
-    "rj": 0.75,
+    "rj": 0.78,
     # excitatory clustering factor,
     # rep = 1 means no clustering, reselmbles a balanced random network
-    "rep": 5.0,
+    "rep": 4.5,
 }

@@ -1,7 +1,9 @@
+"""Clustered E/I model built on top of the generic binary-network engine."""
+
 from __future__ import annotations
 
 import math
-from typing import Callable, Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -23,7 +25,7 @@ def _total_population(parameter: Dict) -> float:
     return float(parameter["N_E"]) + float(parameter["N_I"])
 
 
-def _normalize_conn_type(kind: str | None) -> str:
+def _normalize_conn_type(kind: Optional[str]) -> str:
     label = "bernoulli" if kind is None else str(kind).replace("_", "-").lower()
     if label not in {"bernoulli", "poisson", "fixed-indegree"}:
         raise ValueError(f"Unknown connection_type '{kind}'. Expected 'bernoulli', 'poisson', or 'fixed-indegree'.")
@@ -33,22 +35,20 @@ def _normalize_conn_type(kind: str | None) -> str:
 def _split_counts(total: int, groups: int) -> List[int]:
     if groups <= 0:
         raise ValueError("Q must be positive.")
-    base = total // groups
-    remainder = total % groups
-    counts = []
-    for idx in range(groups):
-        counts.append(base + (1 if idx < remainder else 0))
-    return counts
+    if total % groups != 0:
+        raise ValueError(f"Population size {total} must be divisible by Q={groups}.")
+    return [total // groups] * groups
 
 
 def _mix_scales(R_plus: float, Q: int, kappa: float) -> Tuple[float, float, float, float]:
+    positive = max(float(R_plus), 0.0)
     if Q <= 1:
-        value = max(R_plus, 0.0)
+        value = positive
         weight = value ** kappa
         return value ** (1.0 - kappa), value ** (1.0 - kappa), weight, weight
-    prob_in = R_plus ** (1.0 - kappa)
+    prob_in = positive ** (1.0 - kappa)
     prob_out = (Q - prob_in) / (Q - 1)
-    weight_in = R_plus ** kappa
+    weight_in = positive ** kappa
     weight_out = (Q - weight_in) / (Q - 1)
     return prob_in, prob_out, weight_in, weight_out
 
@@ -133,7 +133,7 @@ def _flatten_values(values) -> List:
     return [values]
 
 
-def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Dict[str, float] | None]:
+def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Optional[Dict[str, float]]]:
     if entry is None:
         return [None] * count
     mode = default_mode
@@ -151,7 +151,7 @@ def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Dict
         items = items * count
     if len(items) != count:
         raise ValueError(f"Initializer definition must provide {count} entries, got {len(items)}.")
-    normalized: List[Dict[str, float] | None] = []
+    normalized: List[Optional[Dict[str, float]]] = []
     for value in items:
         if value is None:
             normalized.append(None)
@@ -160,7 +160,7 @@ def _normalize_activity_entry(entry, count: int, default_mode: str) -> List[Dict
     return normalized
 
 
-def _make_initializer(spec: Dict[str, float] | None, size: int) -> Callable[[int], np.ndarray] | None:
+def _make_initializer(spec: Optional[Dict[str, float]], size: int) -> Optional[Callable[[int], np.ndarray]]:
     if spec is None:
         return None
     mode = spec.get("mode", "bernoulli").lower()
@@ -189,8 +189,8 @@ def _resolve_initializers(config, excit_sizes: Sequence[int], inhib_sizes: Seque
     if not isinstance(config, dict):
         config = {"default": config}
     default_mode = str(config.get("mode", "bernoulli")).lower()
-    excit_specs: List[Dict[str, float] | None] = [None] * len(excit_sizes)
-    inhib_specs: List[Dict[str, float] | None] = [None] * len(inhib_sizes)
+    excit_specs: List[Optional[Dict[str, float]]] = [None] * len(excit_sizes)
+    inhib_specs: List[Optional[Dict[str, float]]] = [None] * len(inhib_sizes)
 
     def apply(entry, targets):
         if entry is None:
@@ -213,10 +213,33 @@ def _resolve_initializers(config, excit_sizes: Sequence[int], inhib_sizes: Seque
 
 
 class ClusteredEI_network(BaseBinaryNetwork):
-    def __init__(self, parameter: Dict, *, kappa: float | None = None, connection_type: str | None = None, name="Binary EI Network"):
+    """Repository-specific clustered E/I binary network.
+
+    Examples
+    --------
+    >>> parameter = {
+    ...     "Q": 2,
+    ...     "N_E": 4,
+    ...     "N_I": 2,
+    ...     "V_th": 1.0,
+    ...     "g": 1.0,
+    ...     "p0_ee": 0.2,
+    ...     "p0_ei": 0.2,
+    ...     "p0_ie": 0.2,
+    ...     "p0_ii": 0.2,
+    ...     "R_Eplus": 1.0,
+    ...     "R_j": 0.0,
+    ...     "m_X": 0.0,
+    ...     "tau_e": 5.0,
+    ...     "tau_i": 10.0,
+    ... }
+    >>> net = ClusteredEI_network(parameter)
+    >>> net.Q
+    2
+    """
+
+    def __init__(self, parameter: Dict, *, kappa: Optional[float] = None, connection_type: Optional[str] = None, name="Binary EI Network"):
         super().__init__(name)
-        # break to ensure we use legacy!
-        raise
         self.parameter = dict(parameter)
         self.Q = int(self.parameter["Q"])
         self.connection_type = _normalize_conn_type(connection_type or self.parameter.get("connection_type"))
@@ -237,7 +260,7 @@ class ClusteredEI_network(BaseBinaryNetwork):
 
     def _build_populations(self):
         tau_e = float(self.parameter["tau_e"])
-        tau_i = float(self.parameter["tau_i"])
+        tau_i = float(self.parameter.get("tau_i", 0.5 * tau_e))
         theta_E = self.connection_parameters["theta_E"]
         theta_I = self.connection_parameters["theta_I"]
         for idx, size in enumerate(self.E_sizes):
@@ -313,39 +336,28 @@ class ClusteredEI_network(BaseBinaryNetwork):
         self._build_background()
         self._structure_created = True
 
-    def configure_cell_type_queue(
+    def initialize(
         self,
-        *,
-        excitatory_repeat: int = 1,
-        inhibitory_repeat: int = 1,
-        chunk_size: int | None = None,
-    ) -> None:
-        """Configure the parent network's update queue using cell-type repeats."""
-        excit_repeat = max(1, int(excitatory_repeat))
-        inhib_repeat = max(1, int(inhibitory_repeat))
-        entries: List[np.ndarray] = []
-        for pop in self.E_pops:
-            start, end = int(pop.view[0]), int(pop.view[1])
-            base = np.arange(start, end, dtype=np.int64)
-            if excit_repeat > 1 and base.size:
-                base = np.repeat(base, excit_repeat)
-            if base.size:
-                entries.append(base)
-        for pop in self.I_pops:
-            start, end = int(pop.view[0]), int(pop.view[1])
-            base = np.arange(start, end, dtype=np.int64)
-            if inhib_repeat > 1 and base.size:
-                base = np.repeat(base, inhib_repeat)
-            if base.size:
-                entries.append(base)
-        if not entries:
-            raise RuntimeError("Cannot configure an update queue without neuron populations.")
-        pool = np.concatenate(entries) if len(entries) > 1 else entries[0]
-        self.configure_update_queue(pool, chunk_size=chunk_size)
+        autapse: bool = False,
+        weight_mode: str = "auto",
+        ram_budget_gb: float = 12.0,
+        weight_dtype=np.float32,
+    ):
+        """Build clustered populations/synapses and initialize the parent network.
 
-    def initialize(self, autapse: bool = True):
+        Expected output
+        ---------------
+        After initialization, `state`, `field`, and the sampled connectivity are
+        allocated and ready for `run(...)`.
+        """
         self._ensure_structure()
-        super().initialize(autapse=autapse)
+        super().initialize(
+            autapse=autapse,
+            weight_mode=weight_mode,
+            ram_budget_gb=ram_budget_gb,
+            weight_dtype=weight_dtype,
+        )
 
     def reinitalize(self):
+        """Rebuild the simulation state with the stored parameters."""
         self.initialize()

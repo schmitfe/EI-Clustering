@@ -21,7 +21,7 @@ from plotting import (
 )
 from sim_config import add_override_arguments, load_from_args, parse_overrides, deep_update
 from spiketools.rate import gaussian_kernel, kernel_rate
-from spiking_pipeline import run_spiking_simulation
+from pipelines.spiking import run_spiking_simulation
 
 
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})

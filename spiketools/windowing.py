@@ -1,6 +1,8 @@
+"""Windowed analyses on canonical `spiketimes` arrays."""
+
 from __future__ import annotations
 
-from typing import Callable, Sequence
+from typing import Callable, Optional, Sequence
 
 import pylab
 
@@ -25,11 +27,40 @@ def time_resolved(
     window,
     func: Callable,
     kwargs=None,
-    tlim: Sequence[float] | None = None,
+    tlim: Optional[Sequence[float]] = None,
     tstep=1.0,
 ):
     """
-    Apply *func* over sliding windows on the spiketimes array.
+    Apply a function to successive windows of a spike train.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    window:
+        Window size in ms.
+    func:
+        Callable receiving the cropped `spiketimes` of each window.
+    kwargs:
+        Optional keyword arguments passed to `func`.
+    tlim:
+        Optional analysis interval `[tmin, tmax]` in ms.
+    tstep:
+        Window step size in ms.
+
+    Returns
+    -------
+    tuple[list, np.ndarray]
+        Function outputs and window-center times.
+
+    Examples
+    --------
+    >>> spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])
+    >>> values, times = time_resolved(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)
+    >>> values
+    [1, 1, 1, 1]
+    >>> times.tolist()
+    [0.5, 1.5, 2.5, 3.5]
     """
     if kwargs is None:
         kwargs = {}
@@ -60,11 +91,21 @@ def time_resolved_new(
     window,
     func: Callable,
     kwargs=None,
-    tlim: Sequence[float] | None = None,
+    tlim: Optional[Sequence[float]] = None,
     tstep=1.0,
 ):
     """
-    Sliding-window evaluation using binary spike matrices for efficiency.
+    Windowed evaluation using an intermediate binary representation.
+
+    This variant can be faster for repeated window extraction because the spike
+    train is binned once before the loop.
+
+    Examples
+    --------
+    >>> spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])
+    >>> values, times = time_resolved_new(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)
+    >>> values
+    [1, 1, 1, 1]
     """
     if kwargs is None:
         kwargs = {}
@@ -104,7 +145,43 @@ def rate_warped_analysis(
     dt=1.0,
 ):
     """
-    Apply *func* after warping time according to the instantaneous rate.
+    Apply a function after warping time according to instantaneous rate.
+
+    Parameters
+    ----------
+    spiketimes:
+        Canonical spike representation.
+    window:
+        Window size in warped time. Use `"full"` to analyze the complete warped
+        recording at once.
+    step:
+        Step size in warped time.
+    tlim:
+        Optional `[tmin, tmax]` interval in ms.
+    rate:
+        Optional precomputed `(rate, time)` tuple as returned by
+        `kernel_rate(...)`.
+    func:
+        Statistic to evaluate on the warped spike train.
+    kwargs:
+        Optional keyword arguments forwarded to `func`.
+    rate_kernel:
+        Kernel used when `rate` is not provided.
+    dt:
+        Sampling interval in ms used for the rate estimate.
+
+    Examples
+    --------
+    >>> spikes = pylab.array([[0.0, 3.0, 6.0], [0.0, 0.0, 0.0]])
+    >>> result, warped_duration = rate_warped_analysis(
+    ...     spikes,
+    ...     window="full",
+    ...     func=lambda s: s.shape[1],
+    ...     rate=(pylab.array([[500.0, 500.0, 500.0]]), pylab.array([0.0, 1.0, 2.0])),
+    ...     dt=1.0,
+    ... )
+    >>> int(result), round(float(warped_duration), 3)
+    (3, 1.5)
     """
     if kwargs is None:
         kwargs = {}

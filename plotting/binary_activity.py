@@ -1,8 +1,15 @@
+"""Helpers for visualizing binary-network activity as onset rasters.
+
+These functions work with binary state traces or diff-log traces. In both
+cases the plotting path extracts 0->1 transitions and then reuses the generic
+spike-raster plotting backend.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence, Tuple
+from typing import Iterable, Iterator, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -18,17 +25,49 @@ __all__ = [
 
 @dataclass
 class BinaryStateSource:
-    """Container describing how to stream binary neuron states for raster plotting."""
+    """Describe how binary neuron states are provided for raster plotting.
 
-    inline_states: np.ndarray | None = None
+    Parameters
+    ----------
+    inline_states:
+        Optional in-memory state matrix with shape `(steps, neurons)`.
+    chunk_files:
+        Optional paths to `.npy` or `.npz` chunks storing state matrices.
+    neuron_count:
+        Total number of neurons represented by the source.
+    update_log, delta_log:
+        Optional diff-log representation where each column corresponds to a
+        simulation step.
+    initial_state:
+        Optional initial state for diff-log based sources.
+
+    Examples
+    --------
+    Wrap an in-memory state matrix:
+
+    >>> states = np.array([[0, 1], [1, 1], [1, 0]], dtype=np.uint8)
+    >>> source = BinaryStateSource.from_array(states)
+    >>> source.neuron_count
+    2
+
+    Wrap diff logs directly:
+
+    >>> updates = np.array([[0, 1], [1, 0]], dtype=np.uint16)
+    >>> deltas = np.array([[1, -1], [0, 1]], dtype=np.int8)
+    >>> source = BinaryStateSource.from_diff_logs(updates, deltas, neuron_count=2)
+    >>> source.update_log.shape
+    (2, 2)
+    """
+
+    inline_states: Optional[np.ndarray] = None
     chunk_files: Sequence[Path] = field(default_factory=tuple)
     neuron_count: int = 0
-    update_log: np.ndarray | None = None
-    delta_log: np.ndarray | None = None
-    initial_state: np.ndarray | None = None
+    update_log: Optional[np.ndarray] = None
+    delta_log: Optional[np.ndarray] = None
+    initial_state: Optional[np.ndarray] = None
 
     def iter_chunks(self) -> Iterator[np.ndarray]:
-        """Yield state chunks with shape (steps, neurons)."""
+        """Yield state chunks with shape `(steps, neurons)`."""
         if self.inline_states is not None and self.inline_states.size:
             yield np.asarray(self.inline_states, dtype=np.uint8)
             return
@@ -40,8 +79,15 @@ class BinaryStateSource:
             yield np.asarray(data, dtype=np.uint8)
 
     @classmethod
-    def from_array(cls, states: np.ndarray | Iterable[Sequence[int]]) -> "BinaryStateSource":
-        """Convenience helper for wrapping an in-memory state matrix."""
+    def from_array(cls, states: Union[np.ndarray, Iterable[Sequence[int]]]) -> "BinaryStateSource":
+        """Convenience helper for wrapping an in-memory state matrix.
+
+        Examples
+        --------
+        >>> source = BinaryStateSource.from_array([[0, 1], [1, 1]])
+        >>> source.neuron_count
+        2
+        """
         array = np.asarray(states)
         neuron_count = int(array.shape[1]) if array.ndim == 2 else 0
         return cls(inline_states=array, chunk_files=tuple(), neuron_count=neuron_count)
@@ -53,8 +99,20 @@ class BinaryStateSource:
         deltas: np.ndarray,
         *,
         neuron_count: int,
-        initial_state: np.ndarray | None = None,
+        initial_state: Optional[np.ndarray] = None,
     ) -> "BinaryStateSource":
+        """Construct a source from diff-log traces.
+
+        Examples
+        --------
+        >>> source = BinaryStateSource.from_diff_logs(
+        ...     np.array([[0, 1]], dtype=np.uint16),
+        ...     np.array([[1, -1]], dtype=np.int8),
+        ...     neuron_count=2,
+        ... )
+        >>> source.neuron_count
+        2
+        """
         update_arr = np.asarray(updates, dtype=np.uint16)
         delta_arr = np.asarray(deltas, dtype=np.int8)
         init_state = None
@@ -74,9 +132,33 @@ def collect_binary_onset_events(
     state_source: BinaryStateSource,
     sample_interval: int,
     *,
-    window: Tuple[float, float] | None = None,
+    window: Optional[Tuple[float, float]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Collect onset events (0->1 transitions) from a binary state stream."""
+    """Collect onset events from a binary state stream.
+
+    Parameters
+    ----------
+    state_source:
+        Binary state source, either as full states or diff logs.
+    sample_interval:
+        Time step between successive recorded samples.
+    window:
+        Optional `(start, end)` filter in the same units as `sample_interval`.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        Event times and neuron ids suitable for `plot_spike_raster(...)`.
+
+    Examples
+    --------
+    >>> source = BinaryStateSource.from_array(np.array([[0, 0], [1, 0], [1, 1]], dtype=np.uint8))
+    >>> times, ids = collect_binary_onset_events(source, sample_interval=5)
+    >>> times.tolist()
+    [5.0, 10.0]
+    >>> ids.tolist()
+    [0, 1]
+    """
     sample_interval = max(1, int(sample_interval))
     window_start = float(window[0]) if window else None
     window_end = float(window[1]) if window else None
@@ -84,7 +166,7 @@ def collect_binary_onset_events(
         return _collect_from_diff_log(state_source, sample_interval, window=window)
     times: list[np.ndarray] = []
     neurons: list[np.ndarray] = []
-    prev_state: np.ndarray | None = None
+    prev_state: Optional[np.ndarray] = None
     sample_index = 0
     for chunk in state_source.iter_chunks():
         block = np.asarray(chunk, dtype=np.uint8)
@@ -118,20 +200,44 @@ def plot_binary_raster(
     state_source: BinaryStateSource,
     sample_interval: int,
     n_exc: int,
-    n_inh: int | None = None,
-    total_neurons: int | None = None,
-    window: Tuple[float, float] | None = None,
+    n_inh: Optional[int] = None,
+    total_neurons: Optional[int] = None,
+    window: Optional[Tuple[float, float]] = None,
     time_scale: float = 1.0,
     stride: int = 1,
-    labels: RasterLabels | None = None,
-    groups: Sequence[RasterGroup] | None = None,
+    labels: Optional[RasterLabels] = None,
+    groups: Optional[Sequence[RasterGroup]] = None,
     marker: str = ".",
     marker_size: float = 4.0,
     empty_text: str = "No neuron onset events",
     **raster_kwargs,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Plot a binary-network raster by streaming state chunks and forwarding to plot_spike_raster.
+    Plot a binary-network onset raster.
+
+    The function first extracts onset events from the provided binary state
+    source and then forwards those events to `plot_spike_raster(...)`.
+
+    Examples
+    --------
+    ```python
+    fig, ax = plt.subplots(figsize=(4, 2))
+    source = BinaryStateSource.from_array(
+        np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.uint8)
+    )
+    times, ids = plot_binary_raster(
+        ax,
+        state_source=source,
+        sample_interval=10,
+        n_exc=1,
+        n_inh=1,
+    )
+    ```
+
+    Expected output
+    ---------------
+    `times` is `array([10., 20.])` and `ids` is `array([0, 1])`. The axes
+    shows two onset markers at those coordinates.
     """
     events = collect_binary_onset_events(state_source, sample_interval, window=window)
     spike_times, spike_ids = events
@@ -178,7 +284,7 @@ def _collect_from_diff_log(
     state_source: BinaryStateSource,
     sample_interval: int,
     *,
-    window: Tuple[float, float] | None = None,
+    window: Optional[Tuple[float, float]] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     updates = np.asarray(state_source.update_log)
     deltas = np.asarray(state_source.delta_log)

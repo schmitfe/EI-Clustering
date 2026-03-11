@@ -1,3 +1,5 @@
+"""Shared typography and annotation helpers for Matplotlib figures."""
+
 __all__ = [
     "FontCfg",
     "add_corner_tag",
@@ -16,6 +18,17 @@ from typing import List
 
 @dataclass
 class FontCfg:
+    """Font-size configuration shared across multi-panel figures.
+
+    Call `resolve()` once after construction to derive unset sizes from the
+    `base` and `scale` values.
+
+    Examples
+    --------
+    >>> cfg = FontCfg(base=10.0, scale=1.2).resolve()
+    >>> round(cfg.label, 1), round(cfg.letter, 1)
+    (12.0, 13.2)
+    """
     base: float = 12.0
     scale: float = 1.4
     title: float = None
@@ -27,6 +40,7 @@ class FontCfg:
     letter: float = None          # NEW: subplot letter size
 
     def resolve(self):
+        """Fill unset size fields from the base configuration."""
         if self.title  is None: self.title  = self.base * self.scale * 1.20
         if self.label  is None: self.label  = self.base * self.scale * 1.00
         if self.tick   is None: self.tick   = self.base * self.scale * 0.95
@@ -37,6 +51,12 @@ class FontCfg:
 
 
 def add_corner_tag(ax, text, color, fc: FontCfg, *, x=0.985, y=0.985):
+    """Add a boxed annotation tag in the upper-right corner of an axes.
+
+    Expected output
+    ---------------
+    The axes receives one bold text box near its upper-right corner.
+    """
     ax.text(
         x, y, text,
         transform=ax.transAxes,
@@ -53,6 +73,12 @@ def add_corner_tag(ax, text, color, fc: FontCfg, *, x=0.985, y=0.985):
     )
 
 def add_panel_label(ax, text, fc: FontCfg, *, x=0.01, y=0.99):
+    """Add a bold panel label in axes coordinates.
+
+    Expected output
+    ---------------
+    One bold label appears near the upper-left corner of the axes.
+    """
     ax.text(x, y, text, transform=ax.transAxes,
             ha="left", va="top", fontsize=fc.letter, fontweight="bold")
 def add_panel_labels_column_left_of_ylabel(
@@ -68,6 +94,11 @@ def add_panel_labels_column_left_of_ylabel(
     Alignment is computed in figure coordinates from the left-most of:
       - the y-label bbox (if present), else
       - the axes bbox (if no y-label).
+
+    Expected output
+    ---------------
+    Each axes receives one label, and all labels are aligned in a shared
+    vertical column left of the y-axis labels.
     """
     if not axs:
         return
@@ -107,7 +138,21 @@ def add_panel_labels_column_left_of_ylabel(
         )
 
 def style_axes(ax, fc: FontCfg, *, set_xlabel=True, set_ylabel=True):
-    """Apply consistent fonts to one axes."""
+    """Apply consistent label and tick font sizes to one axes.
+
+    Examples
+    --------
+    ```python
+    fig, ax = plt.subplots()
+    ax.set_xlabel("Time [ms]")
+    ax.set_ylabel("Rate")
+    style_axes(ax, FontCfg().resolve())
+    ```
+
+    Expected output
+    ---------------
+    The x-label, y-label, and tick labels use the sizes defined by `fc`.
+    """
     if set_xlabel and ax.xaxis.label is not None:
         ax.xaxis.label.set_size(fc.label)
         ax.xaxis.labelpad = fc.labelpad
@@ -116,7 +161,12 @@ def style_axes(ax, fc: FontCfg, *, set_xlabel=True, set_ylabel=True):
     ax.tick_params(axis='both', labelsize=fc.tick)
 
 def style_colorbar(cbar, fc: FontCfg, *, set_label=True):
-    """Apply consistent fonts to a matplotlib Colorbar."""
+    """Apply consistent font sizes to a Matplotlib colorbar.
+
+    Expected output
+    ---------------
+    The colorbar label and tick labels use the sizes defined by `fc`.
+    """
     if cbar is None:
         return
     ax = getattr(cbar, "ax", None)
@@ -137,6 +187,12 @@ def style_colorbar(cbar, fc: FontCfg, *, set_label=True):
 
 
 def style_legend(ax, fc: FontCfg):
+    """Apply the configured legend font size to an axes legend, if present.
+
+    Expected output
+    ---------------
+    All legend labels on the axes use `fc.legend`.
+    """
     leg = ax.get_legend()
     if leg is not None:
         for t in leg.get_texts():
