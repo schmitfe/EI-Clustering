@@ -10,7 +10,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PDOC_PYTHON = Path("/home/fschmitt/anaconda3/bin/python")
+DEFAULT_PDOC_PYTHON = Path("/home/fschmitt/anaconda3/bin/python")
+PDOC_PYTHON = Path(
+    os.environ.get(
+        "PDOC_PYTHON",
+        str(DEFAULT_PDOC_PYTHON if DEFAULT_PDOC_PYTHON.exists() else Path(sys.executable)),
+    )
+)
 OUTPUT_DIR = ROOT / "docs"
 HIDDEN_OUTPUTS = [
     OUTPUT_DIR / "plotting" / "time_axis.html",

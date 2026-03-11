@@ -10,6 +10,11 @@ Mean-field solvers, binary-network simulations, figure-generation scripts, and r
 - Configuration defaults are defined under `sim_config/`. Always override parameters through the CLI rather than environment variables so runs remain reproducible.
 - Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, and optional binary traces, while plots go to `plots/`.
 
+## API Documentation
+- The generated API docs live under [`docs/`](docs/index.html) with the entry page at [`docs/index.html`](docs/index.html).
+- Regenerate the site locally with `python scripts/generate_api_docs.py`.
+- The repository now includes a GitHub Pages workflow at [`.github/workflows/docs.yml`](/home/fschmitt/Documents/git/EI-Clustering/.github/workflows/docs.yml) so the static docs can be published directly from the repo.
+
 ## Modules
 - `MeanField/` packages the reusable solvers (`rate_system.py`, `solver_utils.py`) and the EI specialization (`ei_cluster_network.py`) used by `pipelines/mean_field.py`.
 - `BinaryNetwork/` contains the clustered binary model and utilities consumed by `pipelines/binary.py`.
