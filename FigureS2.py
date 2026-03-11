@@ -479,8 +479,10 @@ def _plot_rate_panel(
     if rates_duration is not None and rates_duration > 0:
         safe_scale = time_scale if time_scale > 0 else 1.0
         ax.set_xlim(0.0, float(rates_duration) / safe_scale)
-    ax.set_xlabel("")
-    ax.set_ylabel("")
+    ax.set_ylim(0.0, 1.05)
+    ax.set_yticks([0.0, 1.0])
+    ax.set_xlabel("Time[s]" if show_x else "")
+    ax.set_ylabel(r"$m_c$" if show_y else "")
     ax.tick_params(axis="x", labelbottom=show_x)
     ax.tick_params(axis="y", labelleft=show_y)
     style_axes(ax, font_cfg)
@@ -713,7 +715,7 @@ def main() -> None:
         ax = raster_axes[0][col_idx]
         bbox = ax.get_position()
         x_center = (bbox.x0 + bbox.x1) / 2.0
-        label = rf"$\kappa={_format_value(float(kappa))}$"
+        label = rf"$\kappa={_format_value(float(kappa), precision=3)}$"
         fig.text(x_center, bbox.y1 + col_pad, label, ha="center", va="bottom", fontsize=font_cfg.title)
     row_pad = 0.01
     for row_idx, instance in enumerate(instances):

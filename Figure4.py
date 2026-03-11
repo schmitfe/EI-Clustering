@@ -167,6 +167,11 @@ def parse_args() -> argparse.Namespace:
         default="Figures/Figure4",
         help="Prefix for the saved figure files (default: %(default)s.{png,pdf}).",
     )
+    parser.add_argument(
+        "--no-std-shading",
+        action="store_true",
+        help="Disable the shaded confidence regions around the correlation traces.",
+    )
     return parser.parse_args()
 
 
@@ -450,6 +455,7 @@ def _plot_series(
     *,
     color: Any,
     style: Dict[str, Any],
+    show_std_shading: bool,
 ) -> None:
     if not kappa:
         return
@@ -463,7 +469,8 @@ def _plot_series(
         fillstyle=style.get("fillstyle", "full"),
         markersize=4,
     )
-    ax.fill_between(kappa, tracker["lower"], tracker["upper"], color=color, alpha=BAND_ALPHA, linewidth=0)
+    if show_std_shading:
+        ax.fill_between(kappa, tracker["lower"], tracker["upper"], color=color, alpha=BAND_ALPHA, linewidth=0)
 
 
 def _plot_correlation_figure(
@@ -471,6 +478,7 @@ def _plot_correlation_figure(
     *,
     font_cfg: FontCfg,
     output_prefix: str,
+    show_std_shading: bool,
 ) -> None:
     if not results:
         raise ValueError("No simulation data available to plot.")
@@ -491,10 +499,38 @@ def _plot_correlation_figure(
         color = color_map[connectivity_value]
         kappa = payload["kappa"]
         metrics = payload["metrics"]
-        _plot_series(ax_input, kappa, metrics["input"]["within"], color=color, style=WITHIN_STYLE)
-        _plot_series(ax_input, kappa, metrics["input"]["across"], color=color, style=ACROSS_STYLE)
-        _plot_series(ax_output, kappa, metrics["output"]["within"], color=color, style=WITHIN_STYLE)
-        _plot_series(ax_output, kappa, metrics["output"]["across"], color=color, style=ACROSS_STYLE)
+        _plot_series(
+            ax_input,
+            kappa,
+            metrics["input"]["within"],
+            color=color,
+            style=WITHIN_STYLE,
+            show_std_shading=show_std_shading,
+        )
+        _plot_series(
+            ax_input,
+            kappa,
+            metrics["input"]["across"],
+            color=color,
+            style=ACROSS_STYLE,
+            show_std_shading=show_std_shading,
+        )
+        _plot_series(
+            ax_output,
+            kappa,
+            metrics["output"]["within"],
+            color=color,
+            style=WITHIN_STYLE,
+            show_std_shading=show_std_shading,
+        )
+        _plot_series(
+            ax_output,
+            kappa,
+            metrics["output"]["across"],
+            color=color,
+            style=ACROSS_STYLE,
+            show_std_shading=show_std_shading,
+        )
     ax_input.set_ylabel(r"$\overline{r_{\mathrm{in}}}$")
     ax_output.set_ylabel(r"$\overline{r_{\mathrm{out}}}$")
     for ax in (ax_output, ax_input):
@@ -650,7 +686,12 @@ def main() -> None:
                     _append_metric(instance_store["metrics"], measure, category, stats)
             instance_store["kappa"].append(float(kappa))
         results[label] = instance_store
-    _plot_correlation_figure(results, font_cfg=font_cfg, output_prefix=args.output_prefix)
+    _plot_correlation_figure(
+        results,
+        font_cfg=font_cfg,
+        output_prefix=args.output_prefix,
+        show_std_shading=not args.no_std_shading,
+    )
 
 
 if __name__ == "__main__":

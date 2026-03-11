@@ -223,7 +223,7 @@ def _plot_eigenvalues(
         style_axes(ax, font_cfg)
         add_panel_label(ax, chr(ord("a") + idx), font_cfg, x=-0.1, y=1.05)
 
-    fig.tight_layout()
+    #fig.tight_layout()
     base = Path(output_prefix)
     base.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(base.with_suffix(".png"), dpi=600)

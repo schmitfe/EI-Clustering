@@ -24,7 +24,7 @@ class EIClusterNetwork(RateSystem):
         *,
         kappa: float | None = None,
         connection_type: str | None = None,
-        use_temporal_variance: bool = False,
+        use_temporal_variance: bool = True,
         use_quadratic_variance: bool = True,
         focus_population=None,
         prefer_jax: bool = True,

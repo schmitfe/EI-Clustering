@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import math
 import os
-from dataclasses import dataclass
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -13,10 +14,11 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator
 import numpy as np  # noqa: E402
-from matplotlib.lines import Line2D  # noqa: E402
-from matplotlib.ticker import MaxNLocator  # noqa: E402
 
+import binary_simulation_multi_init as binary_multi  # noqa: E402
 import figure_helpers as helpers  # noqa: E402
 from plotting import (
     BinaryStateSource,
@@ -27,10 +29,9 @@ from plotting import (
     plot_binary_raster,
     plot_spike_raster,
     style_axes,
-    _time_axis_scale,
     _prepare_line_color_map,
 )  # noqa: E402
-from sim_config import add_override_arguments, load_from_args  # noqa: E402
+from sim_config import add_override_arguments, deep_update, load_from_args, parse_overrides  # noqa: E402
 
 
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
@@ -39,8 +40,8 @@ plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate Figure 3 by running the EI pipeline, performing legacy binary simulations, "
-            "and visualizing raster/rate traces alongside the maximum-rate distribution."
+            "Generate Figure 3 columns by running the EI pipeline, performing legacy binary simulations, "
+            "and visualizing raster/rate traces with MF cluster predictions."
         )
     )
     add_override_arguments(parser)
@@ -53,10 +54,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--v-steps", type=int, default=1000, help="ERF samples per sweep (default: %(default)s).")
     parser.add_argument("--retry-step", type=float, help="Optional retry increment for solver restarts.")
     parser.add_argument(
+        "--delta-rep-mf",
+        type=float,
+        default=0.025,
+        help="R_Eplus sampling half-width for MF fallback (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--rep-retry-mf",
+        type=int,
+        default=10,
+        help="Resample attempts for MF fallback when no fixpoints are found (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--rep-rng-seed",
+        type=int,
+        help="Seed for MF resample RNG (default: random).",
+    )
+    parser.add_argument(
         "--erf-jobs",
         type=int,
         default=1,
         help="Number of workers for the ERF stage (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Worker processes for the legacy simulations (default: %(default)s).",
     )
     parser.add_argument(
         "--overwrite-erf",
@@ -75,14 +99,19 @@ def parse_args() -> argparse.Namespace:
         default="stable",
         help="Select fixpoints of the given stability (default: %(default)s).",
     )
-    parser.add_argument("--simulations", type=int, default=20, help="Number of seeds to simulate (default: %(default)s).")
-    parser.add_argument("--bin-size", type=int, default=50, help="Samples per bin when computing maxima (default: %(default)s).")
-    parser.add_argument("--bins", type=int, default=40, help="Histogram bin count (default: %(default)s).")
     parser.add_argument(
-        "--jobs",
-        type=int,
-        default=1,
-        help="Worker processes for the legacy simulations (default: %(default)s).",
+        "--column-override",
+        action="append",
+        default=[],
+        metavar="label:path=value",
+        help="Column-specific override using the column label (e.g., a:kappa=0).",
+    )
+    parser.add_argument(
+        "--column-title",
+        action="append",
+        default=[],
+        metavar="label:title",
+        help="Override the column title text (e.g., a:R_j=1.1).",
     )
     parser.add_argument("--warmup-steps", type=int, help="Override binary.warmup_steps.")
     parser.add_argument("--simulation-steps", type=int, help="Override binary.simulation_steps.")
@@ -101,14 +130,15 @@ def parse_args() -> argparse.Namespace:
         help="Re-run simulations even if matching traces exist.",
     )
     parser.add_argument(
-        "--overwrite-analysis",
-        action="store_true",
-        help="Recompute maxima even if cached files exist.",
-    )
-    parser.add_argument(
         "--raster-duration",
         type=float,
         help="Restrict the raster plot to this duration (same units as the trace time axis).",
+    )
+    parser.add_argument(
+        "--raster-stride",
+        type=int,
+        default=1,
+        help="Plot every Nth neuron in the raster (default: %(default)s).",
     )
     parser.add_argument(
         "--rates-duration",
@@ -118,7 +148,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-prefix",
         type=str,
-        default="Figures/Figure3",
+        default="Figures/Figure3_alt",
         help="Prefix for the saved figure files (default: %(default)s.{png,pdf}).",
     )
     return parser.parse_args()
@@ -201,6 +231,73 @@ def _collect_focus_markers(focus_rates: Dict[int, Dict[str, List[float]]]) -> Li
     return markers
 
 
+@dataclass(frozen=True)
+class ColumnSpec:
+    label: str
+    overrides: Sequence[str] = ()
+    title: str | None = None
+
+
+@dataclass(frozen=True)
+class ColumnContext:
+    spec: ColumnSpec
+    parameter: Dict[str, Any]
+    title: str
+    focus_counts: Sequence[int]
+    focus_markers: List[FocusMarker]
+    folder: str
+    bundle_path: str
+    binary_cfg: Dict[str, Any]
+    seed: int
+    trace_path: str
+
+
+COLUMN_SPECS: Sequence[ColumnSpec] = (
+    ColumnSpec(label="a", overrides=("kappa=0",)),
+    ColumnSpec(label="b", overrides=("kappa=0.5",)),
+    ColumnSpec(label="c", overrides=("kappa=1",)),
+)
+
+
+def _normalize_label(label: str) -> str:
+    if not label or not label.strip():
+        raise ValueError("Column label must not be empty.")
+    return label.strip().lower()
+
+
+def _parse_column_override_entries(entries: Sequence[str]) -> Dict[str, List[str]]:
+    mapping: Dict[str, List[str]] = {}
+    for raw in entries:
+        if ":" not in raw:
+            raise ValueError(f"Column override '{raw}' is missing ':' between label and override.")
+        label, override = raw.split(":", 1)
+        override = override.strip()
+        if "=" not in override:
+            raise ValueError(f"Column override '{raw}' must include '=' in the override expression.")
+        key = _normalize_label(label)
+        mapping.setdefault(key, []).append(override)
+    return mapping
+
+
+def _parse_column_title_entries(entries: Sequence[str]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for raw in entries:
+        if ":" not in raw:
+            raise ValueError(f"Column title '{raw}' is missing ':' between label and title.")
+        label, title = raw.split(":", 1)
+        key = _normalize_label(label)
+        mapping[key] = title.strip()
+    return mapping
+
+
+def _validate_column_keys(mapping: Dict[str, object], known: set[str], context: str) -> None:
+    if not mapping:
+        return
+    unknown = sorted(set(mapping) - known)
+    if unknown:
+        raise ValueError(f"Unknown column label(s) for {context}: {', '.join(unknown)}.")
+
+
 def _format_time_ticks(start: float, end: float, count: int = 4) -> Tuple[np.ndarray, List[str]]:
     if count <= 1 or end <= start:
         values = np.array([start, end], dtype=float)
@@ -214,6 +311,211 @@ def _format_time_ticks(start: float, end: float, count: int = 4) -> Tuple[np.nda
         else:
             labels.append(f"{value:.0f}")
     return values, labels
+
+
+def _time_axis_scale_from_taus(parameter: Dict[str, Any]) -> Tuple[float, str]:
+    tau_e = float(parameter.get("tau_e", math.nan))
+    tau_i = float(parameter.get("tau_i", math.nan))
+    n_e = int(parameter.get("N_E", 0) or 0)
+    n_i = int(parameter.get("N_I", 0) or 0)
+    if not np.isfinite(tau_e) or not np.isfinite(tau_i) or tau_e <= 0.0 or tau_i <= 0.0:
+        return 1.0, "Time [s]"
+    max_tau = max(tau_e, tau_i)
+    min_tau = min(tau_e, tau_i)
+    n_max = n_e if tau_e >= tau_i else n_i
+    n_min = n_i if tau_e >= tau_i else n_e
+    expected_updates = float(n_max) + (max_tau / min_tau) * float(n_min)
+    if not np.isfinite(expected_updates) or expected_updates <= 0.0 or max_tau <= 0.0:
+        return 1.0, "Time [s]"
+    max_tau_seconds = max_tau / 1000.0
+    if max_tau_seconds <= 0.0 or not np.isfinite(max_tau_seconds):
+        return 1.0, "Time [s]"
+    return float(expected_updates / max_tau_seconds), "Time [s]"
+
+
+def _format_kappa_value(value: float) -> str:
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _apply_overrides(parameter: Dict[str, Any], overrides: Sequence[str]) -> Dict[str, Any]:
+    if not overrides:
+        return dict(parameter)
+    return deep_update(parameter, parse_overrides(overrides))
+
+
+def _build_column_parameter(
+    base_parameter: Dict[str, Any],
+    spec: ColumnSpec,
+    *,
+    column_override_map: Dict[str, Sequence[str]],
+) -> Dict[str, Any]:
+    overrides: List[str] = list(spec.overrides)
+    overrides.extend(column_override_map.get(_normalize_label(spec.label), []))
+    return _apply_overrides(base_parameter, overrides)
+
+
+def _resolve_column_title(
+    parameter: Dict[str, Any],
+    spec: ColumnSpec,
+    *,
+    title_map: Dict[str, str],
+) -> str:
+    label_key = _normalize_label(spec.label)
+    custom = title_map.get(label_key)
+    if custom is not None and custom.strip():
+        return custom
+    if spec.title:
+        return spec.title
+    kappa_value = float(parameter.get("kappa", 0.0) or 0.0)
+    rj_value = float(parameter.get("R_j", 0.0) or 0.0)
+
+    return rf"$\kappa={_format_kappa_value(kappa_value)}\quad R_j={_format_kappa_value(rj_value)}$"
+
+
+def _prepare_focus_markers(
+    parameter: Dict[str, Any],
+    bundle_path: str,
+    focus_counts: Sequence[int],
+    stability_filter: str,
+) -> Tuple[List[FocusMarker], Sequence[Dict[str, Any]]]:
+    candidates, q_value = helpers._legacy_candidate_selection(
+        parameter,
+        bundle_path,
+        focus_counts,
+        stability_filter,
+    )
+    focus_rates = binary_multi._focus_payload_from_candidates(candidates, int(q_value))
+    return _collect_focus_markers(focus_rates), candidates
+
+
+def _is_missing_fixpoints_error(exc: Exception) -> bool:
+    return "no fixpoint" in str(exc).lower()
+
+
+def _prepare_focus_markers_with_retry(
+    parameter: Dict[str, Any],
+    focus_counts: Sequence[int],
+    stability_filter: str,
+    sweep_cfg: helpers.PipelineSweepSettings,
+    *,
+    delta_rep: float,
+    rep_retry: int,
+    rng_seed: int | None,
+    column_label: str,
+) -> Tuple[List[FocusMarker], Sequence[Dict[str, Any]], str, str]:
+    target_rep = parameter.get("R_Eplus")
+    if target_rep is None:
+        raise ValueError("Parameter 'R_Eplus' must be set before selecting MF fixpoints.")
+    target_rep = float(target_rep)
+    folder, bundle_path = helpers.ensure_fixpoint_bundle(
+        parameter,
+        focus_counts,
+        [target_rep],
+        sweep_cfg,
+    )
+    base_exc: ValueError | None = None
+    try:
+        focus_markers, candidates = _prepare_focus_markers(
+            parameter,
+            bundle_path,
+            focus_counts,
+            stability_filter,
+        )
+        return focus_markers, candidates, folder, bundle_path
+    except ValueError as exc:
+        if not _is_missing_fixpoints_error(exc):
+            raise
+        base_exc = exc
+    if rep_retry <= 0 or delta_rep <= 0:
+        if base_exc is not None:
+            raise base_exc
+        raise
+    print(
+        f"No MF fixpoints for R_Eplus={target_rep:.4f} (column {column_label}); "
+        f"trying {rep_retry} resamples within +/-{delta_rep:.4f}."
+    )
+    rng = np.random.default_rng(rng_seed)
+    for attempt in range(int(rep_retry)):
+        sample_rep = float(rng.uniform(target_rep - delta_rep, target_rep + delta_rep))
+        sample_param = dict(parameter)
+        sample_param["R_Eplus"] = sample_rep
+        folder, bundle_path = helpers.ensure_fixpoint_bundle(
+            sample_param,
+            focus_counts,
+            [sample_rep],
+            sweep_cfg,
+        )
+        try:
+            focus_markers, candidates = _prepare_focus_markers(
+                sample_param,
+                bundle_path,
+                focus_counts,
+                stability_filter,
+            )
+        except ValueError as exc:
+            if not _is_missing_fixpoints_error(exc):
+                raise
+            continue
+        print(
+            f"MF resample {attempt + 1}/{rep_retry} found fixpoints at "
+            f"R_Eplus={sample_rep:.4f} (column {column_label})."
+        )
+        return focus_markers, candidates, folder, bundle_path
+    raise ValueError(
+        f"No MF fixpoints found after {rep_retry} resamples within +/-{delta_rep:.4f} "
+        f"of R_Eplus={target_rep:.4f}."
+    )
+
+
+def _build_trace_task(
+    parameter: Dict[str, Any],
+    binary_cfg: Dict[str, Any],
+    *,
+    folder_hint: str,
+    candidates: Sequence[Dict[str, Any]],
+    seed: int,
+    analysis_only: bool,
+    overwrite_simulation: bool,
+) -> Tuple[str, Dict[str, Any] | None]:
+    _, binary_dir, _ = binary_multi._prepare_max_rate_folder(parameter, folder_hint, binary_cfg)
+    base_output = str(binary_cfg.get("output_name", "activity_trace"))
+    label = binary_multi._format_seed_label(base_output, seed)
+    trace_path = os.path.join(binary_dir, f"{label}.npz")
+    needs_simulation = (not analysis_only) and (overwrite_simulation or not os.path.exists(trace_path))
+    if not needs_simulation:
+        return trace_path, None
+    candidate = binary_multi._candidate_for_seed(seed, candidates)
+    init_rates = tuple(float(value) for value in candidate["rates"])
+    task = {
+        "parameter": parameter,
+        "binary_cfg": dict(binary_cfg),
+        "binary_dir": binary_dir,
+        "label": label,
+        "init_rates": init_rates,
+        "seed": int(seed),
+        "trace_path": trace_path,
+        "overwrite_simulation": bool(overwrite_simulation),
+    }
+    return trace_path, task
+
+
+def _simulate_legacy_task(task: Dict[str, Any]) -> str:
+    trace_path = str(task["trace_path"])
+    if (not task.get("overwrite_simulation")) and os.path.exists(trace_path):
+        return trace_path
+    seed = int(task["seed"])
+    label = str(task["label"])
+    print(f"Simulating legacy binary network for seed {seed} (column {label}).")
+    return binary_multi.run_legacy_binary_simulation(
+        task["parameter"],
+        task["binary_cfg"],
+        task["binary_dir"],
+        label,
+        task["init_rates"],
+        seed=seed,
+        capture_spikes=True,
+    )
 
 
 def _marker_data_step(
@@ -282,6 +584,7 @@ def _plot_example_traces(
     parameter: Dict[str, Any],
     raster_duration: float | None,
     rates_duration: float | None,
+    raster_stride: int,
     font_cfg: FontCfg,
     focus_markers: Sequence[FocusMarker],
     color_map: Dict[int, str],
@@ -299,6 +602,7 @@ def _plot_example_traces(
         states_arr = np.asarray(states_raw)
     sample_interval = max(1, int(payload.get("sample_interval", 1) or 1))
     raster_window = (0.0, float(raster_duration)) if raster_duration is not None and raster_duration > 0 else None
+    stride = max(1, int(raster_stride))
     labels = RasterLabels(
         show=True,
         excitatory="Exc.",
@@ -354,7 +658,7 @@ def _plot_example_traces(
         scale_end = float(rates_duration)
     if scale_end <= scale_start:
         scale_end = scale_start + float(sample_interval)
-    time_scale, time_label = _time_axis_scale(scale_start, scale_end)
+    time_scale, time_label = _time_axis_scale_from_taus(parameter)
     safe_scale = time_scale if time_scale > 0 else 1.0
     plot_window = raster_window if raster_window is not None else (window_start, window_end)
     spike_times = np.asarray(payload.get("spike_times"), dtype=float)
@@ -374,11 +678,11 @@ def _plot_example_traces(
             spike_ids=spike_ids,
             n_exc=excit_neurons,
             n_inh=n_inh,
-            stride=1,
+            stride=stride,
             t_start=t_start,
             t_end=t_end,
             marker=".",
-            marker_size=3.0,
+            marker_size=1.5,
             labels=labels,
         )
     else:
@@ -390,7 +694,7 @@ def _plot_example_traces(
             total_neurons=total_neurons,
             window=plot_window,
             time_scale=time_scale,
-            stride=1,
+            stride=stride,
             labels=labels,
             marker=".",
             marker_size=2.0,
@@ -428,9 +732,7 @@ def _plot_example_traces(
     ax_rates.set_xlim(scaled_start, scaled_end)
     ax_rates.set_ylabel(r"$m_c$")
     ax_rates.set_xlabel(time_label)
-    tick_vals, tick_labels = _format_time_ticks(scaled_start, scaled_end, 4)
-    ax_rates.set_xticks(tick_vals)
-    ax_rates.set_xticklabels(tick_labels)
+    ax_rates.xaxis.set_major_locator(MaxNLocator(integer=True))
     _plot_fixpoint_overlays(
         ax_rates,
         focus_markers,
@@ -491,7 +793,7 @@ def _plot_fixpoint_overlays(
             linewidth=0.8,
             linestyles=linestyle,
             alpha=0.5,
-            zorder=0.4,
+            zorder=4.0,
         )
         facecolor = color if marker.stable else "white"
         ax.scatter(
@@ -502,7 +804,7 @@ def _plot_fixpoint_overlays(
             facecolors=facecolor,
             edgecolors=color,
             linewidths=0.8,
-            zorder=0.5,
+            zorder=5.0,
         )
 
 
@@ -549,136 +851,6 @@ def _plot_grayscale_rates(
     ax.set_ylim(bottom=0.0)
 
 
-def _plot_histogram(
-    ax: plt.Axes,
-    pooled: np.ndarray,
-    focus_markers: Sequence[FocusMarker],
-    bins: int,
-    *,
-    color_map: Dict[int, str],
-    colorbar_entries: Sequence[Tuple[int, str]],
-    fig: plt.Figure,
-    font_cfg: FontCfg,
-) -> None:
-    edges = np.linspace(0.0, 1.0, max(2, int(bins) + 1), endpoint=True)
-    counts, _, _ = ax.hist(
-        pooled,
-        bins=edges,
-        color="#7fb0ff",
-        alpha=0.8,
-        label="Max excitatory bin activity",
-        density=True,
-    )
-    ax.set_xlim(0.0, 1.0)
-    max_density = float(counts.max()) if counts.size else 0.0
-    marker_level = max_density * 1.05 if max_density > 0 else 0.05
-    fallback_color = "#444444"
-    marker_size = 80.0
-    line_kwargs = {"linewidth": 1.2, "alpha": 0.8}
-    has_stable = False
-    has_unstable = False
-    valid_entries: List[Tuple[int, float, int]] = []
-    for idx, marker in enumerate(focus_markers):
-        value = float(marker.value)
-        if np.isfinite(value):
-            valid_entries.append((idx, value, marker.focus))
-    values = [entry[1] for entry in valid_entries]
-    focus_keys = [entry[2] for entry in valid_entries]
-    pad = max(0.2, marker_level * 0.15)
-    ymax = marker_level + pad
-    step_y, _ = _marker_data_step(ax, ymax, "y", marker_size=marker_size)
-    offsets, clusters = _compute_linear_offsets(values, focus_keys, step=step_y, threshold=0.025)
-    aligned_positions = list(values)
-    for cluster in clusters:
-        if len(cluster) <= 1:
-            continue
-        reference_idx = cluster[0]
-        anchor_value = values[reference_idx]
-        for member in cluster:
-            aligned_positions[member] = anchor_value
-    for (entry, offset) in zip(valid_entries, offsets):
-        idx, _value, _ = entry
-        marker = focus_markers[idx]
-        color = color_map.get(marker.focus, fallback_color)
-        linestyle = "-" if marker.stable else "--"
-        facecolors = color if marker.stable else "white"
-        edgecolors = color
-        value = aligned_positions[idx]
-        ax.scatter(
-            value,
-            marker_level + offset,
-            marker="o",
-            s=marker_size,
-            facecolors=facecolors,
-            edgecolors=edgecolors,
-            linewidths=1.0,
-            zorder=3,
-        )
-        ax.vlines(
-            value,
-            0.0,
-            marker_level,
-            colors=color,
-            linestyles=linestyle,
-            zorder=2,
-            **line_kwargs,
-        )
-        if marker.stable:
-            has_stable = True
-        else:
-            has_unstable = True
-    ax.set_ylim(0.0, ymax)
-    if colorbar_entries:
-        draw_listed_colorbar(
-            fig,
-            ax,
-            colorbar_entries,
-            font_cfg=font_cfg,
-            label="MF prediction: # active clusters",
-            use_parent_axis=True,
-        )
-    if has_stable or has_unstable:
-        handles = []
-        if has_stable:
-            handles.append(
-                Line2D(
-                    [],
-                    [],
-                    marker="o",
-                    color="black",
-                    linestyle="None",
-                    markerfacecolor="black",
-                    markersize=6,
-                    label="stable",
-                )
-            )
-        if has_unstable:
-            handles.append(
-                Line2D(
-                    [],
-                    [],
-                    marker="o",
-                    color="black",
-                    linestyle="None",
-                    markerfacecolor="white",
-                    markeredgecolor="black",
-                    markersize=6,
-                    label="unstable",
-                )
-            )
-    if handles:
-        ax.legend(
-            handles=handles,
-            ncol=2,
-            frameon=False,
-            fontsize=font_cfg.legend,
-            columnspacing = 0.4,
-            handletextpad= -0.3,
-            bbox_to_anchor = [0.62, 1.04]
-        )
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True, prune="upper"))
-
-
 def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
     encoded_r = f"{r_value:.2f}".replace(".", "_")
     base = Path(output_prefix)#.with_name(f"{Path(output_prefix).name}_REplus{encoded_r}")
@@ -692,14 +864,14 @@ def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
 
 def main() -> None:
     args = parse_args()
-    parameter = load_from_args(args)
-    focus_counts = helpers.resolve_focus_counts(parameter, args.focus_counts)
-    r_eplus_values = _resolve_r_eplus_list(args, parameter)
+    base_parameter = load_from_args(args)
+    r_eplus_values = _resolve_r_eplus_list(args, base_parameter)
+    column_override_map = _parse_column_override_entries(args.column_override)
+    column_title_map = _parse_column_title_entries(args.column_title)
+    known_labels = {_normalize_label(spec.label) for spec in COLUMN_SPECS}
+    _validate_column_keys(column_override_map, known_labels, "column overrides")
+    _validate_column_keys(column_title_map, known_labels, "column titles")
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
-    color_map, colorbar_entries = _prepare_line_color_map(
-        focus_counts,
-        colormap="viridis_r",
-    )
     sweep_cfg = helpers.PipelineSweepSettings(
         v_start=args.v_start,
         v_end=args.v_end,
@@ -719,85 +891,204 @@ def main() -> None:
     )
     for r_value in r_eplus_values:
         print(f"=== Figure 3 workflow for R_Eplus = {r_value:.4f} ===")
-        param_copy = deepcopy(parameter)
-        param_copy["R_Eplus"] = float(r_value)
-        folder, bundle_path = helpers.ensure_fixpoint_bundle(
-            param_copy,
-            focus_counts,
-            [float(r_value)],
-            sweep_cfg,
+        base_param = deepcopy(base_parameter)
+        base_param["R_Eplus"] = float(r_value)
+        column_contexts: List[ColumnContext] = []
+        simulation_tasks: List[Dict[str, Any]] = []
+        focus_union: set[int] = set()
+        for idx, spec in enumerate(COLUMN_SPECS):
+            column_param = _build_column_parameter(
+                base_param,
+                spec,
+                column_override_map=column_override_map,
+            )
+            title_text = _resolve_column_title(column_param, spec, title_map=column_title_map)
+            focus_counts = helpers.resolve_focus_counts(column_param, args.focus_counts)
+            focus_union.update(int(value) for value in focus_counts)
+            column_param["R_Eplus"] = float(column_param.get("R_Eplus", r_value) or r_value)
+            binary_cfg = helpers.resolve_binary_config(column_param, binary_overrides)
+            base_seed = int(binary_cfg.get("seed", 0) or 0)
+            seed = base_seed + idx
+            focus_markers, candidates, folder, bundle_path = _prepare_focus_markers_with_retry(
+                column_param,
+                focus_counts,
+                args.stability_filter,
+                sweep_cfg,
+                delta_rep=float(args.delta_rep_mf),
+                rep_retry=int(args.rep_retry_mf),
+                rng_seed=args.rep_rng_seed,
+                column_label=str(spec.label),
+            )
+            trace_path, task = _build_trace_task(
+                column_param,
+                binary_cfg,
+                folder_hint=folder,
+                candidates=candidates,
+                seed=seed,
+                analysis_only=args.analysis_only,
+                overwrite_simulation=args.overwrite_simulation,
+            )
+            if task:
+                simulation_tasks.append(task)
+            column_contexts.append(
+                ColumnContext(
+                    spec=spec,
+                    parameter=column_param,
+                    title=title_text,
+                    focus_counts=focus_counts,
+                    focus_markers=focus_markers,
+                    folder=folder,
+                    bundle_path=bundle_path,
+                    binary_cfg=binary_cfg,
+                    seed=seed,
+                    trace_path=trace_path,
+                )
+            )
+        if not focus_union:
+            raise ValueError("No focus counts available for plotting.")
+        color_map, colorbar_entries = _prepare_line_color_map(
+            sorted(focus_union),
+            colormap="viridis_r",
         )
-        binary_cfg = helpers.resolve_binary_config(param_copy, binary_overrides)
-        base_seed = int(binary_cfg.get("seed", 0) or 0)
-        result = helpers.run_legacy_max_rate_analysis(
-            param_copy,
-            binary_cfg,
-            folder_hint=folder,
-            bundle_path=bundle_path,
-            focus_counts=focus_counts,
-            stability_filter=args.stability_filter,
-            bin_size=max(1, int(args.bin_size)),
-            total_simulations=max(0, int(args.simulations)),
-            base_seed=base_seed,
-            jobs=max(1, int(args.jobs or 1)),
-            analysis_only=args.analysis_only,
-            overwrite_simulation=args.overwrite_simulation,
-            overwrite_analysis=args.overwrite_analysis,
-        )
-        payload = None
-        if result.example_trace_path and os.path.exists(result.example_trace_path):
-            try:
-                payload = _load_trace_payload(result.example_trace_path)
-            except Exception as exc:
-                print(f"Warning: could not load example trace {result.example_trace_path}: {exc}")
-                payload = None
-        focus_markers = _collect_focus_markers(result.focus_rates)
-        fig = plt.figure(figsize=(13, 5))
+        if simulation_tasks:
+            job_count = max(1, int(args.jobs or 1))
+            if job_count > 1 and len(simulation_tasks) > 1:
+                max_workers = min(job_count, len(simulation_tasks))
+                with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
+                    future_map = {
+                        pool.submit(_simulate_legacy_task, task): task for task in simulation_tasks
+                    }
+                    for future in concurrent.futures.as_completed(future_map):
+                        task = future_map[future]
+                        try:
+                            future.result()
+                        except Exception as exc:
+                            seed = task.get("seed", "?")
+                            raise RuntimeError(
+                                f"Legacy simulation failed for seed {seed}: {exc}"
+                            ) from exc
+            else:
+                for task in simulation_tasks:
+                    _simulate_legacy_task(task)
+        n_cols = len(column_contexts)
+        fig = plt.figure(figsize=(4.2 * n_cols + 1.4, 5))
         outer = fig.add_gridspec(
             1,
-            2,
-            width_ratios=[1.2, 1.0],
-            wspace=0.15,
-            left=0.075,
-            right=0.995,
-            top=0.94,
-            bottom=0.13,
+            n_cols + 2,
+            width_ratios=[1.0] * n_cols + 2*[0.05],
+            wspace=0.28,
+            left=0.06,
+            right=0.99,
+            top=0.92,
+            bottom=0.12,
         )
-        left_grid = outer[0, 0].subgridspec(2, 1, height_ratios=[1.0, 0.6], hspace=0.08)
-        ax_raster = fig.add_subplot(left_grid[0, 0])
-        ax_rates = fig.add_subplot(left_grid[1, 0], sharex=ax_raster)
-        ax_hist = fig.add_subplot(outer[0, 1])
-        _plot_example_traces(
-            ax_raster,
-            ax_rates,
-            payload,
-            parameter=param_copy,
-            raster_duration=args.raster_duration,
-            rates_duration=args.rates_duration,
+        colorbar_ax = fig.add_subplot(outer[0, -2])
+        rate_axes: List[plt.Axes] = []
+        for idx, context in enumerate(column_contexts):
+            param_copy = context.parameter
+            try:
+                payload = _load_trace_payload(context.trace_path)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to load trace for column {context.spec.label}: {exc}"
+                ) from exc
+            column_grid = outer[0, idx].subgridspec(2, 1, height_ratios=[1.0, 0.6], hspace=0.08)
+            ax_raster = fig.add_subplot(column_grid[0, 0])
+            if rate_axes:
+                ax_rates = fig.add_subplot(column_grid[1, 0], sharex=ax_raster, sharey=rate_axes[0])
+            else:
+                ax_rates = fig.add_subplot(column_grid[1, 0], sharex=ax_raster)
+            _plot_example_traces(
+                ax_raster,
+                ax_rates,
+                payload,
+                parameter=param_copy,
+                raster_duration=args.raster_duration,
+                rates_duration=args.rates_duration,
+                raster_stride=args.raster_stride,
+                font_cfg=font_cfg,
+                focus_markers=context.focus_markers,
+                color_map=color_map,
+            )
+            ax_raster.set_title(context.title, fontsize=font_cfg.title)
+            style_axes(ax_raster, font_cfg, set_xlabel=False, set_ylabel=False)
+            style_axes(ax_rates, font_cfg)
+            panel_prefix = context.spec.label.strip()
+            add_panel_label(ax_raster, f"{panel_prefix}1", font_cfg, x=-0.15, y=1.04)
+            add_panel_label(ax_rates, f"{panel_prefix}2", font_cfg, x=-0.15, y=1.06)
+            rate_axes.append(ax_rates)
+        if rate_axes:
+            max_y = max(ax.get_ylim()[1] for ax in rate_axes)
+            tick_max = max(0.5, math.ceil(float(max_y) * 10.0) / 10.0)
+            ticks = list(np.arange(0.0, tick_max + 1e-9, 0.25))
+            if ticks and ticks[-1] < tick_max - 1e-6:
+                ticks.append(tick_max)
+            tick_labels = []
+            for value in ticks:
+                if abs(value) < 1e-6:
+                    tick_labels.append("0")
+                elif abs(value - 0.5) < 1e-6:
+                    tick_labels.append("0.5")
+                else:
+                    tick_labels.append("")
+            for idx, ax in enumerate(rate_axes):
+                ax.set_ylim(0.0, tick_max)
+                ax.set_yticks(ticks)
+                if idx == 0:
+                    ax.set_ylabel(r"$m_c$")
+                    ax.set_yticklabels(tick_labels)
+                else:
+                    ax.set_ylabel("")
+                    ax.tick_params(axis="y", labelleft=False)
+                ax.set_xlim(0,5)
+        colorbar = draw_listed_colorbar(
+            fig,
+            colorbar_ax,
+            colorbar_entries,
             font_cfg=font_cfg,
-            focus_markers=focus_markers,
-            color_map=color_map,
+            label="MF prediction: # active clusters",
+            height_fraction=0.8,
+            use_parent_axis=False,
         )
-        ax_hist.set_xlabel(r"$\max_{c}\,m_c$")
-        ax_hist.set_ylabel("Density")
-        _plot_histogram(
-            ax_hist,
-            result.pooled_maxima,
-            focus_markers,
-            bins=max(1, int(args.bins)),
-            color_map=color_map,
-            colorbar_entries=colorbar_entries,
-            fig=fig,
-            font_cfg=font_cfg,
-        )
-        kappa_value = float(param_copy.get("kappa", 0.0) or 0.0)
-        ax_raster.set_title(rf"$\kappa={kappa_value:.1f}$", fontsize=font_cfg.title)
-        style_axes(ax_raster, font_cfg, set_xlabel=False, set_ylabel=False)
-        style_axes(ax_rates, font_cfg)
-        style_axes(ax_hist, font_cfg)
-        add_panel_label(ax_raster, "a1", font_cfg, x=-0.15, y=1.04)
-        add_panel_label(ax_rates, "a2", font_cfg, x=-0.15, y=1.06)
-        add_panel_label(ax_raster, "b", font_cfg, x=1.06, y=1.04)
+        colorbar_ax.get_xaxis().set_visible(False)
+        colorbar_ax.get_yaxis().set_visible(False)
+        if colorbar is not None:
+            cbar_ax = colorbar.ax
+            legend_handles = [
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    linestyle="None",
+                    markersize=5,
+                    markerfacecolor="black",
+                    markeredgecolor="black",
+                    label="stable",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    linestyle="None",
+                    markersize=5,
+                    markerfacecolor="white",
+                    markeredgecolor="black",
+                    label="unstable",
+                ),
+            ]
+            cbar_ax.legend(
+                handles=legend_handles,
+                loc="upper center",
+                bbox_to_anchor=(2., -0.05),
+                frameon=False,
+                fontsize=font_cfg.tick,
+                borderpad=0.0,
+                handletextpad=-0.4,
+                labelspacing=0.2,
+            )
+            pos = cbar_ax.get_position()
+            cbar_ax.set_axes_locator(None)  # key line
+            cbar_ax.set_position([pos.x0 - 0.025, pos.y0 + 0.07, pos.width, pos.height])
         _save_figure(fig, args.output_prefix, r_value)
         plt.close(fig)
 
