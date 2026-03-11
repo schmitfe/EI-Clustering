@@ -24,7 +24,7 @@ from plotting import (
     style_axes,
     style_legend,
 )
-from ei_pipeline import (
+from pipelines.mean_field import (
     _filter_fixpoint_candidates,
     _key_to_r_eplus,
     _taggable_configuration,

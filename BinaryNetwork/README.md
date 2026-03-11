@@ -1,9 +1,9 @@
 # Binary Network Simulation
 
-`binary_pipeline.py` drives the stochastic binary-network counterpart of the clustered EI model while reusing the same YAML configuration and override semantics as the mean-field solver.
+`pipelines/binary.py` drives the stochastic binary-network counterpart of the clustered EI model while reusing the same YAML configuration and override semantics as the mean-field solver.
 
 ## Running the pipeline
-- Invoke `python binary_pipeline.py [-O path=value ...]` using the configs from `sim_config/`. Use the helper flags to override the common binary settings directly: `--warmup-steps`, `--simulation-steps`, `--sample-interval`, `--batch-size`, `--seed`, `--output-name`, and `--plot-activity`.
+- Invoke `python -m pipelines.binary [-O path=value ...]` using the configs from `sim_config/`. Use the helper flags to override the common binary settings directly: `--warmup-steps`, `--simulation-steps`, `--sample-interval`, `--batch-size`, `--seed`, `--output-name`, and `--plot-activity`.
 - The script respects global clustering parameters (`kappa`, `connection_type`, `R_Eplus`, `R_j`, etc.) and mirrors the mixed probability/weight scheme from the mean-field solver. Bernoulli, Poisson, and fixed-indegree synapse generation are all supported.
 - Simulation-specific defaults live under the `binary` section of the YAML (`warmup_steps`, `simulation_steps`, `sample_interval`, `batch_size`, `seed`, `output_name`, and optional `plot_activity`). Override nested fields via dotted `-O binary.sample_interval=25` arguments if the dedicated CLI flag is insufficient.
 

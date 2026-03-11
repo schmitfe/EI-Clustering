@@ -5,9 +5,11 @@ import argparse
 import concurrent.futures
 import math
 import os
+import pickle
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Sequence, Tuple
 
 import matplotlib
@@ -18,8 +20,9 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 import numpy as np  # noqa: E402
 
-import binary_simulation_multi_init as binary_multi  # noqa: E402
-import figure_helpers as helpers  # noqa: E402
+import pipelines.mean_field as ei_pipeline  # noqa: E402
+from MeanField.rate_system import ensure_output_folder  # noqa: E402
+from pipelines.binary import ensure_binary_behavior_defaults, run_binary_simulation  # noqa: E402
 from plotting import (
     BinaryStateSource,
     FontCfg,
@@ -31,7 +34,7 @@ from plotting import (
     style_axes,
     _prepare_line_color_map,
 )  # noqa: E402
-from sim_config import add_override_arguments, deep_update, load_from_args, parse_overrides  # noqa: E402
+from sim_config import add_override_arguments, deep_update, load_from_args, parse_overrides, sim_tag_from_cfg  # noqa: E402
 
 
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
@@ -40,7 +43,7 @@ plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate Figure 3 columns by running the EI pipeline, performing legacy binary simulations, "
+            "Generate Figure 3 columns by running the EI pipeline, performing BinaryNetwork simulations, "
             "and visualizing raster/rate traces with MF cluster predictions."
         )
     )
@@ -80,7 +83,7 @@ def parse_args() -> argparse.Namespace:
         "--jobs",
         type=int,
         default=1,
-        help="Worker processes for the legacy simulations (default: %(default)s).",
+        help="Worker processes for the BinaryNetwork simulations (default: %(default)s).",
     )
     parser.add_argument(
         "--overwrite-erf",
@@ -117,12 +120,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--simulation-steps", type=int, help="Override binary.simulation_steps.")
     parser.add_argument("--sample-interval", type=int, help="Override binary.sample_interval.")
     parser.add_argument("--batch-size", type=int, help="Override binary.batch_size.")
-    parser.add_argument("--seed", type=int, help="Base seed for the legacy binary simulations.")
-    parser.add_argument("--output-name", type=str, help="Custom prefix for saved legacy traces.")
+    parser.add_argument("--seed", type=int, help="Base seed for the BinaryNetwork simulations.")
+    parser.add_argument("--output-name", type=str, help="Custom prefix for saved binary traces.")
     parser.add_argument(
         "--analysis-only",
         action="store_true",
-        help="Skip new legacy simulations and reuse existing traces.",
+        help="Skip new BinaryNetwork simulations and reuse existing traces.",
     )
     parser.add_argument(
         "--overwrite-simulation",
@@ -252,6 +255,27 @@ class ColumnContext:
     trace_path: str
 
 
+@dataclass(frozen=True)
+class PipelineSweepSettings:
+    v_start: float = 0.0
+    v_end: float = 1.0
+    v_steps: int = 1000
+    retry_step: float | None = None
+    jobs: int = 1
+    overwrite_simulation: bool = False
+    plot_erfs: bool = False
+
+
+@dataclass(frozen=True)
+class BinaryRunSettings:
+    warmup_steps: int | None = None
+    simulation_steps: int | None = None
+    sample_interval: int | None = None
+    batch_size: int | None = None
+    seed: int | None = None
+    output_name: str | None = None
+
+
 COLUMN_SPECS: Sequence[ColumnSpec] = (
     ColumnSpec(label="a", overrides=("kappa=0",)),
     ColumnSpec(label="b", overrides=("kappa=0.5",)),
@@ -338,6 +362,247 @@ def _format_kappa_value(value: float) -> str:
     return text or "0"
 
 
+def _resolve_focus_counts(parameter: Dict[str, Any], explicit: Sequence[int] | None = None) -> List[int]:
+    q_value = int(parameter.get("Q", 0) or 0)
+    if q_value <= 0:
+        raise ValueError("Parameter 'Q' must be positive.")
+    if explicit:
+        values = sorted({max(1, int(val)) for val in explicit})
+        if values:
+            return values
+    return list(range(1, q_value + 1))
+
+
+def _resolve_binary_config(parameter: Dict[str, Any], overrides: BinaryRunSettings) -> Dict[str, Any]:
+    cfg = dict(parameter.get("binary") or {})
+    if overrides.warmup_steps is not None:
+        cfg["warmup_steps"] = int(overrides.warmup_steps)
+    else:
+        cfg["warmup_steps"] = int(cfg.get("warmup_steps", 5000))
+    if overrides.simulation_steps is not None:
+        cfg["simulation_steps"] = int(overrides.simulation_steps)
+    else:
+        cfg["simulation_steps"] = int(cfg.get("simulation_steps", 20000))
+    if overrides.sample_interval is not None:
+        cfg["sample_interval"] = int(overrides.sample_interval)
+    else:
+        cfg["sample_interval"] = int(cfg.get("sample_interval", 10))
+    if overrides.batch_size is not None:
+        cfg["batch_size"] = int(overrides.batch_size)
+    else:
+        cfg["batch_size"] = int(cfg.get("batch_size", 1))
+    cfg["seed"] = overrides.seed if overrides.seed is not None else cfg.get("seed")
+    cfg["output_name"] = overrides.output_name or cfg.get("output_name", "activity_trace")
+    queue_cfg = cfg.get("update_queue")
+    if queue_cfg is not None and not isinstance(queue_cfg, dict):
+        raise ValueError("binary.update_queue must be a mapping when provided.")
+    return ensure_binary_behavior_defaults(cfg)
+
+
+def _filtered_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
+    filtered = dict(parameter)
+    filtered.pop("R_Eplus", None)
+    filtered.pop("focus_count", None)
+    filtered.pop("focus_counts", None)
+    return filtered
+
+
+def _compute_fixpoint_bundle_path(parameter: Dict[str, Any]) -> str:
+    filtered = _filtered_parameter_for_tag(parameter)
+    tag = sim_tag_from_cfg(filtered)
+    kappa = float(parameter.get("kappa", 0.0) or 0.0)
+    conn = str(parameter.get("connection_type", "bernoulli")).lower().replace(" ", "_")
+    encoded_kappa = f"{kappa:.2f}".replace(".", "_")
+    r_j = parameter.get("R_j", 0.0)
+    return os.path.join("data", f"all_fixpoints_{conn}_kappa{encoded_kappa}_Rj{r_j}_{tag}.pkl")
+
+
+def _ensure_fixpoint_bundle(
+    parameter: Dict[str, Any],
+    focus_counts: Sequence[int],
+    r_eplus_values: Sequence[float],
+    sweep_cfg: PipelineSweepSettings,
+) -> Tuple[str, str]:
+    param = dict(parameter)
+    param["focus_counts"] = list(focus_counts)
+    args = SimpleNamespace(
+        v_start=sweep_cfg.v_start,
+        v_end=sweep_cfg.v_end,
+        v_steps=sweep_cfg.v_steps,
+        retry_step=sweep_cfg.retry_step,
+        jobs=sweep_cfg.jobs,
+        overwrite_simulation=bool(sweep_cfg.overwrite_simulation),
+    )
+    folder = ei_pipeline.run_simulation(args, param, r_eplus_values, focus_counts)
+    if folder is None:
+        folder = ensure_output_folder(param, tag=sim_tag_from_cfg(_filtered_parameter_for_tag(param)))
+    ei_pipeline.run_analysis(folder, param, focus_counts, plot_erfs=sweep_cfg.plot_erfs)
+    bundle_path = _compute_fixpoint_bundle_path(param)
+    if not os.path.exists(bundle_path):
+        raise FileNotFoundError(
+            f"Fixpoint bundle {bundle_path} was not generated. Ensure ei_pipeline completed successfully."
+        )
+    return folder, bundle_path
+
+
+def _load_fixpoint_bundle(path: str) -> Dict[str, Any]:
+    with open(path, "rb") as handle:
+        payload = pickle.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} does not contain a fixpoint dictionary payload.")
+    if "metadata" not in payload or "fixpoints" not in payload:
+        raise ValueError(f"{path} is missing required fixpoint metadata.")
+    return payload
+
+
+def _parse_rep_from_key(key: str) -> float | None:
+    if "_focus" not in key:
+        return None
+    prefix, _, _ = key.partition("_focus")
+    try:
+        return float(prefix)
+    except ValueError:
+        return None
+
+
+def _candidate_sort_key(entry: Dict[str, Any]) -> Tuple[int, int, float, int]:
+    value = float(entry.get("value", float("nan")))
+    finite_flag = 0 if math.isfinite(value) else 1
+    safe_value = value if math.isfinite(value) else 0.0
+    return (int(entry["focus_count"]), finite_flag, safe_value, int(entry["index"]))
+
+
+def _load_fixpoint_candidates(
+    bundle: Dict[str, Any],
+    allowed_focus: Sequence[int] | None,
+    stability_filter: str,
+    expected_length: int,
+    target_rep: float,
+) -> List[Dict[str, Any]]:
+    selection: List[Dict[str, Any]] = []
+    fixpoints = bundle.get("fixpoints", {})
+    allowed = set(int(value) for value in allowed_focus) if allowed_focus else None
+    stability_filter = stability_filter.lower()
+    for focus_label, focus_entries in fixpoints.items():
+        try:
+            focus_count = int(focus_label)
+        except (TypeError, ValueError):
+            continue
+        if allowed and focus_count not in allowed:
+            continue
+        for rep_label, rep_entries in focus_entries.items():
+            if not isinstance(rep_entries, dict):
+                continue
+            rep_value = _parse_rep_from_key(str(rep_label))
+            if rep_value is None or abs(rep_value - target_rep) > 1e-9:
+                continue
+            for idx, (fp_value, fixpoint) in enumerate(sorted(rep_entries.items(), key=lambda item: float(item[0]))):
+                rates = fixpoint.get("rates")
+                if rates is None:
+                    continue
+                values = np.asarray(rates, dtype=float).ravel()
+                if values.size != expected_length:
+                    raise ValueError(
+                        f"Fixpoint {rep_label} entry {rep_value} lists {values.size} populations, "
+                        f"but the network expects {expected_length}."
+                    )
+                stability = str(fixpoint.get("stability", "") or "").lower() or "unknown"
+                if stability_filter == "stable" and stability != "stable":
+                    continue
+                if stability_filter == "unstable" and stability == "stable":
+                    continue
+                try:
+                    value = float(fp_value)
+                except (TypeError, ValueError):
+                    value = float("nan")
+                selection.append(
+                    {
+                        "id": f"{rep_label}_{idx}",
+                        "focus_count": focus_count,
+                        "index": idx,
+                        "value": value,
+                        "rates": values.tolist(),
+                        "stability": stability,
+                        "rep_label": rep_label,
+                    }
+                )
+    if not selection:
+        focus_msg = f"focus_counts {sorted(allowed)}" if allowed else "all focus_counts"
+        raise ValueError(f"No fixpoints matched {focus_msg} with stability filter '{stability_filter}'.")
+    selection.sort(key=_candidate_sort_key)
+    return selection
+
+
+def _candidate_max_excit_rate(candidate: Dict[str, Any], excitatory_count: int) -> float:
+    rates = np.asarray(candidate.get("rates", []), dtype=float)
+    if rates.size < excitatory_count:
+        return float("nan")
+    excit = rates[:excitatory_count]
+    if excit.size == 0:
+        return float("nan")
+    return float(np.nanmax(excit))
+
+
+def _deduplicate_candidates_by_focus(
+    candidates: Sequence[Dict[str, Any]],
+    excitatory_count: int,
+) -> List[Dict[str, Any]]:
+    best_per_focus: Dict[int, Dict[str, Any]] = {}
+    for entry in candidates:
+        focus = int(entry.get("focus_count", 0) or 0)
+        max_rate = _candidate_max_excit_rate(entry, excitatory_count)
+        if not math.isfinite(max_rate):
+            continue
+        existing = best_per_focus.get(focus)
+        if existing is None or max_rate > existing.get("max_excitatory_rate", -float("inf")):
+            cloned = dict(entry)
+            cloned["max_excitatory_rate"] = max_rate
+            best_per_focus[focus] = cloned
+    reduced = list(best_per_focus.values())
+    reduced.sort(key=_candidate_sort_key)
+    return reduced
+
+
+def _focus_payload_from_candidates(
+    candidates: Sequence[Dict[str, Any]],
+    excitatory_count: int,
+) -> Dict[int, Dict[str, List[float]]]:
+    payload: Dict[int, Dict[str, List[float]]] = {}
+    for entry in candidates:
+        focus = int(entry.get("focus_count", 0) or 0)
+        max_rate = entry.get("max_excitatory_rate")
+        if max_rate is None or not math.isfinite(float(max_rate)):
+            max_rate = _candidate_max_excit_rate(entry, excitatory_count)
+        if not math.isfinite(float(max_rate)):
+            continue
+        stability = str(entry.get("stability", "") or "").lower()
+        bucket = payload.setdefault(focus, {"stable": [], "unstable": []})
+        key = "stable" if stability == "stable" else "unstable"
+        bucket[key] = [float(max_rate)]
+    return payload
+
+
+def _candidate_for_seed(seed_value: int, candidates: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    if not candidates:
+        raise ValueError("Fixpoint candidate list is empty.")
+    rng_seed = int(seed_value) % (2**32)
+    rng = np.random.default_rng(rng_seed)
+    idx = int(rng.integers(len(candidates)))
+    return candidates[idx]
+
+
+def _format_seed_label(base_name: str, seed: int) -> str:
+    trimmed = base_name.strip() or "activity_trace"
+    return f"{trimmed}_seed{seed:06d}"
+
+
+def _expected_binary_trace_path(parameter: Dict[str, Any], binary_cfg: Dict[str, Any], output_name: str) -> str:
+    folder = ensure_output_folder(parameter, tag=sim_tag_from_cfg(_filtered_parameter_for_tag(parameter)))
+    binary_tag = sim_tag_from_cfg({"parameter": parameter, "binary": dict(binary_cfg)})
+    binary_dir = os.path.join(folder, "binary", binary_tag)
+    return os.path.join(binary_dir, f"{output_name}.npz")
+
+
 def _apply_overrides(parameter: Dict[str, Any], overrides: Sequence[str]) -> Dict[str, Any]:
     if not overrides:
         return dict(parameter)
@@ -379,13 +644,24 @@ def _prepare_focus_markers(
     focus_counts: Sequence[int],
     stability_filter: str,
 ) -> Tuple[List[FocusMarker], Sequence[Dict[str, Any]]]:
-    candidates, q_value = helpers._legacy_candidate_selection(
-        parameter,
-        bundle_path,
+    bundle = _load_fixpoint_bundle(bundle_path)
+    q_value = int(parameter.get("Q", 0) or 0)
+    if q_value <= 0:
+        raise ValueError("Parameter 'Q' must be positive.")
+    r_eplus = parameter.get("R_Eplus")
+    if r_eplus is None:
+        raise ValueError("Parameter 'R_Eplus' must be set before selecting MF fixpoints.")
+    raw_candidates = _load_fixpoint_candidates(
+        bundle,
         focus_counts,
         stability_filter,
+        2 * q_value,
+        float(r_eplus),
     )
-    focus_rates = binary_multi._focus_payload_from_candidates(candidates, int(q_value))
+    candidates = _deduplicate_candidates_by_focus(raw_candidates, q_value)
+    if not candidates:
+        raise ValueError("No fixpoint candidates matched the requested filters.")
+    focus_rates = _focus_payload_from_candidates(candidates, q_value)
     return _collect_focus_markers(focus_rates), candidates
 
 
@@ -397,7 +673,7 @@ def _prepare_focus_markers_with_retry(
     parameter: Dict[str, Any],
     focus_counts: Sequence[int],
     stability_filter: str,
-    sweep_cfg: helpers.PipelineSweepSettings,
+    sweep_cfg: PipelineSweepSettings,
     *,
     delta_rep: float,
     rep_retry: int,
@@ -408,7 +684,7 @@ def _prepare_focus_markers_with_retry(
     if target_rep is None:
         raise ValueError("Parameter 'R_Eplus' must be set before selecting MF fixpoints.")
     target_rep = float(target_rep)
-    folder, bundle_path = helpers.ensure_fixpoint_bundle(
+    folder, bundle_path = _ensure_fixpoint_bundle(
         parameter,
         focus_counts,
         [target_rep],
@@ -440,7 +716,7 @@ def _prepare_focus_markers_with_retry(
         sample_rep = float(rng.uniform(target_rep - delta_rep, target_rep + delta_rep))
         sample_param = dict(parameter)
         sample_param["R_Eplus"] = sample_rep
-        folder, bundle_path = helpers.ensure_fixpoint_bundle(
+        folder, bundle_path = _ensure_fixpoint_bundle(
             sample_param,
             focus_counts,
             [sample_rep],
@@ -472,25 +748,24 @@ def _build_trace_task(
     parameter: Dict[str, Any],
     binary_cfg: Dict[str, Any],
     *,
-    folder_hint: str,
     candidates: Sequence[Dict[str, Any]],
     seed: int,
     analysis_only: bool,
     overwrite_simulation: bool,
 ) -> Tuple[str, Dict[str, Any] | None]:
-    _, binary_dir, _ = binary_multi._prepare_max_rate_folder(parameter, folder_hint, binary_cfg)
     base_output = str(binary_cfg.get("output_name", "activity_trace"))
-    label = binary_multi._format_seed_label(base_output, seed)
-    trace_path = os.path.join(binary_dir, f"{label}.npz")
+    label = _format_seed_label(base_output, seed)
+    task_binary_cfg = dict(binary_cfg)
+    task_binary_cfg["seed"] = int(seed)
+    trace_path = _expected_binary_trace_path(parameter, task_binary_cfg, label)
     needs_simulation = (not analysis_only) and (overwrite_simulation or not os.path.exists(trace_path))
     if not needs_simulation:
         return trace_path, None
-    candidate = binary_multi._candidate_for_seed(seed, candidates)
+    candidate = _candidate_for_seed(seed, candidates)
     init_rates = tuple(float(value) for value in candidate["rates"])
     task = {
         "parameter": parameter,
-        "binary_cfg": dict(binary_cfg),
-        "binary_dir": binary_dir,
+        "binary_cfg": task_binary_cfg,
         "label": label,
         "init_rates": init_rates,
         "seed": int(seed),
@@ -500,22 +775,20 @@ def _build_trace_task(
     return trace_path, task
 
 
-def _simulate_legacy_task(task: Dict[str, Any]) -> str:
+def _simulate_binary_task(task: Dict[str, Any]) -> str:
     trace_path = str(task["trace_path"])
     if (not task.get("overwrite_simulation")) and os.path.exists(trace_path):
         return trace_path
     seed = int(task["seed"])
     label = str(task["label"])
-    print(f"Simulating legacy binary network for seed {seed} (column {label}).")
-    return binary_multi.run_legacy_binary_simulation(
+    print(f"Simulating BinaryNetwork for seed {seed} (column {label}).")
+    result = run_binary_simulation(
         task["parameter"],
         task["binary_cfg"],
-        task["binary_dir"],
-        label,
-        task["init_rates"],
-        seed=seed,
-        capture_spikes=True,
+        output_name=label,
+        population_rate_inits=task["init_rates"],
     )
+    return str(result["trace_path"])
 
 
 def _marker_data_step(
@@ -872,7 +1145,7 @@ def main() -> None:
     _validate_column_keys(column_override_map, known_labels, "column overrides")
     _validate_column_keys(column_title_map, known_labels, "column titles")
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
-    sweep_cfg = helpers.PipelineSweepSettings(
+    sweep_cfg = PipelineSweepSettings(
         v_start=args.v_start,
         v_end=args.v_end,
         v_steps=args.v_steps,
@@ -881,7 +1154,7 @@ def main() -> None:
         overwrite_simulation=bool(args.overwrite_erf),
         plot_erfs=False,
     )
-    binary_overrides = helpers.BinaryRunSettings(
+    binary_overrides = BinaryRunSettings(
         warmup_steps=args.warmup_steps,
         simulation_steps=args.simulation_steps,
         sample_interval=args.sample_interval,
@@ -903,10 +1176,10 @@ def main() -> None:
                 column_override_map=column_override_map,
             )
             title_text = _resolve_column_title(column_param, spec, title_map=column_title_map)
-            focus_counts = helpers.resolve_focus_counts(column_param, args.focus_counts)
+            focus_counts = _resolve_focus_counts(column_param, args.focus_counts)
             focus_union.update(int(value) for value in focus_counts)
             column_param["R_Eplus"] = float(column_param.get("R_Eplus", r_value) or r_value)
-            binary_cfg = helpers.resolve_binary_config(column_param, binary_overrides)
+            binary_cfg = _resolve_binary_config(column_param, binary_overrides)
             base_seed = int(binary_cfg.get("seed", 0) or 0)
             seed = base_seed + idx
             focus_markers, candidates, folder, bundle_path = _prepare_focus_markers_with_retry(
@@ -922,7 +1195,6 @@ def main() -> None:
             trace_path, task = _build_trace_task(
                 column_param,
                 binary_cfg,
-                folder_hint=folder,
                 candidates=candidates,
                 seed=seed,
                 analysis_only=args.analysis_only,
@@ -956,7 +1228,7 @@ def main() -> None:
                 max_workers = min(job_count, len(simulation_tasks))
                 with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
                     future_map = {
-                        pool.submit(_simulate_legacy_task, task): task for task in simulation_tasks
+                        pool.submit(_simulate_binary_task, task): task for task in simulation_tasks
                     }
                     for future in concurrent.futures.as_completed(future_map):
                         task = future_map[future]
@@ -965,11 +1237,11 @@ def main() -> None:
                         except Exception as exc:
                             seed = task.get("seed", "?")
                             raise RuntimeError(
-                                f"Legacy simulation failed for seed {seed}: {exc}"
+                                f"BinaryNetwork simulation failed for seed {seed}: {exc}"
                             ) from exc
             else:
                 for task in simulation_tasks:
-                    _simulate_legacy_task(task)
+                    _simulate_binary_task(task)
         n_cols = len(column_contexts)
         fig = plt.figure(figsize=(4.2 * n_cols + 1.4, 5))
         outer = fig.add_gridspec(

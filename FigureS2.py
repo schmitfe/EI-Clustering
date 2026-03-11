@@ -15,8 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-import binary_simulation_multi_init as binary_multi  # noqa: E402
-import figure_helpers as helpers  # noqa: E402
+from pipelines import figure_helpers as helpers  # noqa: E402
 from plotting import (  # noqa: E402
     BinaryStateSource,
     FontCfg,
@@ -518,7 +517,7 @@ def _resolve_trace(
     if target_rep is None:
         raise ValueError("Parameter 'R_Eplus' must be defined (or overridden via -O).")
     target_rep = float(target_rep)
-    folder, bundle_path = helpers.ensure_fixpoint_bundle(
+    _, bundle_path = helpers.ensure_fixpoint_bundle(
         deepcopy(param),
         focus_counts,
         [target_rep],
@@ -531,51 +530,23 @@ def _resolve_trace(
     param["binary"] = param_binary
     binary_cfg = helpers.resolve_binary_config(param, binary_overrides)
     binary_cfg["seed"] = int(network_seed)
-    _, binary_dir, _ = binary_multi._prepare_multi_init_folder(param, folder)
-    trace_label = f"{output_name}_init{init_index:04d}"
-    trace_path = Path(binary_dir) / f"{trace_label}.npz"
-    if trace_path.exists() and not overwrite_simulation:
-        return _load_trace_payload(str(trace_path))
-    if analysis_only:
-        raise FileNotFoundError(f"Trace {trace_path} does not exist. Re-run without --analysis-only.")
-    bundle = binary_multi._load_fixpoint_bundle(bundle_path)
-    Q_value = int(param.get("Q", 0) or 0)
-    pop_length = 2 * Q_value
-    candidates = binary_multi._load_fixpoint_candidates(
-        bundle,
-        focus_counts,
-        stability_filter,
-        pop_length,
-        target_rep,
-    )
-    if not candidates:
-        raise ValueError("No fixpoint candidates available for raster plotting.")
-    picks = binary_multi._select_fixpoints(
-        candidates,
-        seed=int(init_seed),
-        count=max(1, int(n_inits)),
-    )
-    if init_index >= len(picks):
-        raise ValueError(
-            f"Requested init_index={init_index} but only {len(picks)} initializations were selected."
-        )
-    candidate = picks[init_index]
-    init_rates = tuple(float(value) for value in candidate["rates"])
     print(
         f"Simulating kappa={kappa:.3f} with mean conn={helpers.mean_connectivity(param):.3f} "
         f"(network seed={network_seed}, init seed={init_seed}, init index={init_index})."
     )
-    binary_multi.run_legacy_binary_simulation(
+    payload = helpers.resolve_binary_trace_from_fixpoint(
         param,
-        binary_cfg,
-        str(binary_dir),
-        trace_label,
-        init_rates,
-        seed=int(network_seed),
-        capture_state_dynamics=True,
-        cluster_seed=int(init_index),
+        bundle_path=bundle_path,
+        focus_counts=focus_counts,
+        stability_filter=stability_filter,
+        binary_cfg=binary_cfg,
+        init_seed=int(init_seed),
+        init_index=int(init_index),
+        n_inits=max(1, int(n_inits)),
+        analysis_only=analysis_only,
+        overwrite_simulation=overwrite_simulation,
     )
-    return _load_trace_payload(str(trace_path))
+    return payload
 
 
 def _save_figure(fig: plt.Figure, output_prefix: str) -> None:

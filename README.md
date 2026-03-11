@@ -5,14 +5,15 @@ This repository contains all necessary code to reproduce the figures from the dr
 Mean-field solvers, binary-network simulations, figure-generation scripts, and reference NEST code for the clustered EI model live side by side in this repository. The top level only contains the driver scripts and this overview; each subsystem ships with its own README that covers the full set of options and file layouts.
 
 ## Quick Start
-- `python ei_pipeline.py` runs the mean-field ERF sweep plus fixpoint analysis using `sim_config/default_simulation.yaml`. See `MeanField/README.md` for the full flag reference, solver details, and data layout.
-- `python binary_pipeline.py` launches the stochastic binary-network simulation with the same default config. See `BinaryNetwork/README.md` for sampling controls and plotting helpers.
+- `python -m pipelines.mean_field` runs the mean-field ERF sweep plus fixpoint analysis using `sim_config/default_simulation.yaml`. See `MeanField/README.md` for the full flag reference, solver details, and data layout.
+- `python -m pipelines.binary` launches the stochastic binary-network simulation with the same default config. See `BinaryNetwork/README.md` for sampling controls and plotting helpers.
 - Configuration defaults are defined under `sim_config/`. Always override parameters through the CLI rather than environment variables so runs remain reproducible.
 - Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, and optional binary traces, while plots go to `plots/`.
 
 ## Modules
-- `MeanField/` packages the reusable solvers (`rate_system.py`, `solver_utils.py`) and the EI specialization (`ei_cluster_network.py`) used by `ei_pipeline.py`.
-- `BinaryNetwork/` contains the clustered binary model and utilities consumed by `binary_pipeline.py`.
+- `MeanField/` packages the reusable solvers (`rate_system.py`, `solver_utils.py`) and the EI specialization (`ei_cluster_network.py`) used by `pipelines/mean_field.py`.
+- `BinaryNetwork/` contains the clustered binary model and utilities consumed by `pipelines/binary.py`.
+- `pipelines/` contains the maintained entry points for the mean-field, binary, spiking, and figure-helper workflows.
 - `NEST/EI_clustered_network/` holds the spiking reference implementation; consult it when porting the model into NEST-based workflows.
 
 Refer to the module-specific READMEs for implementation notes, diagnostics, and advanced usage.
@@ -22,6 +23,7 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
 ### Commands to generate Figures:
 #### Main Text:
 - Figure1:
+non legacy: `python Figure1.py --jobs 2 -O binary.warmup_steps=200000 -O binary.simulation_steps=3000000 --panel-window c1:0:3000000 --panel-window c2:0:3000000 --panel-override c1:kappa=0 --panel-override c2:kappa=1 --raster-neuron-step 2 -O binary.seed=1 -O R_Eplus=7.25 -O R_j=0.8 -O connection_type=poisson -O p0_ee=0.3 -O p0_ei=0.3 -O p0_ie=0.3 -O p0_ii=0.3`
 `python Figure1.py --jobs 2 -O binary.warmup_steps=200000 -O binary.simulation_steps=3000000 --panel-window c1:0:3000000 --panel-window c2:0:3000000 --panel-override c1:kappa=0 --panel-override c2:kappa=1 --raster-neuron-step 4 --panel-override c1:binary.seed=3 --panel-override c2:binary.seed=4 -O R_Eplus=7.2 -O R_j=0.8 -O connection_type=poisson -O p0_ee=0.3 -O p0_ei=0.3 -O p0_ie=0.3 -O p0_ii=0.3`
 - Figure2:
 `python Figure2.py  --rows 0.3 0.1  --columns 0 0.5 1.0  --r-eplus-start 1  --r-eplus-end 20  --r-eplus-step 0.2  --bif-r-eplus-min 1  --bif-r-eplus-max 20  --bif-bisection-tol 0.05  --bif-rj 0.75  --bif-rj 0.5  --bif-avg-connectivity-range 0.01 0.31 0.005  -O Q=20  -O N_E=8000  -O N_I=2000  -O R_j=0.75  --bif-fixpoint-threshold 2  --marker-focus-count 1  --line-focus-counts 5 4 3 2 1  --line-colormap viridis_r --jobs 1 --bif-jobs 1 --bif-rj 0.8`

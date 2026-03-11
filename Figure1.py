@@ -18,8 +18,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import MaxNLocator
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
-import binary_simulation_multi_init as binary_multi
-from binary_pipeline import ensure_binary_behavior_defaults
+from pipelines.binary import ensure_binary_behavior_defaults, run_binary_simulation
 from sim_config import deep_update, load_config, parse_overrides, sim_tag_from_cfg, write_yaml_config
 import yaml
 
@@ -305,7 +304,39 @@ def expected_trace_path(parameter: Dict[str, object], binary_cfg: Dict[str, obje
 
 def _resolve_population_inits(parameter: Dict[str, object], binary_cfg: Dict[str, object]) -> List[float]:
     template = binary_cfg.get("population_rate_init", 0.1)
-    return binary_multi.build_population_rate_vector(parameter, template)
+    q_value = int(parameter.get("Q", 0) or 0)
+    if q_value <= 0:
+        raise ValueError("Parameter 'Q' must be positive.")
+    default_value = 0.1
+
+    def _uniform(value: float | None) -> np.ndarray:
+        val = default_value if value is None else float(value)
+        return np.full(q_value, np.clip(val, 0.0, 1.0), dtype=float)
+
+    excit = inhib = None
+    if template is None:
+        excit = inhib = _uniform(None)
+    elif isinstance(template, dict):
+        excit = _uniform(template.get("excitatory"))
+        inhib = _uniform(template.get("inhibitory"))
+    elif isinstance(template, (list, tuple, np.ndarray)):
+        arr = np.asarray(template, dtype=float).ravel()
+        if arr.size == 2 * q_value:
+            return arr.tolist()
+        if arr.size == 2:
+            excit = _uniform(arr[0])
+            inhib = _uniform(arr[1])
+        elif arr.size == 1:
+            excit = inhib = _uniform(arr[0])
+        else:
+            raise ValueError(
+                f"population_rate_init sequence must have length 1, 2, or 2*Q ({2 * q_value}), got {arr.size}."
+            )
+    else:
+        excit = inhib = _uniform(template)
+    if excit is None or inhib is None:
+        raise ValueError("Could not infer population_rate_init values.")
+    return np.concatenate([excit, inhib]).tolist()
 
 
 def _resolve_binary_seed(binary_cfg: Dict[str, object]) -> int:
@@ -316,14 +347,14 @@ def _resolve_binary_seed(binary_cfg: Dict[str, object]) -> int:
 
 
 def ensure_trace_file(parameter: Dict[str, object], binary_cfg: Dict[str, object], spec: RasterPanelSpec) -> Path:
-    base_dir, binary_dir = binary_output_folder(parameter, binary_cfg)
-    trace_path = binary_dir / f"{spec.output_name}.npz"
-    if trace_path.exists():
-        return trace_path
     run_cfg = dict(binary_cfg)
     run_cfg["output_name"] = spec.output_name
     seed = _resolve_binary_seed(run_cfg)
     run_cfg["seed"] = seed
+    base_dir, binary_dir = binary_output_folder(parameter, run_cfg)
+    trace_path = binary_dir / f"{spec.output_name}.npz"
+    if trace_path.exists():
+        return trace_path
     init_rates = _resolve_population_inits(parameter, run_cfg)
     base_dir.mkdir(parents=True, exist_ok=True)
     params_path = base_dir / "params.yaml"
@@ -332,18 +363,14 @@ def ensure_trace_file(parameter: Dict[str, object], binary_cfg: Dict[str, object
     binary_dir.mkdir(parents=True, exist_ok=True)
     binary_params_path = binary_dir / "params.yaml"
     if not binary_params_path.exists():
-        write_yaml_config({"parameter": parameter, "binary": binary_cfg}, binary_params_path)
-    resolved = binary_multi.run_legacy_binary_simulation(
+        write_yaml_config({"parameter": parameter, "binary": run_cfg}, binary_params_path)
+    resolved = run_binary_simulation(
         parameter,
         run_cfg,
-        str(binary_dir),
-        spec.output_name,
-        init_rates,
-        seed=seed,
-        capture_spikes=True,
-        capture_state_dynamics=False,
+        output_name=spec.output_name,
+        population_rate_inits=init_rates,
     )
-    return Path(resolved)
+    return Path(str(resolved["trace_path"]))
 
 
 def _ensure_trace_for_context(context: PanelContext) -> str:
@@ -410,7 +437,11 @@ def load_trace_payload(path: Path, summary: Dict[str, object]) -> TracePayload:
         names = [str(name) for name in data["names"].tolist()]
         times = np.asarray(data["times"], dtype=float) if "times" in data else np.arange(rates.shape[0], dtype=float)
         sample_interval = int(np.asarray(data.get("sample_interval", 1)).item())
-        state_times = np.asarray(data.get("neuron_state_times"), dtype=np.int64)
+        state_times = (
+            np.asarray(data["neuron_state_times"], dtype=np.int64)
+            if "neuron_state_times" in available
+            else np.zeros(0, dtype=np.int64)
+        )
         state_interval = int(np.asarray(data.get("neuron_state_interval", 0)).item())
         if state_interval <= 0 and state_times.ndim == 1 and state_times.size > 1:
             diffs = np.diff(state_times.astype(np.int64, copy=False))

@@ -35,7 +35,7 @@ binary:
   log_decimate_zero_phase: true
   log_decimate_ftype: iir
   update_queue:
-    enabled: true
+    enabled: false
     chunk_size: 5000
     excitatory_repeat: 1
     inhibitory_repeat: 2
