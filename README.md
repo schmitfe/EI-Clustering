@@ -13,7 +13,7 @@ Mean-field solvers, binary-network simulations, figure-generation scripts, and r
 ## API Documentation
 - The generated API docs live under [`docs/`](docs/index.html) with the entry page at [`docs/index.html`](docs/index.html).
 - Regenerate the site locally with `python scripts/generate_api_docs.py`.
-- The repository now includes a GitHub Pages workflow at [`.github/workflows/docs.yml`](/home/fschmitt/Documents/git/EI-Clustering/.github/workflows/docs.yml) so the static docs can be published directly from the repo.
+- The repository now includes a GitHub Pages workflow at [`.github/workflows/docs.yml`](/home/fschmitt/Documents/git/EI-Clustering/.github/workflows/docs.yml) so the static docs can be published directly from the repo to [Github pages](https://schmitfe.github.io/EI-Clustering/).
 
 ## Modules
 - `MeanField/` packages the reusable solvers (`rate_system.py`, `solver_utils.py`) and the EI specialization (`ei_cluster_network.py`) used by `pipelines/mean_field.py`.
