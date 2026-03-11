@@ -611,6 +611,7 @@ def plot_cluster_activity(
     window_end = window.end / safe_scale
     ax.set_xlim(window_start, window_end)
     ax.set_ylim(0.0, 1.05)
+    ax.set_yticks([0.0, 1.0])
     if ylabel:
         ax.set_ylabel(ylabel)
     else:

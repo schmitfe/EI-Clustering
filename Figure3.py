@@ -1118,7 +1118,8 @@ def _plot_grayscale_rates(
     finite_scaled = scaled_time_axis[np.isfinite(scaled_time_axis)]
     if finite_scaled.size:
         ax.set_xlim(float(finite_scaled.min()), float(finite_scaled.max()))
-    ax.set_ylim(bottom=0.0)
+    ax.set_ylim(0.0, 1.05)
+    ax.set_yticks([0.0, 1.0])
 
 
 def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
@@ -1287,25 +1288,12 @@ def main() -> None:
             add_panel_label(ax_rates, f"{panel_prefix}2", font_cfg, x=-0.15, y=1.06)
             rate_axes.append(ax_rates)
         if rate_axes:
-            max_y = max(ax.get_ylim()[1] for ax in rate_axes)
-            tick_max = max(0.5, math.ceil(float(max_y) * 10.0) / 10.0)
-            ticks = list(np.arange(0.0, tick_max + 1e-9, 0.25))
-            if ticks and ticks[-1] < tick_max - 1e-6:
-                ticks.append(tick_max)
-            tick_labels = []
-            for value in ticks:
-                if abs(value) < 1e-6:
-                    tick_labels.append("0")
-                elif abs(value - 0.5) < 1e-6:
-                    tick_labels.append("0.5")
-                else:
-                    tick_labels.append("")
             for idx, ax in enumerate(rate_axes):
-                ax.set_ylim(0.0, tick_max)
-                ax.set_yticks(ticks)
+                ax.set_ylim(0.0, 1.05)
+                ax.set_yticks([0.0, 1.0])
                 if idx == 0:
                     ax.set_ylabel(r"$m_c$")
-                    ax.set_yticklabels(tick_labels)
+                    ax.set_yticklabels(["0", "1"])
                 else:
                     ax.set_ylabel("")
                     ax.tick_params(axis="y", labelleft=False)
