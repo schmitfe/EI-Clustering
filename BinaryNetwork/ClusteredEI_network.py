@@ -339,9 +339,20 @@ class ClusteredEI_network(BaseBinaryNetwork):
         pool = np.concatenate(entries) if len(entries) > 1 else entries[0]
         self.configure_update_queue(pool, chunk_size=chunk_size)
 
-    def initialize(self, autapse: bool = False):
+    def initialize(
+        self,
+        autapse: bool = False,
+        weight_mode: str = "auto",
+        ram_budget_gb: float = 12.0,
+        weight_dtype=np.float32,
+    ):
         self._ensure_structure()
-        super().initialize(autapse=autapse)
+        super().initialize(
+            autapse=autapse,
+            weight_mode=weight_mode,
+            ram_budget_gb=ram_budget_gb,
+            weight_dtype=weight_dtype,
+        )
 
     def reinitalize(self):
         self.initialize()

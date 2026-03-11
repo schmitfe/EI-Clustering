@@ -16,7 +16,20 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 
 
 @njit(cache=True)
-def _dense_batch_kernel(neurons, state, field, thresholds, weights, log_states, log_enabled, log_offset):
+def _dense_batch_kernel(
+    neurons,
+    state,
+    field,
+    thresholds,
+    weights,
+    log_states,
+    log_enabled,
+    log_offset,
+    update_log,
+    delta_log,
+    diff_enabled,
+    diff_offset,
+):
     """
     Update neurons in-place for dense weight matrices.
     Parameters
@@ -38,17 +51,36 @@ def _dense_batch_kernel(neurons, state, field, thresholds, weights, log_states, 
         old_state = state[neuron]
         potential = field[neuron]
         new_state = 1 if potential > thresholds[neuron] else 0
+        delta = 0
         if new_state != old_state:
             delta = new_state - old_state
             state[neuron] = new_state
             for target in range(neuron_count):
                 field[target] += delta * weights[target, neuron]
+        if diff_enabled:
+            update_log[diff_offset + idx] = neuron
+            delta_log[diff_offset + idx] = delta
         if log_enabled:
             log_states[log_offset + idx, :] = state
 
 
 @njit(cache=True)
-def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indptr, log_states, log_enabled, log_offset):
+def _sparse_batch_kernel(
+    neurons,
+    state,
+    field,
+    thresholds,
+    data,
+    indices,
+    indptr,
+    log_states,
+    log_enabled,
+    log_offset,
+    update_log,
+    delta_log,
+    diff_enabled,
+    diff_offset,
+):
     """
     Update neurons for sparse CSC weights.
     Parameters
@@ -61,6 +93,7 @@ def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indpt
         old_state = state[neuron]
         potential = field[neuron]
         new_state = 1 if potential > thresholds[neuron] else 0
+        delta = 0
         if new_state != old_state:
             delta = new_state - old_state
             state[neuron] = new_state
@@ -69,6 +102,9 @@ def _sparse_batch_kernel(neurons, state, field, thresholds, data, indices, indpt
             for ptr in range(start, end):
                 row = indices[ptr]
                 field[row] += delta * data[ptr]
+        if diff_enabled:
+            update_log[diff_offset + idx] = neuron
+            delta_log[diff_offset + idx] = delta
         if log_enabled:
             log_states[log_offset + idx, :] = state
 
@@ -276,6 +312,11 @@ class BinaryNetwork:
         self._step_log_buffer: np.ndarray | None = None
         self._step_log_index = 0
         self._step_log_dummy = np.zeros((0, 0), dtype=np.int8)
+        self._diff_log_updates: np.ndarray | None = None
+        self._diff_log_deltas: np.ndarray | None = None
+        self._diff_log_index = 0
+        self._diff_log_dummy_updates = np.zeros(0, dtype=np.uint16)
+        self._diff_log_dummy_deltas = np.zeros(0, dtype=np.int8)
         self._update_queue_enabled = False
         self._update_queue_pool = np.zeros(0, dtype=np.int64)
         self._update_queue_buffer = np.zeros(0, dtype=np.int64)
@@ -415,6 +456,15 @@ class BinaryNetwork:
     def _update_batch_dense(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
         if neurons.size == 0:
             return
+        diff_enabled = self._diff_log_updates is not None and self._diff_log_deltas is not None
+        if diff_enabled:
+            diff_updates = self._diff_log_updates
+            diff_deltas = self._diff_log_deltas
+            diff_offset = self._diff_log_index
+        else:
+            diff_updates = self._diff_log_dummy_updates
+            diff_deltas = self._diff_log_dummy_deltas
+            diff_offset = 0
         _dense_batch_kernel(
             neurons,
             self.state,
@@ -424,11 +474,24 @@ class BinaryNetwork:
             log_states,
             log_enabled,
             log_offset,
+            diff_updates,
+            diff_deltas,
+            diff_enabled,
+            diff_offset,
         )
 
     def _update_batch_sparse(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
         if neurons.size == 0:
             return
+        diff_enabled = self._diff_log_updates is not None and self._diff_log_deltas is not None
+        if diff_enabled:
+            diff_updates = self._diff_log_updates
+            diff_deltas = self._diff_log_deltas
+            diff_offset = self._diff_log_index
+        else:
+            diff_updates = self._diff_log_dummy_updates
+            diff_deltas = self._diff_log_dummy_deltas
+            diff_offset = 0
         _sparse_batch_kernel(
             neurons,
             self.state,
@@ -440,6 +503,10 @@ class BinaryNetwork:
             log_states,
             log_enabled,
             log_offset,
+            diff_updates,
+            diff_deltas,
+            diff_enabled,
+            diff_offset,
         )
 
     def update(self):
@@ -458,12 +525,17 @@ class BinaryNetwork:
             log_buffer = self._step_log_buffer
         else:
             log_buffer = self._step_log_dummy
+        if self._diff_log_updates is not None and self._diff_log_deltas is not None:
+            if self._diff_log_index + neurons.size > self._diff_log_updates.shape[0]:
+                raise RuntimeError("Diff logging buffer exhausted. Increase allocated steps when enabling diff logging.")
         if self.weight_mode == "dense":
             self._update_batch_dense(neurons, log_buffer, log_enabled, log_offset)
         else:
             self._update_batch_sparse(neurons, log_buffer, log_enabled, log_offset)
         if log_enabled:
             self._step_log_index += neurons.size
+        if self._diff_log_updates is not None and self._diff_log_deltas is not None:
+            self._diff_log_index += neurons.size
         self.sim_steps += neurons.size
 
     def run(self, steps=1000, batch_size=1):
@@ -495,6 +567,28 @@ class BinaryNetwork:
         self._step_log_buffer = None
         self._step_log_index = 0
         return data
+
+    def enable_diff_logging(self, steps: int):
+        steps = int(max(0, steps))
+        if steps == 0:
+            self._diff_log_updates = None
+            self._diff_log_deltas = None
+            self._diff_log_index = 0
+            return
+        self._diff_log_updates = np.zeros(steps, dtype=np.uint16)
+        self._diff_log_deltas = np.zeros(steps, dtype=np.int8)
+        self._diff_log_index = 0
+
+    def consume_diff_log(self) -> tuple[np.ndarray, np.ndarray]:
+        if self._diff_log_updates is None or self._diff_log_deltas is None:
+            return np.zeros((1, 0), dtype=np.uint16), np.zeros((1, 0), dtype=np.int8)
+        filled = min(self._diff_log_index, self._diff_log_updates.shape[0])
+        updates = self._diff_log_updates[:filled].copy()[None, :]
+        deltas = self._diff_log_deltas[:filled].copy()[None, :]
+        self._diff_log_updates = None
+        self._diff_log_deltas = None
+        self._diff_log_index = 0
+        return updates, deltas
 
     def configure_update_queue(
         self,

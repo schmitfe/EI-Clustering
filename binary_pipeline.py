@@ -142,19 +142,120 @@ def _sample_populations(network: ClusteredEI_network) -> Tuple[List[str], np.nda
     return names, values
 
 
-def _population_rates_from_step_states(step_states: np.ndarray, pops: Sequence) -> np.ndarray:
-    if step_states.size == 0 or not pops:
-        return np.zeros((0, len(pops)), dtype=np.float32)
+def _population_metadata(pops: Sequence) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     pop_count = len(pops)
-    per_step_rates = np.empty((step_states.shape[0], pop_count), dtype=np.float32)
+    starts = np.zeros(pop_count, dtype=np.int64)
+    ends = np.zeros(pop_count, dtype=np.int64)
+    sizes = np.zeros(pop_count, dtype=np.float32)
     for idx, pop in enumerate(pops):
-        start, end = int(pop.view[0]), int(pop.view[1])
-        if end <= start:
-            per_step_rates[:, idx] = 0.0
-            continue
-        slice_states = step_states[:, start:end]
-        per_step_rates[:, idx] = slice_states.mean(axis=1)
-    return per_step_rates
+        start = int(pop.view[0])
+        end = int(pop.view[1])
+        starts[idx] = start
+        ends[idx] = end
+        sizes[idx] = max(1, end - start)
+    return starts, ends, sizes
+
+
+def _population_rates_from_diff_logs(
+    initial_state: np.ndarray,
+    updates: np.ndarray,
+    deltas: np.ndarray,
+    pops: Sequence,
+    *,
+    sample_interval: int,
+) -> np.ndarray:
+    if not pops:
+        return np.zeros((0, 0), dtype=np.float32)
+    update_arr = np.asarray(updates, dtype=np.int64)
+    delta_arr = np.asarray(deltas, dtype=np.int8)
+    if update_arr.ndim == 1:
+        update_arr = update_arr[None, :]
+    if delta_arr.ndim == 1:
+        delta_arr = delta_arr[None, :]
+    if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+        return np.zeros((0, len(pops)), dtype=np.float32)
+    starts, ends, sizes = _population_metadata(pops)
+    state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
+    pop_count = len(pops)
+    cluster_of = np.empty(state.size, dtype=np.int32)
+    cluster_sums = np.zeros(pop_count, dtype=np.int64)
+    for idx, (start, end) in enumerate(zip(starts, ends)):
+        cluster_of[start:end] = idx
+        cluster_sums[idx] = int(state[start:end].sum())
+    steps = update_arr.shape[1]
+    stride = max(1, int(sample_interval))
+    samples: List[np.ndarray] = []
+    for step in range(steps):
+        units = update_arr[:, step]
+        delta_step = delta_arr[:, step]
+        for unit, delta in zip(units, delta_step):
+            unit_idx = int(unit)
+            delta_val = int(delta)
+            if delta_val == 0:
+                continue
+            cluster_idx = int(cluster_of[unit_idx])
+            cluster_sums[cluster_idx] += delta_val
+            state_value = int(state[unit_idx]) + delta_val
+            state[unit_idx] = 1 if state_value > 0 else 0
+        if step % stride == 0:
+            samples.append((cluster_sums.astype(np.float32, copy=False) / sizes).copy())
+    if not samples:
+        return np.zeros((0, pop_count), dtype=np.float32)
+    return np.stack(samples, axis=0)
+
+
+def _reconstruct_states_from_diff_logs(
+    initial_state: np.ndarray,
+    updates: np.ndarray,
+    deltas: np.ndarray,
+    *,
+    sample_interval: int,
+) -> np.ndarray:
+    update_arr = np.asarray(updates, dtype=np.int64)
+    delta_arr = np.asarray(deltas, dtype=np.int8)
+    if update_arr.ndim == 1:
+        update_arr = update_arr[None, :]
+    if delta_arr.ndim == 1:
+        delta_arr = delta_arr[None, :]
+    if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+        return np.zeros((0, np.asarray(initial_state).size), dtype=np.uint8)
+    state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
+    stride = max(1, int(sample_interval))
+    states: List[np.ndarray] = []
+    for step in range(update_arr.shape[1]):
+        units = update_arr[:, step]
+        delta_step = delta_arr[:, step]
+        for unit, delta in zip(units, delta_step):
+            delta_val = int(delta)
+            if delta_val == 0:
+                continue
+            unit_idx = int(unit)
+            state_value = int(state[unit_idx]) + delta_val
+            state[unit_idx] = 1 if state_value > 0 else 0
+        if step % stride == 0:
+            states.append(state.astype(np.uint8, copy=True))
+    if not states:
+        return np.zeros((0, state.size), dtype=np.uint8)
+    return np.stack(states, axis=0)
+
+
+def _extract_spike_events(updates: np.ndarray, deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    update_arr = np.asarray(updates, dtype=np.int64)
+    delta_arr = np.asarray(deltas, dtype=np.int8)
+    if update_arr.ndim == 1:
+        update_arr = update_arr[None, :]
+    if delta_arr.ndim == 1:
+        delta_arr = delta_arr[None, :]
+    if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
+        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
+    mask = delta_arr > 0
+    if not mask.any():
+        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.int64)
+    per_step, steps = update_arr.shape
+    times = np.repeat(np.arange(steps, dtype=np.int64), per_step)
+    flat_updates = update_arr.reshape(-1, order="F")
+    flat_mask = mask.reshape(-1, order="F")
+    return times[flat_mask].astype(np.float64, copy=False), flat_updates[flat_mask].astype(np.int64, copy=False)
 
 
 def _apply_population_rate_initialization(
@@ -352,132 +453,64 @@ def run_binary_simulation(
     if not os.path.exists(binary_params_path):
         write_yaml_config({"parameter": parameter, "binary": binary_cfg}, binary_params_path)
     resolved_output_name = output_name or str(binary_cfg["output_name"])
-    chunk_size = int(binary_cfg.get("state_chunk_size", 0) or 0)
-    chunk_paths: List[str] = []
-    chunk_buffer: List[np.ndarray] = []
-    chunk_index = 0
-    chunk_dir = None
-    if chunk_size > 0:
-        chunk_dir = os.path.join(binary_folder, f"{resolved_output_name}_state_chunks")
-        os.makedirs(chunk_dir, exist_ok=True)
-    log_step_states = bool(binary_cfg.get("log_step_states"))
-    decimate_factor = binary_cfg.get("log_decimate_factor")
-    if decimate_factor is not None:
-        decimate_factor = max(1, int(decimate_factor))
-    decimate_zero_phase = bool(binary_cfg.get("log_decimate_zero_phase", True))
-    decimate_ftype = str(binary_cfg.get("log_decimate_ftype", "iir"))
-    network.enable_step_logging(0)
-    trace: List[np.ndarray] = []
-    sample_times: List[int] = []
-    state_trace: List[np.ndarray] = [] if chunk_size == 0 else []
+    if int(binary_cfg.get("state_chunk_size", 0) or 0) > 0:
+        print("Ignoring binary.state_chunk_size: binary traces now use legacy-style diff logs only.")
     names: List[str] = []
     pops = network.E_pops + network.I_pops
     pop_count = len(pops)
-    logged_steps = 0
-    log_rate_chunks: List[np.ndarray] = []
-    steps_done = 0
-    block_size = interval
-    while steps_done < total_steps:
-        block = min(block_size, total_steps - steps_done)
-        if block <= 0:
-            break
-        if log_step_states:
-            network.enable_step_logging(block)
-        network.run(block, batch_size=batch_size)
-        steps_done += block
-        if log_step_states:
-            step_states = network.consume_step_log()
-            if step_states.size:
-                chunk_rates = _population_rates_from_step_states(step_states, pops)
-                log_rate_chunks.append(chunk_rates)
-                logged_steps += step_states.shape[0]
-        else:
-            names, values = _sample_populations(network)
-            trace.append(values)
-            sample_times.append(steps_done)
-        state_snapshot = network.state.astype(np.uint8).copy()
-        if chunk_size > 0:
-            chunk_buffer.append(state_snapshot)
-            if len(chunk_buffer) >= chunk_size:
-                chunk_index += 1
-                chunk_path = os.path.join(chunk_dir, f"{resolved_output_name}_states_chunk{chunk_index:04d}.npy")
-                np.save(chunk_path, np.stack(chunk_buffer, axis=0))
-                relative = os.path.relpath(chunk_path, binary_folder)
-                chunk_paths.append(relative)
-                chunk_buffer.clear()
-        else:
-            state_trace.append(state_snapshot)
-    if chunk_size > 0 and chunk_buffer:
-        chunk_index += 1
-        chunk_path = os.path.join(chunk_dir, f"{resolved_output_name}_states_chunk{chunk_index:04d}.npy")
-        np.save(chunk_path, np.stack(chunk_buffer, axis=0))
-        relative = os.path.relpath(chunk_path, binary_folder)
-        chunk_paths.append(relative)
-        chunk_buffer.clear()
-
-    if not names:
-        names = [pop.name for pop in pops]
-    if log_step_states:
-        if log_rate_chunks:
-            per_step_rates = np.concatenate(log_rate_chunks, axis=0)
-        else:
-            per_step_rates = np.zeros((0, pop_count), dtype=np.float32)
-        factor = decimate_factor if decimate_factor else 1
-        factor = max(1, int(factor))
-        if factor > 1 and per_step_rates.shape[0]:
-            try:
-                from scipy import signal
-            except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
-                raise ModuleNotFoundError(
-                    "log_step_states requires SciPy to decimate the recorded rates. "
-                    "Install it via 'pip install scipy'."
-                ) from exc
-            rates = signal.decimate(
-                per_step_rates,
-                factor,
-                axis=0,
-                zero_phase=decimate_zero_phase,
-                ftype=decimate_ftype,
-            )
-        else:
-            rates = per_step_rates
-    else:
-        rates = np.vstack(trace) if trace else np.zeros((0, pop_count))
-        times = np.array(sample_times, dtype=int) if sample_times else np.zeros(0, dtype=int)
+    names = [pop.name for pop in pops]
+    initial_state = network.state.astype(np.uint8, copy=True)
+    network.enable_diff_logging(total_steps)
+    if total_steps > 0:
+        network.run(total_steps, batch_size=batch_size)
+    state_updates, state_deltas = network.consume_diff_log()
+    if state_updates.shape[1] != total_steps or state_deltas.shape[1] != total_steps:
+        raise RuntimeError("Diff logging did not capture the expected number of simulation steps.")
+    rates = _population_rates_from_diff_logs(
+        initial_state,
+        state_updates,
+        state_deltas,
+        pops,
+        sample_interval=interval,
+    )
+    times = np.arange(rates.shape[0], dtype=np.int64) * interval
+    spike_times, spike_ids = _extract_spike_events(state_updates, state_deltas)
+    if interval > 1 and state_updates.shape[1] > 0:
+        state_updates = state_updates[:, ::interval]
+        state_deltas = state_deltas[:, ::interval]
     mean_values = rates.mean(axis=0) if rates.size else np.zeros(pop_count)
     mean_rates = {name: float(value) for name, value in zip(names, mean_values)}
-    if chunk_size > 0:
-        states = np.zeros((0, network.N), dtype=np.uint8)
-    else:
-        states = np.vstack(state_trace) if state_trace else np.zeros((0, network.N), dtype=np.uint8)
-    if log_step_states:
-        time_axis = np.arange(rates.shape[0]) * (int(decimate_factor) if decimate_factor else 1)
-    else:
-        time_axis = times
+    time_axis = times
     np.savez_compressed(
         os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         rates=rates,
         times=time_axis,
         names=np.array(names),
-        neuron_states=states,
+        state_updates=state_updates,
+        state_deltas=state_deltas,
+        initial_state=initial_state,
         warmup_steps=warmup_steps,
+        simulation_steps=total_steps,
         sample_interval=interval,
+        neuron_state_interval=interval,
         batch_size=batch_size,
         seed=seed,
+        spike_times=spike_times,
+        spike_ids=spike_ids,
     )
     plot_path = None
     onset_plot_path = None
     if binary_cfg.get("plot_activity"):
-        if chunk_size > 0 and states.size == 0:
-            print(
-                "Activity plotting is disabled when --state-chunk-size is used. "
-                "Re-run without chunking to create plots."
-            )
-        else:
-            plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity.png")
-            _save_activity_plot(states, interval, parameter, plot_path)
-            onset_plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity_onsets.png")
-            _save_activity_onset_plot(states, interval, parameter, onset_plot_path)
+        states = _reconstruct_states_from_diff_logs(
+            initial_state,
+            state_updates,
+            state_deltas,
+            sample_interval=1,
+        )
+        plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity.png")
+        _save_activity_plot(states, interval, parameter, plot_path)
+        onset_plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity_onsets.png")
+        _save_activity_onset_plot(states, interval, parameter, onset_plot_path)
     summary = {
         "warmup_steps": warmup_steps,
         "simulation_steps": total_steps,
@@ -486,23 +519,24 @@ def run_binary_simulation(
         "seed": seed,
         "mean_rates": mean_rates,
         "samples": rates.shape[0],
-        "neurons": states.shape[1] if states.size else network.N,
+        "neurons": network.N,
         "activity_plot": {
             "enabled": bool(binary_cfg.get("plot_activity")),
             "file": os.path.basename(plot_path) if plot_path else None,
             "onsets_file": os.path.basename(onset_plot_path) if onset_plot_path else None,
         },
         "state_chunks": {
-            "enabled": chunk_size > 0,
-            "chunk_size": chunk_size,
-            "files": chunk_paths,
+            "enabled": False,
+            "chunk_size": 0,
+            "files": [],
         },
         "step_logging": {
-            "enabled": log_step_states,
-            "logged_steps": logged_steps if log_step_states else 0,
-            "decimate_factor": int(decimate_factor) if (log_step_states and decimate_factor) else 1,
-            "decimate_ftype": decimate_ftype if log_step_states else None,
-            "decimate_zero_phase": decimate_zero_phase if log_step_states else None,
+            "enabled": True,
+            "format": "diff_log",
+            "logged_steps": int(total_steps),
+            "decimate_factor": int(interval),
+            "decimate_ftype": None,
+            "decimate_zero_phase": None,
         },
     }
     summary_path = os.path.join(binary_folder, f"{resolved_output_name}_summary.yaml")
@@ -522,10 +556,7 @@ def run_binary_simulation(
         "trace_path": os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         "summary_path": summary_path,
     }
-    del trace
-    del state_trace
     del rates
-    del states
     del mean_values
     del network
     gc.collect()
