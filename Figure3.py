@@ -1178,8 +1178,7 @@ def main() -> None:
             focus_union.update(int(value) for value in focus_counts)
             column_param["R_Eplus"] = float(column_param.get("R_Eplus", r_value) or r_value)
             binary_cfg = _resolve_binary_config(column_param, binary_overrides)
-            base_seed = int(binary_cfg.get("seed", 0) or 0)
-            seed = base_seed + idx
+            seed = int(binary_cfg.get("seed", 0) or 0)
             focus_markers, candidates, folder, bundle_path = _prepare_focus_markers_with_retry(
                 column_param,
                 focus_counts,
