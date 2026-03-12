@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import io
+import json
 import math
 import os
 import random
@@ -27,6 +28,16 @@ from sim_config import sim_tag_from_cfg, write_yaml_config
 
 DEFAULT_MAX_PAIRS = 200_000
 CORR_ANALYSIS_SUBDIR = "single_network_multi_init_corr_var"
+NETWORK_SUMMARY_FILE = "network_summary.json"
+MEASURES = ("output", "input")
+CATEGORIES = ("within", "across")
+FISHER_EPS = 1e-6
+MEASURE_KEY_MAP = {
+    ("output", "within"): "state_excit_within",
+    ("output", "across"): "state_excit_between",
+    ("input", "within"): "field_excit_within",
+    ("input", "across"): "field_excit_between",
+}
 
 
 @dataclass(frozen=True)
@@ -55,6 +66,7 @@ class CorrelationRunResult:
     summary: Dict[str, Any]
     analysis_dir: str
     trace_paths: Sequence[str]
+    network_summary: Dict[str, Dict[str, float]] | None = None
 
 
 @dataclass(frozen=True)
@@ -856,6 +868,84 @@ def _load_analysis_file(path: str) -> Dict[str, Any]:
     return payload
 
 
+def _network_summary_path(analysis_dir: str) -> str:
+    return os.path.join(analysis_dir, NETWORK_SUMMARY_FILE)
+
+
+def _normalize_network_summary(summary: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
+    normalized: Dict[str, Dict[str, float]] = {}
+    for measure in MEASURES:
+        normalized[measure] = {}
+        source = summary.get(measure, {})
+        for category in CATEGORIES:
+            value = source.get(category, float("nan"))
+            normalized[measure][category] = float(value)
+    return normalized
+
+
+def _fisher_mean(values: Any) -> float:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 0:
+        return float("nan")
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return float("nan")
+    clipped = np.clip(finite, -1.0 + FISHER_EPS, 1.0 - FISHER_EPS)
+    return float(np.mean(np.arctanh(clipped)))
+
+
+def _summarize_init_payload(payload: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    summary: Dict[str, Dict[str, float]] = {
+        measure: {category: float("nan") for category in CATEGORIES}
+        for measure in MEASURES
+    }
+    for (measure, category), key in MEASURE_KEY_MAP.items():
+        values = payload.get(key)
+        summary[measure][category] = _fisher_mean(values if values is not None else np.zeros(0, dtype=float))
+    return summary
+
+
+def _merge_init_summaries(entries: Sequence[Dict[str, Dict[str, float]]]) -> Dict[str, Dict[str, float]]:
+    merged: Dict[str, Dict[str, float]] = {
+        measure: {category: float("nan") for category in CATEGORIES}
+        for measure in MEASURES
+    }
+    if not entries:
+        return merged
+    for measure in MEASURES:
+        for category in CATEGORIES:
+            values = [entry[measure][category] for entry in entries if np.isfinite(entry[measure][category])]
+            merged[measure][category] = float(np.mean(values)) if values else float("nan")
+    return merged
+
+
+def _save_network_summary(analysis_dir: str, summary: Dict[str, Dict[str, float]]) -> str:
+    payload: Dict[str, Dict[str, float | None]] = {}
+    normalized = _normalize_network_summary(summary)
+    for measure, categories in normalized.items():
+        payload[measure] = {}
+        for category, value in categories.items():
+            payload[measure][category] = float(value) if np.isfinite(value) else None
+    path = _network_summary_path(analysis_dir)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+    return path
+
+
+def _load_network_summary(analysis_dir: str) -> Dict[str, Dict[str, float]]:
+    path = _network_summary_path(analysis_dir)
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    summary: Dict[str, Dict[str, float]] = {}
+    for measure in MEASURES:
+        summary[measure] = {}
+        categories = payload.get(measure, {})
+        for category in CATEGORIES:
+            raw_value = categories.get(category)
+            summary[measure][category] = float("nan") if raw_value is None else float(raw_value)
+    return summary
+
+
 def _collect_results(results: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     corr_keys = (
         "state_excit_within",
@@ -915,6 +1005,27 @@ def _collect_results(results: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     summary["trace_paths"] = np.asarray(trace_paths, dtype=object)
     summary["candidates"] = np.asarray(candidate_info, dtype=object)
     return summary
+
+
+def _network_summary_from_results(results: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    compact_entries: List[Dict[str, Dict[str, float]]] = []
+    for entry in results:
+        if not entry.get("success"):
+            continue
+        compact = entry.get("compact_summary")
+        if compact is None:
+            analysis = entry.get("analysis") or {}
+            compact = _summarize_init_payload(analysis)
+        compact_entries.append(_normalize_network_summary(compact))
+    return _merge_init_summaries(compact_entries)
+
+
+def _load_saved_summary(analysis_dir: str) -> Dict[str, Any]:
+    path = os.path.join(analysis_dir, "pooled_summary.npz")
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    with np.load(path, allow_pickle=True) as data:
+        return {key: data[key] for key in data.files}
 
 
 def _save_summary(analysis_dir: str, summary: Dict[str, Any]) -> str:
@@ -1078,12 +1189,14 @@ def _process_task(task: InitTask) -> Dict[str, Any]:
             if not os.path.exists(analysis_path):
                 raise FileNotFoundError(f"Analysis file {analysis_path} missing for init {task.index}.")
             analysis = _load_analysis_file(analysis_path)
+        compact_summary = _summarize_init_payload(analysis)
     except Exception as exc:
         success = False
         error = str(exc)
         logs.append(f"Error: {exc}")
         trace_path = task.trace_path
         analysis = {}
+        compact_summary = None
     return {
         "index": task.index,
         "group_key": task.group_key,
@@ -1091,6 +1204,7 @@ def _process_task(task: InitTask) -> Dict[str, Any]:
         "candidate": task.candidate,
         "trace_path": trace_path,
         "analysis": analysis,
+        "compact_summary": compact_summary,
         "success": success,
         "error": error,
         "logs": logs,
@@ -1232,10 +1346,13 @@ def run_multi_init_correlation(
         _log_task_results(results)
     summary = _collect_results(results)
     _save_summary(analysis_dir, summary)
+    network_summary = _network_summary_from_results(results)
+    _save_network_summary(analysis_dir, network_summary)
     return CorrelationRunResult(
         summary=summary,
         analysis_dir=analysis_dir,
         trace_paths=summary.get("trace_paths", []),
+        network_summary=network_summary,
     )
 
 
@@ -1248,27 +1365,45 @@ def run_multi_init_correlation_batch(
 ) -> Dict[str, CorrelationRunResult]:
     if not specs:
         return {}
-    prepared: List[tuple[MultiInitCorrelationSpec, str, List[InitTask]]] = []
+    prepared: List[tuple[MultiInitCorrelationSpec, str, List[InitTask], Dict[str, Dict[str, float]] | None]] = []
     all_tasks: List[InitTask] = []
     for spec in specs:
         analysis_dir, tasks = _prepare_multi_init_tasks(spec)
-        prepared.append((spec, analysis_dir, tasks))
-        all_tasks.extend(tasks)
+        cached_network_summary = None
+        if tasks and all((not task.needs_simulation) and (not task.needs_analysis) for task in tasks):
+            try:
+                cached_network_summary = _load_network_summary(analysis_dir)
+            except FileNotFoundError:
+                cached_network_summary = None
+        prepared.append((spec, analysis_dir, tasks, cached_network_summary))
+        if cached_network_summary is None:
+            all_tasks.extend(tasks)
     results = _execute_tasks_with_progress(all_tasks, max(1, int(jobs)), progress_callback=progress_callback)
     if verbose:
         _log_task_results(results)
-    grouped: Dict[str, List[Dict[str, Any]]] = {str(spec.key): [] for spec, _, _ in prepared}
+    grouped: Dict[str, List[Dict[str, Any]]] = {str(spec.key): [] for spec, _, _, _ in prepared}
     for entry in results:
         grouped.setdefault(str(entry.get("group_key", "")), []).append(entry)
     output: Dict[str, CorrelationRunResult] = {}
-    for spec, analysis_dir, _ in prepared:
+    for spec, analysis_dir, _, cached_network_summary in prepared:
         group_results = grouped.get(str(spec.key), [])
-        summary = _collect_results(group_results)
-        _save_summary(analysis_dir, summary)
+        if cached_network_summary is not None:
+            try:
+                summary = _load_saved_summary(analysis_dir)
+            except FileNotFoundError:
+                summary = _collect_results(group_results)
+                _save_summary(analysis_dir, summary)
+            network_summary = cached_network_summary
+        else:
+            summary = _collect_results(group_results)
+            _save_summary(analysis_dir, summary)
+            network_summary = _network_summary_from_results(group_results)
+            _save_network_summary(analysis_dir, network_summary)
         output[str(spec.key)] = CorrelationRunResult(
             summary=summary,
             analysis_dir=analysis_dir,
             trace_paths=summary.get("trace_paths", []),
+            network_summary=network_summary,
         )
     return output
 

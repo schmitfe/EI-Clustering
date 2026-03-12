@@ -412,7 +412,7 @@ def _run_network_initializations(
     overwrite_analysis: bool,
     progress_callback=None,
     verbose: bool = False,
-) -> List[str]:
+) -> List[Dict[str, Dict[str, float]]]:
     if len(network_seeds) != len(init_seed_bases):
         raise ValueError("Network seed and initialization seed lists must have the same length.")
     specs: List[helpers.MultiInitCorrelationSpec] = []
@@ -452,10 +452,13 @@ def _run_network_initializations(
         progress_callback=progress_callback,
         verbose=verbose,
     )
-    analysis_dirs: List[str] = []
+    network_summaries: List[Dict[str, Dict[str, float]]] = []
     for _, (_, _, output_name) in enumerate(zip(network_seeds, init_seed_bases, ordered_keys)):
-        analysis_dirs.append(results[output_name].analysis_dir)
-    return analysis_dirs
+        compact_summary = results[output_name].network_summary
+        if compact_summary is None:
+            raise RuntimeError(f"Missing compact network summary for '{output_name}'.")
+        network_summaries.append(compact_summary)
+    return network_summaries
 
 
 def _plot_series(
@@ -681,7 +684,7 @@ def main() -> None:
                     done=False,
                 )
 
-            analysis_dirs = _run_network_initializations(
+            network_summaries = _run_network_initializations(
                 deepcopy(param_kappa),
                 bundle_path=bundle_path,
                 focus_counts=focus_counts,
@@ -717,8 +720,7 @@ def main() -> None:
             network_payloads: Dict[str, Dict[str, List[float]]] = {
                 measure: {category: [] for category in CATEGORIES} for measure in MEASURES
             }
-            for analysis_dir in analysis_dirs:
-                network_summary = _summarize_network_dir(Path(analysis_dir), n_inits)
+            for network_summary in network_summaries:
                 for measure in MEASURES:
                     for category in CATEGORIES:
                         network_payloads[measure][category].append(network_summary[measure][category])
