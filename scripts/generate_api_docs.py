@@ -36,6 +36,12 @@ def main() -> None:
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT)
     subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "generate_spiketools_docs.py"), "--assets-only"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+    subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "generate_plotting_examples.py")],
         cwd=ROOT,
         env=env,
@@ -47,6 +53,7 @@ def main() -> None:
         "pdoc",
         "-d",
         "numpy",
+        "--math",
         "-o",
         str(OUTPUT_DIR),
         *MODULES,

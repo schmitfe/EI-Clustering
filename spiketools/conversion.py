@@ -10,10 +10,13 @@ Examples
 Shared example setup used throughout the documentation:
 
 ```python
+import numpy as np
+
 from spiketools import gamma_spikes, spiketimes_to_binary, spiketimes_to_list
 
-rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
-orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+np.random.seed(0)
+rates = np.array([6.0] * 10 + [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5], dtype=float)
+orders = np.array([0.2] * 10 + [1.0, 2.0, 2.0, 3.0, 1.0, 2.0, 3.0, 2.0, 1.0, 3.0], dtype=float)
 spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
 
 binary, time = spiketimes_to_binary(spiketimes, tlim=[0.0, 5000.0], dt=50.0)

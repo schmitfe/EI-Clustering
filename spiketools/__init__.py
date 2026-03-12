@@ -32,17 +32,19 @@ does.
 Shared Example Dataset
 ----------------------
 
-The examples below reuse one synthetic spike-train dataset: `10` trials, each
-`5` seconds long, generated from homogeneous gamma processes with rates near
-`6 spikes/s` and mild trial-to-trial differences in regularity.
+The examples below reuse one synthetic spike-train dataset: `20` trials, each
+`5` seconds long. Trials `0-9` share the same rate and a bursty gamma order
+`0.2` for controlled Fano-factor examples, while trials `10-19` use rates near
+`6 spikes/s` and more regular orders for the interval-variability examples.
 
 ```python
 import numpy as np
 
 from spiketools import gamma_spikes
 
-rates = np.array([5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5], dtype=float)
-orders = np.array([1, 2, 2, 3, 1, 2, 3, 2, 1, 3], dtype=int)
+np.random.seed(0)
+rates = np.array([6.0] * 10 + [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5], dtype=float)
+orders = np.array([0.2] * 10 + [1.0, 2.0, 2.0, 3.0, 1.0, 2.0, 3.0, 2.0, 1.0, 3.0], dtype=float)
 spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
 ```
 
@@ -65,25 +67,49 @@ trials = spiketimes_to_list(spiketimes)
 Estimate smoothed rates from the same spike trains:
 
 ```python
-from spiketools import gaussian_kernel, kernel_rate
+from spiketools import gaussian_kernel, kernel_rate, rate_integral, sliding_counts, triangular_kernel
 
-kernel = gaussian_kernel(25.0, dt=1.0)
+gauss = gaussian_kernel(25.0, dt=5.0, nstd=2.0)
+# Match the Gaussian cutoff at +/- 50 ms.
+tri = triangular_kernel(50.0 / np.sqrt(6.0), dt=5.0)
 rates, rate_time = kernel_rate(
     spiketimes,
-    kernel,
+    gauss,
     tlim=[0.0, 5000.0],
-    dt=1.0,
-    pool=False,
+    dt=5.0,
+    pool=True,
 )
+counts, count_time = sliding_counts(spiketimes, window=250.0, dt=5.0, tlim=[0.0, 5000.0])
+integrated = rate_integral(rates[0], dt=5.0)
 ```
+
+![Cookbook rate analysis](spiketools_assets/cookbook_rate_tools_matched_support.png)
 
 Compute trial-wise variability metrics:
 
 ```python
-from spiketools.variability import cv_two, ff
+from spiketools.variability import cv2, cv_two, ff
 
-fano = ff(spiketimes, tlim=[0.0, 5000.0])
-local_cv2 = cv_two(spiketimes)
+trial_id = 13
+trial = spiketimes[:, spiketimes[1] == trial_id].copy()
+trial[1] = 0
+ff_trials = spiketimes[:, spiketimes[1] < 10].copy()
+
+print(f"Trial {trial_id} uses gamma order {orders[trial_id]}; expect cv2 < 1.")
+print(round(float(cv2(trial)), 3))
+print(round(float(cv_two(trial, min_vals=2)), 3))
+print("Trials 0-9 use rate 6 spikes/s and gamma order 0.2; expect ff > 1.")
+print(round(float(ff(ff_trials, tlim=[0.0, 5000.0])), 3))
+```
+
+Example output:
+
+```text
+Trial 13 uses gamma order 3.0; expect cv2 < 1.
+0.292
+0.536
+Trials 0-9 use rate 6 spikes/s and gamma order 0.2; expect ff > 1.
+2.891
 ```
 
 Run a sliding-window analysis on the same dataset:
@@ -100,7 +126,19 @@ values, window_time = time_resolved(
     tlim=[0.0, 5000.0],
     tstep=250.0,
 )
+
+print(np.round(values[:5], 3))
+print(np.round(window_time[:5], 1))
 ```
+
+Example output:
+
+```text
+[1.276 1.404 1.427 1.102 0.955]
+[ 375.  625.  875. 1125. 1375.]
+```
+
+![Time-resolved cv2 example](spiketools_assets/time_resolved_cv2_example.png)
 
 Regenerating docs:
 

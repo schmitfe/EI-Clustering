@@ -8,16 +8,54 @@ Examples
 Shared example setup used throughout the documentation:
 
 ```python
+import numpy as np
+
 from spiketools import gamma_spikes
 from spiketools.variability import cv2, cv_two, ff
 
-rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
-orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+np.random.seed(0)
+rates = np.array([6.0] * 10 + [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5], dtype=float)
+orders = np.array([0.2] * 10 + [1.0, 2.0, 2.0, 3.0, 1.0, 2.0, 3.0, 2.0, 1.0, 3.0], dtype=float)
 spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
+```
 
-fano = ff(spiketimes, tlim=[0.0, 5000.0])
-global_cv2 = cv2(spiketimes)
-local_cv2 = cv_two(spiketimes)
+Use one trial from the shared dataset for interval variability. Here `trial_id = 13`
+has gamma `order = 3`, so it should be more regular than a Poisson-like trial and
+we therefore expect `cv2 < 1`.
+
+```python
+trial_id = 13
+trial = spiketimes[:, spiketimes[1] == trial_id].copy()
+trial[1] = 0
+
+print(f"Trial {trial_id} uses gamma order {orders[trial_id]}; expect cv2 < 1.")
+print(round(float(cv2(trial)), 3))
+print(round(float(cv_two(trial, min_vals=2)), 3))
+```
+
+Example output:
+
+```text
+Trial 13 uses gamma order 3.0; expect cv2 < 1.
+0.292
+0.536
+```
+
+For the Fano factor, use only trials `0-9`. These have the same rate but a
+bursty gamma `order = 0.2`, so we expect `ff(...) > 1`:
+
+```python
+ff_trials = spiketimes[:, spiketimes[1] < 10].copy()
+
+print("Trials 0-9 use rate 6 spikes/s and gamma order 0.2; expect ff > 1.")
+print(round(float(ff(ff_trials, tlim=[0.0, 5000.0])), 3))
+```
+
+Example output:
+
+```text
+Trials 0-9 use rate 6 spikes/s and gamma order 0.2; expect ff > 1.
+2.891
 ```
 """
 
@@ -58,7 +96,7 @@ __all__ = [
 
 
 def ff(spiketimes, mintrials=None, tlim=None):
-    """Compute the Fano factor across trials or units.
+    r"""Compute the Fano factor across trials or units.
 
     Parameters
     ----------
@@ -68,6 +106,14 @@ def ff(spiketimes, mintrials=None, tlim=None):
         Optional minimum number of rows required for a valid estimate.
     tlim:
         Optional `[tmin, tmax]` counting window in ms.
+
+    Definition
+    ----------
+    If `N` is the spike count in the analysis window, the Fano factor is
+
+    $$
+    \mathrm{FF} = \frac{\mathrm{Var}[N]}{\mathrm{E}[N]}
+    $$
 
     Examples
     --------
@@ -138,7 +184,7 @@ def cv2(
     bessel_correction=False,
     minvals=0,
 ):
-    """Compute the coefficient-of-variation statistic from inter-spike intervals.
+    r"""Compute the coefficient-of-variation statistic from inter-spike intervals.
 
     Parameters
     ----------
@@ -153,6 +199,15 @@ def cv2(
         Use `ddof=1` in the interval variance.
     minvals:
         Minimum number of finite intervals required for a per-row value.
+
+    Definition
+    ----------
+    Despite the historical function name, this returns the squared coefficient
+    of variation of the inter-spike intervals $I_n$:
+
+    $$
+    \mathrm{CV}^2 = \frac{\mathrm{Var}[I_n]}{\mathrm{E}[I_n]^2}
+    $$
 
     Examples
     --------
@@ -208,7 +263,21 @@ def _consecutive_intervals(spiketimes):
 
 
 def cv_two(spiketimes, min_vals=20):
-    """Compute the local Cv2 measure from consecutive inter-spike intervals.
+    r"""Compute the local Cv2 measure from consecutive inter-spike intervals.
+
+    Definition
+    ----------
+    For consecutive inter-spike intervals $I_n$ and $I_{n+1}$, the local Cv2
+    statistic is
+
+    $$
+    \mathrm{Cv2} =
+    \left\langle
+    \frac{2\,|I_{n+1} - I_n|}{I_{n+1} + I_n}
+    \right\rangle_n
+    $$
+
+    where the average is taken across all finite neighboring interval pairs.
 
     Examples
     --------
@@ -227,7 +296,22 @@ def cv_two(spiketimes, min_vals=20):
 
 
 def lv(spiketimes, min_vals=20):
-    """Compute the Shinomoto local variation metric.
+    r"""Compute the Shinomoto local variation metric.
+
+    Definition
+    ----------
+    Using the same consecutive inter-spike interval notation as `cv_two(...)`,
+    the local variation is
+
+    $$
+    \mathrm{LV} =
+    \left\langle
+    \frac{3\,(I_{n+1} - I_n)^2}{(I_{n+1} + I_n)^2}
+    \right\rangle_n
+    $$
+
+    Unlike $\mathrm{CV}^2$, this statistic is local in time and is therefore
+    less sensitive to slow rate drifts.
 
     Examples
     --------
@@ -256,7 +340,7 @@ def time_resolved_cv2(
     minvals=0,
     return_all=False,
 ):
-    """Estimate Cv2 in sliding windows over time.
+    r"""Estimate Cv2 in sliding windows over time.
 
     Parameters
     ----------
@@ -278,6 +362,19 @@ def time_resolved_cv2(
         Minimum number of intervals per row.
     return_all:
         Return per-row values for each window instead of a single mean.
+
+    Definition
+    ----------
+    For a window of width $W$ starting at $t$, this function computes
+
+    $$
+    \mathrm{CV}^2(t) =
+    \mathrm{CV}^2\left(\{I_n : \text{both spikes of } I_n \in [t, t + W)\}\right)
+    $$
+
+    and reports it at the window center. If `window=None`, the code first
+    estimates a characteristic window from the mean inter-spike interval and
+    the factor `ot`.
 
     Examples
     --------
@@ -504,7 +601,24 @@ def time_warped_cv2(
 
 
 def time_resolved_cv_two(spiketimes, window=400, tlim=None, min_vals=10, tstep=1):
-    """Compute rolling Cv2 using the optional C extension.
+    r"""Compute rolling Cv2 using the optional C extension.
+
+    Definition
+    ----------
+    This is the compiled analogue of applying `cv_two(...)` in successive
+    windows. For each window $[t, t + W)$ it collects all finite neighboring
+    interval pairs $(I_n, I_{n+1})$ whose spikes lie inside the window and
+    evaluates
+
+    $$
+    \mathrm{Cv2}(t) =
+    \left\langle
+    \frac{2\,|I_{n+1} - I_n|}{I_{n+1} + I_n}
+    \right\rangle_n
+    $$
+
+    if at least `min_vals` pairs are available. The window is then shifted by
+    `tstep`.
 
     Notes
     -----

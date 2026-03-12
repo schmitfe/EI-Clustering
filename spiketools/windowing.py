@@ -5,11 +5,14 @@ Examples
 Shared example setup used throughout the documentation:
 
 ```python
+import numpy as np
+
 from spiketools import gamma_spikes, time_resolved
 from spiketools.variability import cv2
 
-rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
-orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+np.random.seed(0)
+rates = np.array([6.0] * 10 + [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5], dtype=float)
+orders = np.array([0.2] * 10 + [1.0, 2.0, 2.0, 3.0, 1.0, 2.0, 3.0, 2.0, 1.0, 3.0], dtype=float)
 spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
 
 values, window_time = time_resolved(
@@ -53,7 +56,7 @@ def time_resolved(
     tlim: Optional[Sequence[float]] = None,
     tstep=1.0,
 ):
-    """
+    r"""
     Apply a function to successive windows of a spike train.
 
     Parameters
@@ -75,6 +78,19 @@ def time_resolved(
     -------
     tuple[list, np.ndarray]
         Function outputs and window-center times.
+
+    Definition
+    ----------
+    If $S$ denotes the spike train and $f$ the analysis function, then
+
+    $$
+    y_n = f\left(S \cap [t_n, t_n + W)\right),
+    \qquad
+    t_n^\mathrm{center} = t_n + \frac{W}{2},
+    $$
+
+    where $W$ is the window width and consecutive windows are offset by
+    `tstep`.
 
     Examples
     --------
@@ -117,11 +133,27 @@ def time_resolved_new(
     tlim: Optional[Sequence[float]] = None,
     tstep=1.0,
 ):
-    """
+    r"""
     Windowed evaluation using an intermediate binary representation.
 
     This variant can be faster for repeated window extraction because the spike
     train is binned once before the loop.
+
+    Definition
+    ----------
+    This function evaluates the same windowed statistic as `time_resolved(...)`,
+    but it first bins the spike train into a count matrix $B$ and reconstructs
+    each window from the relevant slice:
+
+    Let $k_{n} = \lfloor t_{n} \rfloor$ be the left window index on the binned
+    grid and let $K = \lfloor W \rfloor$ be the corresponding window width in
+    bins. Let $B_{n}$ denote the corresponding slice of the count matrix and let
+    $\mathcal{C}$ denote the conversion from a binary window back to spike
+    times. The statistic is then
+
+    $$
+    y_n = f\left(\mathcal{C}(B_{n})\right).
+    $$
 
     Examples
     --------
@@ -167,7 +199,7 @@ def rate_warped_analysis(
     rate_kernel=None,
     dt=1.0,
 ):
-    """
+    r"""
     Apply a function after warping time according to instantaneous rate.
 
     Parameters
@@ -192,6 +224,21 @@ def rate_warped_analysis(
         Kernel used when `rate` is not provided.
     dt:
         Sampling interval in ms used for the rate estimate.
+
+    Definition
+    ----------
+    The idea is to replace real time $t$ by warped time $\tau(t)$,
+
+    $$
+    \tau(t) = \int_{t_0}^{t} \frac{r(u)}{1000}\,du,
+    $$
+
+    where $r(u)$ is an estimated firing rate in spikes/s. Equal distances on
+    the warped axis therefore correspond to equal expected spike counts. High-
+    rate epochs are stretched, low-rate epochs are compressed, and the chosen
+    statistic is then evaluated on this transformed spike train. If windowed
+    output is requested, the resulting window centers are mapped back to real
+    time before returning.
 
     Examples
     --------

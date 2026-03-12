@@ -81,6 +81,46 @@ Expected output
 
 `cfg["binary"]["seed"] == 7` and `cfg["plot"]["raster"]["stride"] == 2`.
 
+Using `sim_tag_from_cfg(...)` to run a parameter sweep and save one folder per
+configuration:
+
+```python
+from pathlib import Path
+
+from sim_config import load_config, sim_tag_from_cfg, write_yaml_config
+
+
+def mock_run(cfg):
+    return {
+        "rate_hz": cfg["R_Eplus"] * 1.5,
+        "seed": cfg["binary"]["seed"],
+    }
+
+
+output_root = Path("mock_results")
+
+for q in [2, 4, 6]:
+    cfg = load_config(
+        "default_simulation",
+        overrides=[
+            f"Q={q}",
+            f"binary.seed={100 + q}",
+        ],
+    )
+    tag = sim_tag_from_cfg(cfg)
+    run_dir = output_root / f"Q{q}" / tag
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    result = mock_run(cfg)
+    write_yaml_config(cfg, run_dir / "config.yaml")
+    (run_dir / "result.txt").write_text(f"{result}\n", encoding="utf-8")
+```
+
+This creates a deterministic folder structure such as
+`mock_results/Q4/3f7a1c2b9e/`, writes the exact configuration snapshot next to
+the result, and keeps reruns with identical settings in the same tagged
+location.
+
 Regenerating docs:
 
 ```bash
