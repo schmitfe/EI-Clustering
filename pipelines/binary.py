@@ -100,7 +100,9 @@ def _mean_connectivity(parameter: Dict[str, Any]) -> float:
 
 def finalize_binary_config(parameter: Dict[str, Any], cfg: Dict[str, Any] | None) -> Dict[str, Any]:
     normalized = ensure_binary_behavior_defaults(cfg)
-    requested_mode = str(normalized.get("weight_mode", "auto") or "auto").lower()
+    requested_mode = str(
+        normalized.get("requested_weight_mode", normalized.get("weight_mode", "auto")) or "auto"
+    ).lower()
     normalized["requested_weight_mode"] = requested_mode
     if requested_mode != "auto":
         normalized["weight_mode"] = requested_mode

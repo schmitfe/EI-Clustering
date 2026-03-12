@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import MaxNLocator
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
-from pipelines.binary import ensure_binary_behavior_defaults, run_binary_simulation
+from pipelines.binary import ensure_binary_behavior_defaults, finalize_binary_config, run_binary_simulation
 from sim_config import deep_update, load_config, parse_overrides, sim_tag_from_cfg, write_yaml_config
 import yaml
 
@@ -268,7 +268,7 @@ def resolve_binary_config(parameter: Dict[str, object]) -> Dict[str, object]:
         cfg["output_name"] = "activity_trace"
     if cfg.get("seed") is not None:
         cfg["seed"] = int(cfg["seed"])
-    return ensure_binary_behavior_defaults(cfg)
+    return finalize_binary_config(parameter, ensure_binary_behavior_defaults(cfg))
 
 
 def _filtered_erf_parameter(parameter: Dict[str, object]) -> Dict[str, object]:

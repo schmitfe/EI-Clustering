@@ -22,7 +22,7 @@ import numpy as np  # noqa: E402
 
 import pipelines.mean_field as ei_pipeline  # noqa: E402
 from MeanField.rate_system import ensure_output_folder  # noqa: E402
-from pipelines.binary import ensure_binary_behavior_defaults, run_binary_simulation  # noqa: E402
+from pipelines.binary import ensure_binary_behavior_defaults, finalize_binary_config, run_binary_simulation  # noqa: E402
 from plotting import (
     BinaryStateSource,
     FontCfg,
@@ -390,10 +390,10 @@ def _resolve_binary_config(parameter: Dict[str, Any], overrides: BinaryRunSettin
     if overrides.batch_size is not None:
         cfg["batch_size"] = int(overrides.batch_size)
     else:
-        cfg["batch_size"] = int(cfg.get("batch_size", 1))
+        cfg["batch_size"] = int(cfg.get("batch_size", 200))
     cfg["seed"] = overrides.seed if overrides.seed is not None else cfg.get("seed")
     cfg["output_name"] = overrides.output_name or cfg.get("output_name", "activity_trace")
-    return ensure_binary_behavior_defaults(cfg)
+    return finalize_binary_config(parameter, ensure_binary_behavior_defaults(cfg))
 
 
 def _filtered_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
