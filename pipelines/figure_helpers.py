@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
+import io
 import math
 import os
 import random
 import pickle
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 
@@ -72,6 +74,7 @@ class MultiInitCorrelationSpec:
     analysis_only: bool = False
     overwrite_simulation: bool = False
     overwrite_analysis: bool = False
+    verbose: bool = True
 
 
 @dataclass(frozen=True)
@@ -970,10 +973,11 @@ def _prepare_multi_init_tasks(spec: MultiInitCorrelationSpec) -> tuple[str, List
         if isinstance(exc, ValueError) and _has_any_fixpoint_candidates(spec.parameter, spec.bundle_path, spec.focus_counts):
             raise
         fallback_to_uniform = True
-        print(
-            "No mean-field fixpoints available for "
-            f"R_Eplus={float(target_rep):.4f}; falling back to uniform random init p=0.1."
-        )
+        if spec.verbose:
+            print(
+                "No mean-field fixpoints available for "
+                f"R_Eplus={float(target_rep):.4f}; falling back to uniform random init p=0.1."
+            )
         base_candidate = _uniform_init_candidate(spec.parameter, value=0.1)
         picks = []
         for idx in range(max(0, int(spec.n_inits))):
@@ -1045,13 +1049,14 @@ def _process_task(task: InitTask) -> Dict[str, Any]:
                     f"Simulating init {task.index}: fixpoint {task.candidate.get('id')} "
                     f"(focus {task.candidate.get('focus_count')}, stability {task.candidate.get('stability')})."
                 )
-            result = run_binary_simulation(
-                task.parameter,
-                task.binary_cfg,
-                output_name=label,
-                population_rate_inits=task.candidate["rates"],
-                population_init_seed=task.population_init_seed,
-            )
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                result = run_binary_simulation(
+                    task.parameter,
+                    task.binary_cfg,
+                    output_name=label,
+                    population_rate_inits=task.candidate["rates"],
+                    population_init_seed=task.population_init_seed,
+                )
             trace_path = str(result["trace_path"])
         else:
             trace_path = task.trace_path
@@ -1102,6 +1107,37 @@ def _execute_tasks(tasks: Sequence[InitTask], jobs: int) -> List[Dict[str, Any]]
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
         future_map = {pool.submit(_process_task, task): task for task in tasks}
         return [future.result() for future in concurrent.futures.as_completed(future_map)]
+
+
+def _execute_tasks_with_progress(
+    tasks: Sequence[InitTask],
+    jobs: int,
+    progress_callback: Callable[[Dict[str, Any], int, int], None] | None = None,
+) -> List[Dict[str, Any]]:
+    if not tasks:
+        return []
+    warm_numba_caches()
+    total = len(tasks)
+    completed = 0
+    results: List[Dict[str, Any]] = []
+    if jobs <= 1:
+        for task in tasks:
+            entry = _process_task(task)
+            results.append(entry)
+            completed += 1
+            if progress_callback is not None:
+                progress_callback(entry, completed, total)
+        return results
+    max_workers = min(int(jobs), len(tasks))
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
+        future_map = {pool.submit(_process_task, task): task for task in tasks}
+        for future in concurrent.futures.as_completed(future_map):
+            entry = future.result()
+            results.append(entry)
+            completed += 1
+            if progress_callback is not None:
+                progress_callback(entry, completed, total)
+    return results
 
 
 def _log_task_results(results: Sequence[Dict[str, Any]]) -> None:
@@ -1169,6 +1205,7 @@ def run_multi_init_correlation(
     analysis_only: bool = False,
     overwrite_simulation: bool = False,
     overwrite_analysis: bool = False,
+    verbose: bool = True,
 ) -> CorrelationRunResult:
     analysis_dir, tasks = _prepare_multi_init_tasks(
         MultiInitCorrelationSpec(
@@ -1187,10 +1224,12 @@ def run_multi_init_correlation(
             analysis_only=analysis_only,
             overwrite_simulation=overwrite_simulation,
             overwrite_analysis=overwrite_analysis,
+            verbose=verbose,
         )
     )
     results = _execute_tasks(tasks, max(1, int(jobs)))
-    _log_task_results(results)
+    if verbose:
+        _log_task_results(results)
     summary = _collect_results(results)
     _save_summary(analysis_dir, summary)
     return CorrelationRunResult(
@@ -1204,6 +1243,8 @@ def run_multi_init_correlation_batch(
     specs: Sequence[MultiInitCorrelationSpec],
     *,
     jobs: int,
+    progress_callback: Callable[[Dict[str, Any], int, int], None] | None = None,
+    verbose: bool = True,
 ) -> Dict[str, CorrelationRunResult]:
     if not specs:
         return {}
@@ -1213,8 +1254,9 @@ def run_multi_init_correlation_batch(
         analysis_dir, tasks = _prepare_multi_init_tasks(spec)
         prepared.append((spec, analysis_dir, tasks))
         all_tasks.extend(tasks)
-    results = _execute_tasks(all_tasks, max(1, int(jobs)))
-    _log_task_results(results)
+    results = _execute_tasks_with_progress(all_tasks, max(1, int(jobs)), progress_callback=progress_callback)
+    if verbose:
+        _log_task_results(results)
     grouped: Dict[str, List[Dict[str, Any]]] = {str(spec.key): [] for spec, _, _ in prepared}
     for entry in results:
         grouped.setdefault(str(entry.get("group_key", "")), []).append(entry)

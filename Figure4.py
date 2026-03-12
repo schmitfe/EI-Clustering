@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
@@ -252,6 +253,46 @@ def _resolve_base_output_name(parameter: Dict[str, Any], overrides: helpers.Bina
     return "activity_trace"
 
 
+def _format_progress_bar(completed: int, total: int, *, width: int = 20) -> str:
+    total = max(1, int(total))
+    completed = max(0, min(int(completed), total))
+    filled = int(round(width * completed / total))
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+def _render_progress_line(
+    *,
+    conn_index: int,
+    conn_total: int,
+    conn_label: str,
+    kappa_index: int,
+    kappa_total: int,
+    kappa_value: float,
+    network_completed: int,
+    network_total: int,
+    kappa_completed: bool,
+) -> str:
+    combo_done = (conn_index - 1) * max(1, kappa_total) + kappa_index - 1 + int(bool(kappa_completed))
+    combo_total = max(1, conn_total * max(1, kappa_total))
+    combo_bar = _format_progress_bar(combo_done, combo_total, width=16)
+    network_bar = _format_progress_bar(network_completed, network_total, width=16)
+    return (
+        f"{combo_bar} sweep {combo_done}/{combo_total} | "
+        f"{conn_label} ({conn_index}/{conn_total}) | "
+        f"kappa={kappa_value:.3f} ({kappa_index}/{kappa_total}) | "
+        f"{network_bar} networks {network_completed}/{network_total}"
+    )
+
+
+def _emit_progress(message: str, *, done: bool = False) -> None:
+    if sys.stdout.isatty():
+        suffix = "\n" if done else "\r"
+        padding = " " * 8 if done else ""
+        print(f"{message}{padding}", end=suffix, flush=True)
+        return
+    print(message, flush=True)
+
+
 def _network_output_name(base_name: str, network_index: int) -> str:
     return f"{base_name}_net{network_index:03d}"
 
@@ -369,6 +410,8 @@ def _run_network_initializations(
     analysis_only: bool,
     overwrite_simulation: bool,
     overwrite_analysis: bool,
+    progress_callback=None,
+    verbose: bool = False,
 ) -> List[str]:
     if len(network_seeds) != len(init_seed_bases):
         raise ValueError("Network seed and initialization seed lists must have the same length.")
@@ -400,15 +443,17 @@ def _run_network_initializations(
                 analysis_only=analysis_only,
                 overwrite_simulation=overwrite_simulation,
                 overwrite_analysis=overwrite_analysis,
+                verbose=verbose,
             )
         )
-    results = helpers.run_multi_init_correlation_batch(specs, jobs=max(1, int(jobs)))
+    results = helpers.run_multi_init_correlation_batch(
+        specs,
+        jobs=max(1, int(jobs)),
+        progress_callback=progress_callback,
+        verbose=verbose,
+    )
     analysis_dirs: List[str] = []
-    for net_idx, (network_seed, init_seed, output_name) in enumerate(zip(network_seeds, init_seed_bases, ordered_keys)):
-        print(
-            f"     network {net_idx + 1:03d}/{len(network_seeds)} "
-            f"(seed={int(network_seed)}, init-seed={int(init_seed)}, output={output_name})"
-        )
+    for _, (_, _, output_name) in enumerate(zip(network_seeds, init_seed_bases, ordered_keys)):
         analysis_dirs.append(results[output_name].analysis_dir)
     return analysis_dirs
 
@@ -597,12 +642,14 @@ def main() -> None:
     stride_analysis = max(1, int(args.stride_analysis or 1))
     bootstrap_samples = max(0, int(args.bootstrap_samples))
     results: Dict[str, Dict[str, Any]] = {}
-    for instance in instances:
+    total_instances = len(instances)
+    total_kappas = len(kappa_values)
+    for instance_idx, instance in enumerate(instances, start=1):
         label = instance.label
         print(f"=== Correlation workflow for {label} (mean connectivity {instance.value:.4f}) ===")
         instance_store = {"kappa": [], "metrics": _init_metric_map(), "connectivity": instance.value}
         base_output_name = _resolve_base_output_name(instance.parameter, binary_overrides)
-        for kappa in kappa_values:
+        for kappa_idx, kappa in enumerate(kappa_values, start=1):
             param_kappa = deepcopy(instance.parameter)
             param_kappa["kappa"] = float(kappa)
             r_value = param_kappa.get("R_Eplus")
@@ -615,6 +662,25 @@ def main() -> None:
                 [float(r_value)],
                 sweep_cfg,
             )
+            progress_state = {"completed": 0}
+
+            def _progress_callback(_entry: Dict[str, Any], completed: int, total: int) -> None:
+                progress_state["completed"] = completed
+                _emit_progress(
+                    _render_progress_line(
+                        conn_index=instance_idx,
+                        conn_total=total_instances,
+                        conn_label=label,
+                        kappa_index=kappa_idx,
+                        kappa_total=total_kappas,
+                        kappa_value=float(kappa),
+                        network_completed=completed,
+                        network_total=total,
+                        kappa_completed=False,
+                    ),
+                    done=False,
+                )
+
             analysis_dirs = _run_network_initializations(
                 deepcopy(param_kappa),
                 bundle_path=bundle_path,
@@ -631,6 +697,22 @@ def main() -> None:
                 analysis_only=args.analysis_only,
                 overwrite_simulation=args.overwrite_simulation,
                 overwrite_analysis=args.overwrite_analysis,
+                progress_callback=_progress_callback,
+                verbose=False,
+            )
+            _emit_progress(
+                _render_progress_line(
+                    conn_index=instance_idx,
+                    conn_total=total_instances,
+                    conn_label=label,
+                    kappa_index=kappa_idx,
+                    kappa_total=total_kappas,
+                    kappa_value=float(kappa),
+                    network_completed=progress_state["completed"] or len(network_seeds),
+                    network_total=len(network_seeds),
+                    kappa_completed=True,
+                ),
+                done=True,
             )
             network_payloads: Dict[str, Dict[str, List[float]]] = {
                 measure: {category: [] for category in CATEGORIES} for measure in MEASURES
