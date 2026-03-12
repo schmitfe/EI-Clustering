@@ -21,28 +21,25 @@ Using `RasterGroup` and `RasterLabels` explicitly:
 
 ```python
 import matplotlib.pyplot as plt
-import numpy as np
 
 from plotting import FontCfg, RasterGroup, RasterLabels, plot_spike_raster, style_axes
 
-spike_times = np.array([5, 8, 15, 21, 34, 36, 44, 52, 59, 63], dtype=float)
-spike_ids = np.array([0, 4, 1, 6, 2, 7, 3, 5, 8, 9], dtype=int)
 groups = [
-    RasterGroup("exc_a", ids=range(0, 5), color="#1f77b4", label="Exc A"),
-    RasterGroup("exc_b", ids=range(5, 8), color="#2ca02c", label="Exc B"),
-    RasterGroup("inh", ids=range(8, 10), color="#8B0000", label="Inh"),
+    RasterGroup("exc_a", ids=range(0, 3), color="#1f77b4", label="Exc A"),
+    RasterGroup("exc_b", ids=range(3, 5), color="#2ca02c", label="Exc B"),
+    RasterGroup("inh", ids=range(5, 7), color="#8B0000", label="Inh"),
 ]
 
-fig, ax = plt.subplots(figsize=(5, 2.5))
+fig, ax = plt.subplots(figsize=(4.4, 2.4))
 plot_spike_raster(
     ax,
-    spike_times,
-    spike_ids,
+    spike_times_ms=[5, 8, 11, 13, 21, 23, 29],
+    spike_ids=[0, 1, 2, 3, 4, 5, 6],
     groups=groups,
-    labels=RasterLabels(location="right", kwargs={"fontsize": 9}),
+    labels=RasterLabels(location="right", kwargs={"fontsize": 8}),
 )
 ax.set_xlabel("Time [ms]")
-ax.set_ylabel("Neuron")
+ax.set_ylabel("Neuron index")
 style_axes(ax, FontCfg().resolve())
 fig.tight_layout()
 ```

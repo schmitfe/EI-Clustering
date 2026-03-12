@@ -18,6 +18,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+def _save_example_figure(fig: plt.Figure, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
+
+
 def _synthetic_spike_trains() -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(12)
     spike_times: list[np.ndarray] = []
@@ -37,6 +43,19 @@ def _synthetic_spike_trains() -> tuple[np.ndarray, np.ndarray]:
     ids = np.concatenate(spike_ids) if spike_ids else np.zeros(0, dtype=int)
     order = np.argsort(times, kind="mergesort")
     return times[order], ids[order]
+
+
+def _documented_grouped_spike_example():
+    from plotting import RasterGroup
+
+    spike_times = np.array([5, 8, 11, 13, 21, 23, 29], dtype=float)
+    spike_ids = np.array([0, 1, 2, 3, 4, 5, 6], dtype=int)
+    groups = [
+        RasterGroup("exc_a", ids=range(0, 3), color="#1f77b4", label="Exc A"),
+        RasterGroup("exc_b", ids=range(3, 5), color="#2ca02c", label="Exc B"),
+        RasterGroup("inh", ids=range(5, 7), color="#8B0000", label="Inh"),
+    ]
+    return spike_times, spike_ids, groups
 
 
 def generate_spike_raster_example(output_path: Path) -> None:
@@ -61,23 +80,19 @@ def generate_spike_raster_example(output_path: Path) -> None:
     ax.set_ylabel("Neuron index")
     ax.set_title("Spike raster example")
     style_axes(ax, FontCfg(base=10.0, scale=1.1).resolve())
-    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.18, top=0.88, wspace=0.2)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    fig.subplots_adjust(left=0.12, right=0.84, bottom=0.18, top=0.88)
+    _save_example_figure(fig, output_path)
 
 
 def generate_grouped_spike_raster_example(output_path: Path) -> None:
     from plotting import FontCfg, RasterGroup, RasterLabels, plot_spike_raster, style_axes
 
-    times, ids = _synthetic_spike_trains()
+    times, ids, groups = _documented_grouped_spike_example()
     groups = [
-        RasterGroup("exc_a", ids=range(0, 6), color="#1f77b4", size=3.0, label="Exc A"),
-        RasterGroup("exc_b", ids=range(6, 12), color="#2ca02c", size=3.0, label="Exc B"),
-        RasterGroup("inh", ids=range(12, 16), color="#8B0000", marker="s", size=4.0, label="Inh"),
+        RasterGroup(group.name, ids=group.ids, color=group.color, marker=group.marker, size=6.0, label=group.label)
+        for group in groups
     ]
-
-    fig, ax = plt.subplots(figsize=(7.6, 3.2))
+    fig, ax = plt.subplots(figsize=(4.4, 2.4))
     plot_spike_raster(
         ax,
         times,
@@ -86,17 +101,15 @@ def generate_grouped_spike_raster_example(output_path: Path) -> None:
         labels=RasterLabels(
             mapping={"exc_a": "Exc A", "exc_b": "Exc B", "inh": "Inh"},
             location="right",
-            kwargs={"fontsize": 9},
+            kwargs={"fontsize": 8},
         ),
     )
     ax.set_xlabel("Time [ms]")
     ax.set_ylabel("Neuron index")
-    ax.set_title("Grouped spike raster with RasterGroup / RasterLabels")
+    ax.set_title("Grouped spike raster example")
     style_axes(ax, FontCfg(base=10.0, scale=1.1).resolve())
-    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.18, top=0.86, wspace=0.35)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    fig.subplots_adjust(left=0.14, right=0.78, bottom=0.22, top=0.82)
+    _save_example_figure(fig, output_path)
 
 
 def generate_binary_raster_example(output_path: Path) -> None:
@@ -127,10 +140,8 @@ def generate_binary_raster_example(output_path: Path) -> None:
     ax.set_ylabel("Neuron index")
     ax.set_title("Binary onset raster example")
     style_axes(ax, FontCfg(base=10.0, scale=1.1).resolve())
-    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.18, top=0.88, wspace=0.2)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    fig.subplots_adjust(left=0.12, right=0.82, bottom=0.18, top=0.88)
+    _save_example_figure(fig, output_path)
 
 
 def generate_add_image_ax_example(output_path: Path, image_example_path: Path) -> None:
@@ -139,10 +150,8 @@ def generate_add_image_ax_example(output_path: Path, image_example_path: Path) -
     fig, ax = plt.subplots(figsize=(5.4, 2.6))
     add_image_ax(ax, str(image_example_path), label="A", fc=FontCfg(base=10.0, scale=1.1).resolve())
     ax.set_title("Image embedding example")
-    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.18, top=0.86, wspace=0.35)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.18, top=0.86)
+    _save_example_figure(fig, output_path)
 
 
 def generate_corner_tag_example(output_path: Path) -> None:
@@ -159,9 +168,7 @@ def generate_corner_tag_example(output_path: Path) -> None:
     style_axes(ax, fc)
     add_corner_tag(ax, "Demo", "#333333", fc)
     fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    _save_example_figure(fig, output_path)
 
 
 def generate_panel_label_example(output_path: Path) -> None:
@@ -178,9 +185,7 @@ def generate_panel_label_example(output_path: Path) -> None:
     style_axes(ax, fc)
     add_panel_label(ax, "A", fc)
     fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    _save_example_figure(fig, output_path)
 
 
 def generate_panel_label_column_example(output_path: Path) -> None:
@@ -198,10 +203,8 @@ def generate_panel_label_column_example(output_path: Path) -> None:
     for ax in axs:
         style_axes(ax, fc)
     add_panel_labels_column_left_of_ylabel(list(axs), ["A", "B"], fc, y_axes=1.01)
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    fig.subplots_adjust(left=0.26, right=0.97, bottom=0.14, top=0.92, hspace=0.14)
+    _save_example_figure(fig, output_path)
 
 
 def generate_listed_colorbar_example(output_path: Path) -> None:
@@ -227,9 +230,7 @@ def generate_listed_colorbar_example(output_path: Path) -> None:
     )
     style_colorbar(cbar, fc)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.18, top=0.88, wspace=0.2)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    _save_example_figure(fig, output_path)
 
 
 def generate_style_axes_comparison(output_path: Path) -> None:
@@ -247,9 +248,7 @@ def generate_style_axes_comparison(output_path: Path) -> None:
     axs[1].set_title("After style_axes")
     style_axes(axs[1], fc)
     fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    _save_example_figure(fig, output_path)
 
 
 def generate_style_colorbar_comparison(output_path: Path) -> None:
@@ -275,9 +274,7 @@ def generate_style_colorbar_comparison(output_path: Path) -> None:
         if idx == 1:
             style_colorbar(cbar, fc)
     fig.subplots_adjust(left=0.08, right=0.97, bottom=0.18, top=0.86, wspace=0.35)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    _save_example_figure(fig, output_path)
 
 
 def generate_style_legend_comparison(output_path: Path) -> None:
@@ -294,9 +291,7 @@ def generate_style_legend_comparison(output_path: Path) -> None:
         if idx == 1:
             style_legend(ax, fc)
     fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    _save_example_figure(fig, output_path)
 
 
 def generate_plotting_showcase(output_path: Path, image_example_path: Path) -> None:
@@ -409,9 +404,7 @@ def generate_plotting_showcase(output_path: Path, image_example_path: Path) -> N
     add_panel_label(axs[1, 1], "D", fc)
 
     fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    _save_example_figure(fig, output_path)
 
 
 def main() -> None:
