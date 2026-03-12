@@ -1,4 +1,21 @@
-"""Transform spike trains or time-resolved signals onto new time axes."""
+"""Transform spike trains or time-resolved signals onto new time axes.
+
+Examples
+--------
+Shared example setup used throughout the documentation:
+
+```python
+from spiketools import gamma_spikes, gaussian_kernel, kernel_rate, time_warp
+
+rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
+orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
+
+kernel = gaussian_kernel(25.0, dt=1.0)
+rates, rate_time = kernel_rate(spiketimes, kernel, tlim=[0.0, 5000.0], dt=1.0, pool=True)
+warped_spikes = time_warp(spiketimes[0], rate_time, rate_time)
+```
+"""
 
 from __future__ import annotations
 

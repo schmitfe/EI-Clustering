@@ -1,4 +1,21 @@
-"""Population-level summary statistics for binned spike matrices."""
+"""Population-level summary statistics for binned spike matrices.
+
+Examples
+--------
+Shared example setup used throughout the documentation:
+
+```python
+from spiketools import gamma_spikes, spiketimes_to_binary
+from spiketools.population import synchrony
+
+rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
+orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
+
+binary, _ = spiketimes_to_binary(spiketimes, tlim=[0.0, 5000.0], dt=50.0)
+sync = synchrony(binary)
+```
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,17 @@
-"""Spike-train surrogate generation utilities."""
+"""Spike-train surrogate generation utilities.
+
+Examples
+--------
+Generate the shared documentation dataset:
+
+```python
+from spiketools import gamma_spikes
+
+rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
+orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
+```
+"""
 
 from __future__ import annotations
 
@@ -47,7 +60,9 @@ def gamma_spikes(rates, order=[1], tlim=[0.0, 1000.0], dt=0.1):
             rates = [r * o for r, o in zip(rates, order)]
         rates = pylab.tile(pylab.array(rates)[:, pylab.newaxis], (1, len(time)))
 
-    spikes = 1.0 * pylab.rand(rates.shape[0], rates.shape[1]) < rates / 1000.0 * dt
+    spikes = (
+        1.0 * pylab.rand(rates.shape[0], rates.shape[1]) < rates / 1000.0 * dt
+    ).astype(np.int16, copy=False)
 
     if len(order) == 1:
         order *= spikes.shape[0]

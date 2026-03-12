@@ -29,97 +29,76 @@ event onsets. Converting state matrices to spike trains therefore requires an
 explicit onset extraction step and is not what `binary_to_spiketimes(...)`
 does.
 
-Cookbook
---------
+Shared Example Dataset
+----------------------
 
-NEST spike-recorder events to `spiketimes` and smoothed rates:
+The examples below reuse one synthetic spike-train dataset: `10` trials, each
+`5` seconds long, generated from homogeneous gamma processes with rates near
+`6 spikes/s` and mild trial-to-trial differences in regularity.
 
 ```python
 import numpy as np
 
-from spiketools.rate import gaussian_kernel, kernel_rate
+from spiketools import gamma_spikes
 
-events = spike_recorder.get("events")
-senders = events["senders"]
-times = events["times"]
+rates = np.array([5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5], dtype=float)
+orders = np.array([1, 2, 2, 3, 1, 2, 3, 2, 1, 3], dtype=int)
+spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
+```
 
-sender_offset = senders.min()
-spiketimes = np.vstack([
-    times.astype(float),
-    (senders - sender_offset).astype(float),
-])
+![Shared spike raster](spiketools_assets/shared_example_raster.png)
+
+Cookbook
+--------
+
+Convert the shared example to a binned raster and a per-trial list:
+
+```python
+import numpy as np
+
+from spiketools import spiketimes_to_binary, spiketimes_to_list
+
+binary, time = spiketimes_to_binary(spiketimes, tlim=[0.0, 5000.0], dt=50.0)
+trials = spiketimes_to_list(spiketimes)
+```
+
+Estimate smoothed rates from the same spike trains:
+
+```python
+from spiketools import gaussian_kernel, kernel_rate
 
 kernel = gaussian_kernel(25.0, dt=1.0)
 rates, rate_time = kernel_rate(
     spiketimes,
     kernel,
-    tlim=[0.0, float(times.max()) + 1.0],
+    tlim=[0.0, 5000.0],
     dt=1.0,
     pool=False,
 )
 ```
 
-Binned spike-count matrices to `spiketimes` and variability metrics:
+Compute trial-wise variability metrics:
 
 ```python
-import numpy as np
-
-from spiketools import binary_to_spiketimes
 from spiketools.variability import cv_two, ff
 
-# spike_counts.shape == (n_units, n_time_bins)
-# entries are spike counts per discretized time bin
-dt_ms = 1.0
-time_axis = np.arange(spike_counts.shape[1], dtype=float) * dt_ms
-
-spiketimes = binary_to_spiketimes(spike_counts, time_axis)
-fano = ff(spiketimes, tlim=[0.0, time_axis[-1] + dt_ms])
+fano = ff(spiketimes, tlim=[0.0, 5000.0])
 local_cv2 = cv_two(spiketimes)
 ```
 
-BinaryNetwork simulation output to `spiketimes`:
+Run a sliding-window analysis on the same dataset:
 
 ```python
-import numpy as np
+from spiketools import time_resolved
+from spiketools.variability import cv2
 
-data = np.load(trace_path)
-spiketimes = np.vstack([
-    data["spike_times"].astype(float),
-    data["spike_ids"].astype(float),
-])
-```
-
-If only diff logs are available:
-
-```python
-import numpy as np
-
-from BinaryNetwork.BinaryNetwork import BinaryNetwork
-
-data = np.load(trace_path)
-times, ids = BinaryNetwork.extract_spike_events_from_diff_logs(
-    data["state_updates"],
-    data["state_deltas"],
-)
-spiketimes = np.vstack([times.astype(float), ids.astype(float)])
-```
-
-BinaryNetwork diff logs to direct population rates:
-
-```python
-import numpy as np
-
-from BinaryNetwork.ClusteredEI_network import ClusteredEI_network
-
-data = np.load(trace_path)
-network = ClusteredEI_network(parameter)
-network.initialize()
-
-rates = network.population_rates_from_diff_logs(
-    data["initial_state"],
-    data["state_updates"],
-    data["state_deltas"],
-    sample_interval=int(data["sample_interval"]),
+values, window_time = time_resolved(
+    spiketimes,
+    window=1000.0,
+    func=cv2,
+    kwargs={"pool": True},
+    tlim=[0.0, 5000.0],
+    tstep=250.0,
 )
 ```
 

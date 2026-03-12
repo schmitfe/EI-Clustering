@@ -7,26 +7,16 @@ The package-wide spike format is a `float` array of shape `(2, n_spikes)`:
 
 Examples
 --------
-From NEST event dictionaries:
+Shared example setup used throughout the documentation:
 
 ```python
-events = recorder.get("events")
-spiketimes = np.vstack([
-    events["times"],
-    events["senders"] - events["senders"].min(),
-]).astype(float)
-```
+from spiketools import gamma_spikes, spiketimes_to_binary, spiketimes_to_list
 
-From a binned spike-count matrix with shape `(n_neurons, n_time_bins)`:
+rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
+orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
 
-```python
-time = np.arange(spike_counts.shape[1], dtype=float) * dt_ms
-spiketimes = binary_to_spiketimes(spike_counts, time)
-```
-
-Back to a per-neuron list representation:
-
-```python
+binary, time = spiketimes_to_binary(spiketimes, tlim=[0.0, 5000.0], dt=50.0)
 trains = spiketimes_to_list(spiketimes)
 ```
 """

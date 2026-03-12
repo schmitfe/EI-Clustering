@@ -1,4 +1,27 @@
-"""Windowed analyses on canonical `spiketimes` arrays."""
+"""Windowed analyses on canonical `spiketimes` arrays.
+
+Examples
+--------
+Shared example setup used throughout the documentation:
+
+```python
+from spiketools import gamma_spikes, time_resolved
+from spiketools.variability import cv2
+
+rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
+orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
+
+values, window_time = time_resolved(
+    spiketimes,
+    window=1000.0,
+    func=cv2,
+    kwargs={"pool": True},
+    tlim=[0.0, 5000.0],
+    tstep=250.0,
+)
+```
+"""
 
 from __future__ import annotations
 

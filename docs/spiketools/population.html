@@ -50,56 +50,90 @@
 <a href="./../spiketools.html">spiketools</a><wbr>.population    </h1>
 
                         <div class="docstring"><p>Population-level summary statistics for binned spike matrices.</p>
+
+<h6 id="examples">Examples</h6>
+
+<p>Shared example setup used throughout the documentation:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">spiketools</span><span class="w"> </span><span class="kn">import</span> <span class="n">gamma_spikes</span><span class="p">,</span> <span class="n">spiketimes_to_binary</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn"><a href="">spiketools.population</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">synchrony</span>
+
+<span class="n">rates</span> <span class="o">=</span> <span class="p">[</span><span class="mf">5.6</span><span class="p">,</span> <span class="mf">6.3</span><span class="p">,</span> <span class="mf">5.9</span><span class="p">,</span> <span class="mf">6.5</span><span class="p">,</span> <span class="mf">5.8</span><span class="p">,</span> <span class="mf">6.1</span><span class="p">,</span> <span class="mf">5.7</span><span class="p">,</span> <span class="mf">6.4</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">,</span> <span class="mf">5.5</span><span class="p">]</span>
+<span class="n">orders</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">spiketimes</span> <span class="o">=</span> <span class="n">gamma_spikes</span><span class="p">(</span><span class="n">rates</span><span class="o">=</span><span class="n">rates</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="n">orders</span><span class="p">,</span> <span class="n">tlim</span><span class="o">=</span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">5000.0</span><span class="p">],</span> <span class="n">dt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+
+<span class="n">binary</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">spiketimes_to_binary</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="o">=</span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">5000.0</span><span class="p">],</span> <span class="n">dt</span><span class="o">=</span><span class="mf">50.0</span><span class="p">)</span>
+<span class="n">sync</span> <span class="o">=</span> <span class="n">synchrony</span><span class="p">(</span><span class="n">binary</span><span class="p">)</span>
+</code></pre>
+</div>
 </div>
 
                         <input id="mod-population-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-population-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Population-level summary statistics for binned spike matrices.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Population-level summary statistics for binned spike matrices.</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pylab</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">Examples</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">--------</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">Shared example setup used throughout the documentation:</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;synchrony&quot;</span><span class="p">]</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="k">def</span><span class="w"> </span><span class="nf">synchrony</span><span class="p">(</span><span class="n">spikes</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">    Calculate the Golomb &amp; Hansel (2000) population synchrony measure.</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="sd">    Parameters</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="sd">    ----------</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="sd">    spikes:</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="sd">        Binned spike matrix with shape `(n_units, n_time_bins)` or a stack of</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="sd">        such matrices with trials along the first axis.</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a><span class="sd">    ignore_zero_rows:</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="sd">        If `True`, units with zero spikes are excluded from the statistic.</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">```python</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a><span class="sd">from spiketools import gamma_spikes, spiketimes_to_binary</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a><span class="sd">from spiketools.population import synchrony</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="sd">rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="sd">orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="sd">spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="sd">binary, _ = spiketimes_to_binary(spiketimes, tlim=[0.0, 5000.0], dt=50.0)</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a><span class="sd">sync = synchrony(binary)</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="sd">```</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 </span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>
-</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="sd">    Returns</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="sd">    -------</span>
-</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="sd">    float</span>
-</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a><span class="sd">        Synchrony estimate between `0` and `1` for typical inputs.</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pylab</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;synchrony&quot;</span><span class="p">]</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>
 </span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>
-</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="sd">    Notes</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="sd">    -----</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">    This function expects a dense spike-count matrix, not canonical</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a><span class="sd">    `spiketimes`. Convert first with `spiketimes_to_binary(...)` if needed.</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a>
-</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">    Examples</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">    --------</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">    &gt;&gt;&gt; round(float(synchrony(pylab.array([[1, 0, 1], [0, 1, 0]]))), 3)</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">    0.0</span>
-</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">spikes</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>        <span class="k">return</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">synchrony</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">spikes</span><span class="p">])</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a>    <span class="k">if</span> <span class="n">ignore_zero_rows</span><span class="p">:</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a>        <span class="n">mask</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a>    <span class="k">return</span> <span class="n">sync</span> <span class="o">**</span> <span class="mf">0.5</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a><span class="k">def</span><span class="w"> </span><span class="nf">synchrony</span><span class="p">(</span><span class="n">spikes</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="sd">    Calculate the Golomb &amp; Hansel (2000) population synchrony measure.</span>
+</span><span id="L-30"><a href="#L-30"><span class="linenos">30</span></a>
+</span><span id="L-31"><a href="#L-31"><span class="linenos">31</span></a><span class="sd">    Parameters</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos">32</span></a><span class="sd">    ----------</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos">33</span></a><span class="sd">    spikes:</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos">34</span></a><span class="sd">        Binned spike matrix with shape `(n_units, n_time_bins)` or a stack of</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos">35</span></a><span class="sd">        such matrices with trials along the first axis.</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos">36</span></a><span class="sd">    ignore_zero_rows:</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos">37</span></a><span class="sd">        If `True`, units with zero spikes are excluded from the statistic.</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos">38</span></a>
+</span><span id="L-39"><a href="#L-39"><span class="linenos">39</span></a><span class="sd">    Returns</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos">40</span></a><span class="sd">    -------</span>
+</span><span id="L-41"><a href="#L-41"><span class="linenos">41</span></a><span class="sd">    float</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos">42</span></a><span class="sd">        Synchrony estimate between `0` and `1` for typical inputs.</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos">43</span></a>
+</span><span id="L-44"><a href="#L-44"><span class="linenos">44</span></a><span class="sd">    Notes</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos">45</span></a><span class="sd">    -----</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos">46</span></a><span class="sd">    This function expects a dense spike-count matrix, not canonical</span>
+</span><span id="L-47"><a href="#L-47"><span class="linenos">47</span></a><span class="sd">    `spiketimes`. Convert first with `spiketimes_to_binary(...)` if needed.</span>
+</span><span id="L-48"><a href="#L-48"><span class="linenos">48</span></a>
+</span><span id="L-49"><a href="#L-49"><span class="linenos">49</span></a><span class="sd">    Examples</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos">50</span></a><span class="sd">    --------</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos">51</span></a><span class="sd">    &gt;&gt;&gt; round(float(synchrony(pylab.array([[1, 0, 1], [0, 1, 0]]))), 3)</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos">52</span></a><span class="sd">    0.0</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos">53</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos">54</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">spikes</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos">55</span></a>        <span class="k">return</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">synchrony</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">spikes</span><span class="p">])</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos">56</span></a>    <span class="k">if</span> <span class="n">ignore_zero_rows</span><span class="p">:</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos">57</span></a>        <span class="n">mask</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos">58</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</span><span id="L-59"><a href="#L-59"><span class="linenos">59</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos">60</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos">61</span></a>    <span class="k">return</span> <span class="n">sync</span> <span class="o">**</span> <span class="mf">0.5</span>
 </span></pre></div>
 
 
@@ -115,41 +149,41 @@
 
     </div>
     <a class="headerlink" href="#synchrony"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="synchrony-11"><a href="#synchrony-11"><span class="linenos">11</span></a><span class="k">def</span><span class="w"> </span><span class="nf">synchrony</span><span class="p">(</span><span class="n">spikes</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
-</span><span id="synchrony-12"><a href="#synchrony-12"><span class="linenos">12</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="synchrony-13"><a href="#synchrony-13"><span class="linenos">13</span></a><span class="sd">    Calculate the Golomb &amp; Hansel (2000) population synchrony measure.</span>
-</span><span id="synchrony-14"><a href="#synchrony-14"><span class="linenos">14</span></a>
-</span><span id="synchrony-15"><a href="#synchrony-15"><span class="linenos">15</span></a><span class="sd">    Parameters</span>
-</span><span id="synchrony-16"><a href="#synchrony-16"><span class="linenos">16</span></a><span class="sd">    ----------</span>
-</span><span id="synchrony-17"><a href="#synchrony-17"><span class="linenos">17</span></a><span class="sd">    spikes:</span>
-</span><span id="synchrony-18"><a href="#synchrony-18"><span class="linenos">18</span></a><span class="sd">        Binned spike matrix with shape `(n_units, n_time_bins)` or a stack of</span>
-</span><span id="synchrony-19"><a href="#synchrony-19"><span class="linenos">19</span></a><span class="sd">        such matrices with trials along the first axis.</span>
-</span><span id="synchrony-20"><a href="#synchrony-20"><span class="linenos">20</span></a><span class="sd">    ignore_zero_rows:</span>
-</span><span id="synchrony-21"><a href="#synchrony-21"><span class="linenos">21</span></a><span class="sd">        If `True`, units with zero spikes are excluded from the statistic.</span>
-</span><span id="synchrony-22"><a href="#synchrony-22"><span class="linenos">22</span></a>
-</span><span id="synchrony-23"><a href="#synchrony-23"><span class="linenos">23</span></a><span class="sd">    Returns</span>
-</span><span id="synchrony-24"><a href="#synchrony-24"><span class="linenos">24</span></a><span class="sd">    -------</span>
-</span><span id="synchrony-25"><a href="#synchrony-25"><span class="linenos">25</span></a><span class="sd">    float</span>
-</span><span id="synchrony-26"><a href="#synchrony-26"><span class="linenos">26</span></a><span class="sd">        Synchrony estimate between `0` and `1` for typical inputs.</span>
-</span><span id="synchrony-27"><a href="#synchrony-27"><span class="linenos">27</span></a>
-</span><span id="synchrony-28"><a href="#synchrony-28"><span class="linenos">28</span></a><span class="sd">    Notes</span>
-</span><span id="synchrony-29"><a href="#synchrony-29"><span class="linenos">29</span></a><span class="sd">    -----</span>
-</span><span id="synchrony-30"><a href="#synchrony-30"><span class="linenos">30</span></a><span class="sd">    This function expects a dense spike-count matrix, not canonical</span>
-</span><span id="synchrony-31"><a href="#synchrony-31"><span class="linenos">31</span></a><span class="sd">    `spiketimes`. Convert first with `spiketimes_to_binary(...)` if needed.</span>
-</span><span id="synchrony-32"><a href="#synchrony-32"><span class="linenos">32</span></a>
-</span><span id="synchrony-33"><a href="#synchrony-33"><span class="linenos">33</span></a><span class="sd">    Examples</span>
-</span><span id="synchrony-34"><a href="#synchrony-34"><span class="linenos">34</span></a><span class="sd">    --------</span>
-</span><span id="synchrony-35"><a href="#synchrony-35"><span class="linenos">35</span></a><span class="sd">    &gt;&gt;&gt; round(float(synchrony(pylab.array([[1, 0, 1], [0, 1, 0]]))), 3)</span>
-</span><span id="synchrony-36"><a href="#synchrony-36"><span class="linenos">36</span></a><span class="sd">    0.0</span>
-</span><span id="synchrony-37"><a href="#synchrony-37"><span class="linenos">37</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="synchrony-38"><a href="#synchrony-38"><span class="linenos">38</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">spikes</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span>
-</span><span id="synchrony-39"><a href="#synchrony-39"><span class="linenos">39</span></a>        <span class="k">return</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">synchrony</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">spikes</span><span class="p">])</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-</span><span id="synchrony-40"><a href="#synchrony-40"><span class="linenos">40</span></a>    <span class="k">if</span> <span class="n">ignore_zero_rows</span><span class="p">:</span>
-</span><span id="synchrony-41"><a href="#synchrony-41"><span class="linenos">41</span></a>        <span class="n">mask</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
-</span><span id="synchrony-42"><a href="#synchrony-42"><span class="linenos">42</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-</span><span id="synchrony-43"><a href="#synchrony-43"><span class="linenos">43</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="synchrony-44"><a href="#synchrony-44"><span class="linenos">44</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-</span><span id="synchrony-45"><a href="#synchrony-45"><span class="linenos">45</span></a>    <span class="k">return</span> <span class="n">sync</span> <span class="o">**</span> <span class="mf">0.5</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="synchrony-28"><a href="#synchrony-28"><span class="linenos">28</span></a><span class="k">def</span><span class="w"> </span><span class="nf">synchrony</span><span class="p">(</span><span class="n">spikes</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+</span><span id="synchrony-29"><a href="#synchrony-29"><span class="linenos">29</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="synchrony-30"><a href="#synchrony-30"><span class="linenos">30</span></a><span class="sd">    Calculate the Golomb &amp; Hansel (2000) population synchrony measure.</span>
+</span><span id="synchrony-31"><a href="#synchrony-31"><span class="linenos">31</span></a>
+</span><span id="synchrony-32"><a href="#synchrony-32"><span class="linenos">32</span></a><span class="sd">    Parameters</span>
+</span><span id="synchrony-33"><a href="#synchrony-33"><span class="linenos">33</span></a><span class="sd">    ----------</span>
+</span><span id="synchrony-34"><a href="#synchrony-34"><span class="linenos">34</span></a><span class="sd">    spikes:</span>
+</span><span id="synchrony-35"><a href="#synchrony-35"><span class="linenos">35</span></a><span class="sd">        Binned spike matrix with shape `(n_units, n_time_bins)` or a stack of</span>
+</span><span id="synchrony-36"><a href="#synchrony-36"><span class="linenos">36</span></a><span class="sd">        such matrices with trials along the first axis.</span>
+</span><span id="synchrony-37"><a href="#synchrony-37"><span class="linenos">37</span></a><span class="sd">    ignore_zero_rows:</span>
+</span><span id="synchrony-38"><a href="#synchrony-38"><span class="linenos">38</span></a><span class="sd">        If `True`, units with zero spikes are excluded from the statistic.</span>
+</span><span id="synchrony-39"><a href="#synchrony-39"><span class="linenos">39</span></a>
+</span><span id="synchrony-40"><a href="#synchrony-40"><span class="linenos">40</span></a><span class="sd">    Returns</span>
+</span><span id="synchrony-41"><a href="#synchrony-41"><span class="linenos">41</span></a><span class="sd">    -------</span>
+</span><span id="synchrony-42"><a href="#synchrony-42"><span class="linenos">42</span></a><span class="sd">    float</span>
+</span><span id="synchrony-43"><a href="#synchrony-43"><span class="linenos">43</span></a><span class="sd">        Synchrony estimate between `0` and `1` for typical inputs.</span>
+</span><span id="synchrony-44"><a href="#synchrony-44"><span class="linenos">44</span></a>
+</span><span id="synchrony-45"><a href="#synchrony-45"><span class="linenos">45</span></a><span class="sd">    Notes</span>
+</span><span id="synchrony-46"><a href="#synchrony-46"><span class="linenos">46</span></a><span class="sd">    -----</span>
+</span><span id="synchrony-47"><a href="#synchrony-47"><span class="linenos">47</span></a><span class="sd">    This function expects a dense spike-count matrix, not canonical</span>
+</span><span id="synchrony-48"><a href="#synchrony-48"><span class="linenos">48</span></a><span class="sd">    `spiketimes`. Convert first with `spiketimes_to_binary(...)` if needed.</span>
+</span><span id="synchrony-49"><a href="#synchrony-49"><span class="linenos">49</span></a>
+</span><span id="synchrony-50"><a href="#synchrony-50"><span class="linenos">50</span></a><span class="sd">    Examples</span>
+</span><span id="synchrony-51"><a href="#synchrony-51"><span class="linenos">51</span></a><span class="sd">    --------</span>
+</span><span id="synchrony-52"><a href="#synchrony-52"><span class="linenos">52</span></a><span class="sd">    &gt;&gt;&gt; round(float(synchrony(pylab.array([[1, 0, 1], [0, 1, 0]]))), 3)</span>
+</span><span id="synchrony-53"><a href="#synchrony-53"><span class="linenos">53</span></a><span class="sd">    0.0</span>
+</span><span id="synchrony-54"><a href="#synchrony-54"><span class="linenos">54</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="synchrony-55"><a href="#synchrony-55"><span class="linenos">55</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">spikes</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="synchrony-56"><a href="#synchrony-56"><span class="linenos">56</span></a>        <span class="k">return</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">synchrony</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">ignore_zero_rows</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">spikes</span><span class="p">])</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</span><span id="synchrony-57"><a href="#synchrony-57"><span class="linenos">57</span></a>    <span class="k">if</span> <span class="n">ignore_zero_rows</span><span class="p">:</span>
+</span><span id="synchrony-58"><a href="#synchrony-58"><span class="linenos">58</span></a>        <span class="n">mask</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</span><span id="synchrony-59"><a href="#synchrony-59"><span class="linenos">59</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</span><span id="synchrony-60"><a href="#synchrony-60"><span class="linenos">60</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="synchrony-61"><a href="#synchrony-61"><span class="linenos">61</span></a>        <span class="n">sync</span> <span class="o">=</span> <span class="n">spikes</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="n">spikes</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</span><span id="synchrony-62"><a href="#synchrony-62"><span class="linenos">62</span></a>    <span class="k">return</span> <span class="n">sync</span> <span class="o">**</span> <span class="mf">0.5</span>
 </span></pre></div>
 
 

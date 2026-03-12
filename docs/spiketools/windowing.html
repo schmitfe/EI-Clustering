@@ -56,220 +56,266 @@
 <a href="./../spiketools.html">spiketools</a><wbr>.windowing    </h1>
 
                         <div class="docstring"><p>Windowed analyses on canonical <code>spiketimes</code> arrays.</p>
+
+<h6 id="examples">Examples</h6>
+
+<p>Shared example setup used throughout the documentation:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">spiketools</span><span class="w"> </span><span class="kn">import</span> <span class="n">gamma_spikes</span><span class="p">,</span> <span class="n">time_resolved</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn"><a href="variability.html">spiketools.variability</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">cv2</span>
+
+<span class="n">rates</span> <span class="o">=</span> <span class="p">[</span><span class="mf">5.6</span><span class="p">,</span> <span class="mf">6.3</span><span class="p">,</span> <span class="mf">5.9</span><span class="p">,</span> <span class="mf">6.5</span><span class="p">,</span> <span class="mf">5.8</span><span class="p">,</span> <span class="mf">6.1</span><span class="p">,</span> <span class="mf">5.7</span><span class="p">,</span> <span class="mf">6.4</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">,</span> <span class="mf">5.5</span><span class="p">]</span>
+<span class="n">orders</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">spiketimes</span> <span class="o">=</span> <span class="n">gamma_spikes</span><span class="p">(</span><span class="n">rates</span><span class="o">=</span><span class="n">rates</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="n">orders</span><span class="p">,</span> <span class="n">tlim</span><span class="o">=</span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">5000.0</span><span class="p">],</span> <span class="n">dt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+
+<span class="n">values</span><span class="p">,</span> <span class="n">window_time</span> <span class="o">=</span> <span class="n">time_resolved</span><span class="p">(</span>
+    <span class="n">spiketimes</span><span class="p">,</span>
+    <span class="n">window</span><span class="o">=</span><span class="mf">1000.0</span><span class="p">,</span>
+    <span class="n">func</span><span class="o">=</span><span class="n">cv2</span><span class="p">,</span>
+    <span class="n">kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;pool&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+    <span class="n">tlim</span><span class="o">=</span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">5000.0</span><span class="p">],</span>
+    <span class="n">tstep</span><span class="o">=</span><span class="mf">250.0</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre>
+</div>
 </div>
 
                         <input id="mod-windowing-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-windowing-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;Windowed analyses on canonical `spiketimes` arrays.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">  1</span></a><span class="sd">&quot;&quot;&quot;Windowed analyses on canonical `spiketimes` arrays.</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos">  2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Sequence</span>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">  3</span></a><span class="sd">Examples</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">  4</span></a><span class="sd">--------</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">  5</span></a><span class="sd">Shared example setup used throughout the documentation:</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos">  6</span></a>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pylab</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.conversion</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>    <span class="n">binary_to_spiketimes</span><span class="p">,</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a>    <span class="n">cut_spiketimes</span><span class="p">,</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a>    <span class="n">get_time_limits</span><span class="p">,</span>
-</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a>    <span class="n">spiketimes_to_binary</span><span class="p">,</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a><span class="p">)</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.rate</span><span class="w"> </span><span class="kn">import</span> <span class="n">gaussian_kernel</span><span class="p">,</span> <span class="n">kernel_rate</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.transforms</span><span class="w"> </span><span class="kn">import</span> <span class="n">time_warp</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a>
-</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a>    <span class="s2">&quot;rate_warped_analysis&quot;</span><span class="p">,</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>    <span class="s2">&quot;time_resolved&quot;</span><span class="p">,</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a>    <span class="s2">&quot;time_resolved_new&quot;</span><span class="p">,</span>
-</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a><span class="p">]</span>
-</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a>
-</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a>
-</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved</span><span class="p">(</span>
-</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
-</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>    <span class="n">window</span><span class="p">,</span>
-</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
-</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a><span class="p">):</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a><span class="sd">    Apply a function to successive windows of a spike train.</span>
-</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>
-</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a><span class="sd">    Parameters</span>
-</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a><span class="sd">    ----------</span>
-</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a><span class="sd">    spiketimes:</span>
-</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a><span class="sd">        Canonical spike representation.</span>
-</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a><span class="sd">    window:</span>
-</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a><span class="sd">        Window size in ms.</span>
-</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a><span class="sd">    func:</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="sd">        Callable receiving the cropped `spiketimes` of each window.</span>
-</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a><span class="sd">    kwargs:</span>
-</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a><span class="sd">        Optional keyword arguments passed to `func`.</span>
-</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a><span class="sd">    tlim:</span>
-</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a><span class="sd">        Optional analysis interval `[tmin, tmax]` in ms.</span>
-</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a><span class="sd">    tstep:</span>
-</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a><span class="sd">        Window step size in ms.</span>
-</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>
-</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a><span class="sd">    Returns</span>
-</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a><span class="sd">    -------</span>
-</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a><span class="sd">    tuple[list, np.ndarray]</span>
-</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a><span class="sd">        Function outputs and window-center times.</span>
-</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a>
-</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a><span class="sd">    Examples</span>
-</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">    --------</span>
-</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
-</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
-</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="sd">    &gt;&gt;&gt; values</span>
-</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">    [1, 1, 1, 1]</span>
-</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="sd">    &gt;&gt;&gt; times.tolist()</span>
-</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a><span class="sd">    [0.5, 1.5, 2.5, 3.5]</span>
-</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
-</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a>    <span class="n">cut_spikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
-</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a>
-</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
-</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">-</span> <span class="n">tstep</span> <span class="o">-</span> <span class="n">tmin</span><span class="p">)</span>
-</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a>
-</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
-</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">cut_spikes</span><span class="p">,</span> <span class="p">[</span><span class="n">tmin</span><span class="p">,</span> <span class="n">tmax</span><span class="p">])</span>
-</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
-</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
-</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a>
-</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a>
-</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
-</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a>
-</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>
-</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved_new</span><span class="p">(</span>
-</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
-</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>    <span class="n">window</span><span class="p">,</span>
-</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
-</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a><span class="p">):</span>
-</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a><span class="sd">    Windowed evaluation using an intermediate binary representation.</span>
-</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>
-</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a><span class="sd">    This variant can be faster for repeated window extraction because the spike</span>
-</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a><span class="sd">    train is binned once before the loop.</span>
-</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>
-</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a><span class="sd">    Examples</span>
-</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a><span class="sd">    --------</span>
-</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
-</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved_new(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
-</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a><span class="sd">    &gt;&gt;&gt; values</span>
-</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a><span class="sd">    [1, 1, 1, 1]</span>
-</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
-</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a>
-</span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a>    <span class="n">binary</span><span class="p">,</span> <span class="n">btime</span> <span class="o">=</span> <span class="n">spiketimes_to_binary</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="o">=</span><span class="n">tlim</span><span class="p">)</span>
-</span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a>
-</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
-</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">+</span> <span class="n">tmin</span><span class="p">)</span>
-</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a>
-</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="L-123"><a href="#L-123"><span class="linenos">123</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
-</span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">binary_to_spiketimes</span><span class="p">(</span>
-</span><span id="L-125"><a href="#L-125"><span class="linenos">125</span></a>            <span class="n">binary</span><span class="p">[:,</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)],</span> <span class="n">btime</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)]</span>
-</span><span id="L-126"><a href="#L-126"><span class="linenos">126</span></a>        <span class="p">)</span>
-</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
-</span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
-</span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a>
-</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="L-131"><a href="#L-131"><span class="linenos">131</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="L-132"><a href="#L-132"><span class="linenos">132</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="L-133"><a href="#L-133"><span class="linenos">133</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
-</span><span id="L-134"><a href="#L-134"><span class="linenos">134</span></a>
-</span><span id="L-135"><a href="#L-135"><span class="linenos">135</span></a>
-</span><span id="L-136"><a href="#L-136"><span class="linenos">136</span></a><span class="k">def</span><span class="w"> </span><span class="nf">rate_warped_analysis</span><span class="p">(</span>
-</span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
-</span><span id="L-138"><a href="#L-138"><span class="linenos">138</span></a>    <span class="n">window</span><span class="p">,</span>
-</span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a>    <span class="n">step</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a>    <span class="n">tlim</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a>    <span class="n">rate</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a>    <span class="n">func</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span>
-</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a>    <span class="n">rate_kernel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a>    <span class="n">dt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a><span class="p">):</span>
-</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a><span class="sd">    Apply a function after warping time according to instantaneous rate.</span>
-</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>
-</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a><span class="sd">    Parameters</span>
-</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a><span class="sd">    ----------</span>
-</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a><span class="sd">    spiketimes:</span>
-</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a><span class="sd">        Canonical spike representation.</span>
-</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a><span class="sd">    window:</span>
-</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a><span class="sd">        Window size in warped time. Use `&quot;full&quot;` to analyze the complete warped</span>
-</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a><span class="sd">        recording at once.</span>
-</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="sd">    step:</span>
-</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a><span class="sd">        Step size in warped time.</span>
-</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a><span class="sd">    tlim:</span>
-</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a><span class="sd">        Optional `[tmin, tmax]` interval in ms.</span>
-</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a><span class="sd">    rate:</span>
-</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a><span class="sd">        Optional precomputed `(rate, time)` tuple as returned by</span>
-</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a><span class="sd">        `kernel_rate(...)`.</span>
-</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a><span class="sd">    func:</span>
-</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a><span class="sd">        Statistic to evaluate on the warped spike train.</span>
-</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a><span class="sd">    kwargs:</span>
-</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a><span class="sd">        Optional keyword arguments forwarded to `func`.</span>
-</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a><span class="sd">    rate_kernel:</span>
-</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a><span class="sd">        Kernel used when `rate` is not provided.</span>
-</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a><span class="sd">    dt:</span>
-</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a><span class="sd">        Sampling interval in ms used for the rate estimate.</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">  7</span></a><span class="sd">```python</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">  8</span></a><span class="sd">from spiketools import gamma_spikes, time_resolved</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos">  9</span></a><span class="sd">from spiketools.variability import cv2</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos"> 10</span></a>
+</span><span id="L-11"><a href="#L-11"><span class="linenos"> 11</span></a><span class="sd">rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos"> 12</span></a><span class="sd">orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos"> 13</span></a><span class="sd">spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos"> 14</span></a>
+</span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="sd">values, window_time = time_resolved(</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="sd">    spiketimes,</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="sd">    window=1000.0,</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="sd">    func=cv2,</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="sd">    kwargs={&quot;pool&quot;: True},</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a><span class="sd">    tlim=[0.0, 5000.0],</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a><span class="sd">    tstep=250.0,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos"> 22</span></a><span class="sd">)</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos"> 23</span></a><span class="sd">```</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos"> 24</span></a><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos"> 25</span></a>
+</span><span id="L-26"><a href="#L-26"><span class="linenos"> 26</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos"> 27</span></a>
+</span><span id="L-28"><a href="#L-28"><span class="linenos"> 28</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Sequence</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>
+</span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="kn">import</span><span class="w"> </span><span class="nn">pylab</span>
+</span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.conversion</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a>    <span class="n">binary_to_spiketimes</span><span class="p">,</span>
+</span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>    <span class="n">cut_spiketimes</span><span class="p">,</span>
+</span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a>    <span class="n">get_time_limits</span><span class="p">,</span>
+</span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a>    <span class="n">spiketimes_to_binary</span><span class="p">,</span>
+</span><span id="L-37"><a href="#L-37"><span class="linenos"> 37</span></a><span class="p">)</span>
+</span><span id="L-38"><a href="#L-38"><span class="linenos"> 38</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.rate</span><span class="w"> </span><span class="kn">import</span> <span class="n">gaussian_kernel</span><span class="p">,</span> <span class="n">kernel_rate</span>
+</span><span id="L-39"><a href="#L-39"><span class="linenos"> 39</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.transforms</span><span class="w"> </span><span class="kn">import</span> <span class="n">time_warp</span>
+</span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>
+</span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a>    <span class="s2">&quot;rate_warped_analysis&quot;</span><span class="p">,</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a>    <span class="s2">&quot;time_resolved&quot;</span><span class="p">,</span>
+</span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a>    <span class="s2">&quot;time_resolved_new&quot;</span><span class="p">,</span>
+</span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a><span class="p">]</span>
+</span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a>
+</span><span id="L-47"><a href="#L-47"><span class="linenos"> 47</span></a>
+</span><span id="L-48"><a href="#L-48"><span class="linenos"> 48</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved</span><span class="p">(</span>
+</span><span id="L-49"><a href="#L-49"><span class="linenos"> 49</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
+</span><span id="L-50"><a href="#L-50"><span class="linenos"> 50</span></a>    <span class="n">window</span><span class="p">,</span>
+</span><span id="L-51"><a href="#L-51"><span class="linenos"> 51</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
+</span><span id="L-52"><a href="#L-52"><span class="linenos"> 52</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-53"><a href="#L-53"><span class="linenos"> 53</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-54"><a href="#L-54"><span class="linenos"> 54</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="L-55"><a href="#L-55"><span class="linenos"> 55</span></a><span class="p">):</span>
+</span><span id="L-56"><a href="#L-56"><span class="linenos"> 56</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-57"><a href="#L-57"><span class="linenos"> 57</span></a><span class="sd">    Apply a function to successive windows of a spike train.</span>
+</span><span id="L-58"><a href="#L-58"><span class="linenos"> 58</span></a>
+</span><span id="L-59"><a href="#L-59"><span class="linenos"> 59</span></a><span class="sd">    Parameters</span>
+</span><span id="L-60"><a href="#L-60"><span class="linenos"> 60</span></a><span class="sd">    ----------</span>
+</span><span id="L-61"><a href="#L-61"><span class="linenos"> 61</span></a><span class="sd">    spiketimes:</span>
+</span><span id="L-62"><a href="#L-62"><span class="linenos"> 62</span></a><span class="sd">        Canonical spike representation.</span>
+</span><span id="L-63"><a href="#L-63"><span class="linenos"> 63</span></a><span class="sd">    window:</span>
+</span><span id="L-64"><a href="#L-64"><span class="linenos"> 64</span></a><span class="sd">        Window size in ms.</span>
+</span><span id="L-65"><a href="#L-65"><span class="linenos"> 65</span></a><span class="sd">    func:</span>
+</span><span id="L-66"><a href="#L-66"><span class="linenos"> 66</span></a><span class="sd">        Callable receiving the cropped `spiketimes` of each window.</span>
+</span><span id="L-67"><a href="#L-67"><span class="linenos"> 67</span></a><span class="sd">    kwargs:</span>
+</span><span id="L-68"><a href="#L-68"><span class="linenos"> 68</span></a><span class="sd">        Optional keyword arguments passed to `func`.</span>
+</span><span id="L-69"><a href="#L-69"><span class="linenos"> 69</span></a><span class="sd">    tlim:</span>
+</span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a><span class="sd">        Optional analysis interval `[tmin, tmax]` in ms.</span>
+</span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a><span class="sd">    tstep:</span>
+</span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a><span class="sd">        Window step size in ms.</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a><span class="sd">    Returns</span>
+</span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a><span class="sd">    -------</span>
+</span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a><span class="sd">    tuple[list, np.ndarray]</span>
+</span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a><span class="sd">        Function outputs and window-center times.</span>
+</span><span id="L-78"><a href="#L-78"><span class="linenos"> 78</span></a>
+</span><span id="L-79"><a href="#L-79"><span class="linenos"> 79</span></a><span class="sd">    Examples</span>
+</span><span id="L-80"><a href="#L-80"><span class="linenos"> 80</span></a><span class="sd">    --------</span>
+</span><span id="L-81"><a href="#L-81"><span class="linenos"> 81</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
+</span><span id="L-82"><a href="#L-82"><span class="linenos"> 82</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
+</span><span id="L-83"><a href="#L-83"><span class="linenos"> 83</span></a><span class="sd">    &gt;&gt;&gt; values</span>
+</span><span id="L-84"><a href="#L-84"><span class="linenos"> 84</span></a><span class="sd">    [1, 1, 1, 1]</span>
+</span><span id="L-85"><a href="#L-85"><span class="linenos"> 85</span></a><span class="sd">    &gt;&gt;&gt; times.tolist()</span>
+</span><span id="L-86"><a href="#L-86"><span class="linenos"> 86</span></a><span class="sd">    [0.5, 1.5, 2.5, 3.5]</span>
+</span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
+</span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a>    <span class="n">cut_spikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
+</span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a>
+</span><span id="L-94"><a href="#L-94"><span class="linenos"> 94</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="L-95"><a href="#L-95"><span class="linenos"> 95</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
+</span><span id="L-96"><a href="#L-96"><span class="linenos"> 96</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">-</span> <span class="n">tstep</span> <span class="o">-</span> <span class="n">tmin</span><span class="p">)</span>
+</span><span id="L-97"><a href="#L-97"><span class="linenos"> 97</span></a>
+</span><span id="L-98"><a href="#L-98"><span class="linenos"> 98</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-99"><a href="#L-99"><span class="linenos"> 99</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+</span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">cut_spikes</span><span class="p">,</span> <span class="p">[</span><span class="n">tmin</span><span class="p">,</span> <span class="n">tmax</span><span class="p">])</span>
+</span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
+</span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a>
+</span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="L-107"><a href="#L-107"><span class="linenos">107</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="L-108"><a href="#L-108"><span class="linenos">108</span></a>
+</span><span id="L-109"><a href="#L-109"><span class="linenos">109</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
+</span><span id="L-110"><a href="#L-110"><span class="linenos">110</span></a>
+</span><span id="L-111"><a href="#L-111"><span class="linenos">111</span></a>
+</span><span id="L-112"><a href="#L-112"><span class="linenos">112</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved_new</span><span class="p">(</span>
+</span><span id="L-113"><a href="#L-113"><span class="linenos">113</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
+</span><span id="L-114"><a href="#L-114"><span class="linenos">114</span></a>    <span class="n">window</span><span class="p">,</span>
+</span><span id="L-115"><a href="#L-115"><span class="linenos">115</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
+</span><span id="L-116"><a href="#L-116"><span class="linenos">116</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-117"><a href="#L-117"><span class="linenos">117</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-118"><a href="#L-118"><span class="linenos">118</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="L-119"><a href="#L-119"><span class="linenos">119</span></a><span class="p">):</span>
+</span><span id="L-120"><a href="#L-120"><span class="linenos">120</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-121"><a href="#L-121"><span class="linenos">121</span></a><span class="sd">    Windowed evaluation using an intermediate binary representation.</span>
+</span><span id="L-122"><a href="#L-122"><span class="linenos">122</span></a>
+</span><span id="L-123"><a href="#L-123"><span class="linenos">123</span></a><span class="sd">    This variant can be faster for repeated window extraction because the spike</span>
+</span><span id="L-124"><a href="#L-124"><span class="linenos">124</span></a><span class="sd">    train is binned once before the loop.</span>
+</span><span id="L-125"><a href="#L-125"><span class="linenos">125</span></a>
+</span><span id="L-126"><a href="#L-126"><span class="linenos">126</span></a><span class="sd">    Examples</span>
+</span><span id="L-127"><a href="#L-127"><span class="linenos">127</span></a><span class="sd">    --------</span>
+</span><span id="L-128"><a href="#L-128"><span class="linenos">128</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
+</span><span id="L-129"><a href="#L-129"><span class="linenos">129</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved_new(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
+</span><span id="L-130"><a href="#L-130"><span class="linenos">130</span></a><span class="sd">    &gt;&gt;&gt; values</span>
+</span><span id="L-131"><a href="#L-131"><span class="linenos">131</span></a><span class="sd">    [1, 1, 1, 1]</span>
+</span><span id="L-132"><a href="#L-132"><span class="linenos">132</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-133"><a href="#L-133"><span class="linenos">133</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-134"><a href="#L-134"><span class="linenos">134</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="L-135"><a href="#L-135"><span class="linenos">135</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-136"><a href="#L-136"><span class="linenos">136</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
+</span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a>
+</span><span id="L-138"><a href="#L-138"><span class="linenos">138</span></a>    <span class="n">binary</span><span class="p">,</span> <span class="n">btime</span> <span class="o">=</span> <span class="n">spiketimes_to_binary</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="o">=</span><span class="n">tlim</span><span class="p">)</span>
+</span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a>
+</span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="L-141"><a href="#L-141"><span class="linenos">141</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
+</span><span id="L-142"><a href="#L-142"><span class="linenos">142</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">+</span> <span class="n">tmin</span><span class="p">)</span>
+</span><span id="L-143"><a href="#L-143"><span class="linenos">143</span></a>
+</span><span id="L-144"><a href="#L-144"><span class="linenos">144</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-145"><a href="#L-145"><span class="linenos">145</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+</span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">binary_to_spiketimes</span><span class="p">(</span>
+</span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a>            <span class="n">binary</span><span class="p">[:,</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)],</span> <span class="n">btime</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)]</span>
+</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>        <span class="p">)</span>
+</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
+</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
+</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a>
+</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
+</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a>
+</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a>
+</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a><span class="k">def</span><span class="w"> </span><span class="nf">rate_warped_analysis</span><span class="p">(</span>
+</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
+</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a>    <span class="n">window</span><span class="p">,</span>
+</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a>    <span class="n">step</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a>    <span class="n">tlim</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a>    <span class="n">rate</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a>    <span class="n">func</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span>
+</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a>    <span class="n">rate_kernel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a>    <span class="n">dt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a><span class="p">):</span>
+</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a><span class="sd">    Apply a function after warping time according to instantaneous rate.</span>
 </span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a>
-</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a><span class="sd">    Examples</span>
-</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a><span class="sd">    --------</span>
-</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 3.0, 6.0], [0.0, 0.0, 0.0]])</span>
-</span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a><span class="sd">    &gt;&gt;&gt; result, warped_duration = rate_warped_analysis(</span>
-</span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a><span class="sd">    ...     spikes,</span>
-</span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a><span class="sd">    ...     window=&quot;full&quot;,</span>
-</span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a><span class="sd">    ...     func=lambda s: s.shape[1],</span>
-</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a><span class="sd">    ...     rate=(pylab.array([[500.0, 500.0, 500.0]]), pylab.array([0.0, 1.0, 2.0])),</span>
-</span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a><span class="sd">    ...     dt=1.0,</span>
-</span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a><span class="sd">    ... )</span>
-</span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a><span class="sd">    &gt;&gt;&gt; int(result), round(float(warped_duration), 3)</span>
-</span><span id="L-184"><a href="#L-184"><span class="linenos">184</span></a><span class="sd">    (3, 1.5)</span>
-</span><span id="L-185"><a href="#L-185"><span class="linenos">185</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-186"><a href="#L-186"><span class="linenos">186</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-187"><a href="#L-187"><span class="linenos">187</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="L-188"><a href="#L-188"><span class="linenos">188</span></a>    <span class="k">if</span> <span class="n">rate_kernel</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-189"><a href="#L-189"><span class="linenos">189</span></a>        <span class="n">rate_kernel</span> <span class="o">=</span> <span class="n">gaussian_kernel</span><span class="p">(</span><span class="mf">50.0</span><span class="p">)</span>
-</span><span id="L-190"><a href="#L-190"><span class="linenos">190</span></a>    <span class="k">if</span> <span class="n">rate</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-191"><a href="#L-191"><span class="linenos">191</span></a>        <span class="n">rate</span> <span class="o">=</span> <span class="n">kernel_rate</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_kernel</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
-</span><span id="L-192"><a href="#L-192"><span class="linenos">192</span></a>
-</span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a>    <span class="n">rate</span><span class="p">,</span> <span class="n">trate</span> <span class="o">=</span> <span class="n">rate</span>
-</span><span id="L-194"><a href="#L-194"><span class="linenos">194</span></a>    <span class="n">rate_tlim</span> <span class="o">=</span> <span class="p">[</span><span class="n">trate</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">trate</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
-</span><span id="L-195"><a href="#L-195"><span class="linenos">195</span></a>    <span class="n">spiketimes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_tlim</span><span class="p">)</span>
-</span><span id="L-196"><a href="#L-196"><span class="linenos">196</span></a>
-</span><span id="L-197"><a href="#L-197"><span class="linenos">197</span></a>    <span class="n">ot</span> <span class="o">=</span> <span class="n">pylab</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span> <span class="o">/</span> <span class="mf">1000.0</span> <span class="o">*</span> <span class="n">dt</span>
-</span><span id="L-198"><a href="#L-198"><span class="linenos">198</span></a>    <span class="n">w_spiketimes</span> <span class="o">=</span> <span class="n">spiketimes</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-</span><span id="L-199"><a href="#L-199"><span class="linenos">199</span></a>    <span class="n">w_spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:]</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:],</span> <span class="n">trate</span><span class="p">,</span> <span class="n">ot</span><span class="p">)</span>
-</span><span id="L-200"><a href="#L-200"><span class="linenos">200</span></a>
-</span><span id="L-201"><a href="#L-201"><span class="linenos">201</span></a>    <span class="k">if</span> <span class="n">window</span> <span class="o">==</span> <span class="s2">&quot;full&quot;</span><span class="p">:</span>
-</span><span id="L-202"><a href="#L-202"><span class="linenos">202</span></a>        <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">w_spiketimes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">),</span> <span class="n">ot</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
-</span><span id="L-203"><a href="#L-203"><span class="linenos">203</span></a>
-</span><span id="L-204"><a href="#L-204"><span class="linenos">204</span></a>    <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_resolved</span><span class="p">(</span>
-</span><span id="L-205"><a href="#L-205"><span class="linenos">205</span></a>        <span class="n">w_spiketimes</span><span class="p">,</span> <span class="n">window</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">tstep</span><span class="o">=</span><span class="n">step</span>
-</span><span id="L-206"><a href="#L-206"><span class="linenos">206</span></a>    <span class="p">)</span>
-</span><span id="L-207"><a href="#L-207"><span class="linenos">207</span></a>    <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">tresult</span><span class="p">,</span> <span class="n">ot</span><span class="p">,</span> <span class="n">trate</span><span class="p">)</span>
-</span><span id="L-208"><a href="#L-208"><span class="linenos">208</span></a>    <span class="k">return</span> <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span>
+</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a><span class="sd">    Parameters</span>
+</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a><span class="sd">    ----------</span>
+</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a><span class="sd">    spiketimes:</span>
+</span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a><span class="sd">        Canonical spike representation.</span>
+</span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a><span class="sd">    window:</span>
+</span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a><span class="sd">        Window size in warped time. Use `&quot;full&quot;` to analyze the complete warped</span>
+</span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a><span class="sd">        recording at once.</span>
+</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a><span class="sd">    step:</span>
+</span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a><span class="sd">        Step size in warped time.</span>
+</span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a><span class="sd">    tlim:</span>
+</span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a><span class="sd">        Optional `[tmin, tmax]` interval in ms.</span>
+</span><span id="L-184"><a href="#L-184"><span class="linenos">184</span></a><span class="sd">    rate:</span>
+</span><span id="L-185"><a href="#L-185"><span class="linenos">185</span></a><span class="sd">        Optional precomputed `(rate, time)` tuple as returned by</span>
+</span><span id="L-186"><a href="#L-186"><span class="linenos">186</span></a><span class="sd">        `kernel_rate(...)`.</span>
+</span><span id="L-187"><a href="#L-187"><span class="linenos">187</span></a><span class="sd">    func:</span>
+</span><span id="L-188"><a href="#L-188"><span class="linenos">188</span></a><span class="sd">        Statistic to evaluate on the warped spike train.</span>
+</span><span id="L-189"><a href="#L-189"><span class="linenos">189</span></a><span class="sd">    kwargs:</span>
+</span><span id="L-190"><a href="#L-190"><span class="linenos">190</span></a><span class="sd">        Optional keyword arguments forwarded to `func`.</span>
+</span><span id="L-191"><a href="#L-191"><span class="linenos">191</span></a><span class="sd">    rate_kernel:</span>
+</span><span id="L-192"><a href="#L-192"><span class="linenos">192</span></a><span class="sd">        Kernel used when `rate` is not provided.</span>
+</span><span id="L-193"><a href="#L-193"><span class="linenos">193</span></a><span class="sd">    dt:</span>
+</span><span id="L-194"><a href="#L-194"><span class="linenos">194</span></a><span class="sd">        Sampling interval in ms used for the rate estimate.</span>
+</span><span id="L-195"><a href="#L-195"><span class="linenos">195</span></a>
+</span><span id="L-196"><a href="#L-196"><span class="linenos">196</span></a><span class="sd">    Examples</span>
+</span><span id="L-197"><a href="#L-197"><span class="linenos">197</span></a><span class="sd">    --------</span>
+</span><span id="L-198"><a href="#L-198"><span class="linenos">198</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 3.0, 6.0], [0.0, 0.0, 0.0]])</span>
+</span><span id="L-199"><a href="#L-199"><span class="linenos">199</span></a><span class="sd">    &gt;&gt;&gt; result, warped_duration = rate_warped_analysis(</span>
+</span><span id="L-200"><a href="#L-200"><span class="linenos">200</span></a><span class="sd">    ...     spikes,</span>
+</span><span id="L-201"><a href="#L-201"><span class="linenos">201</span></a><span class="sd">    ...     window=&quot;full&quot;,</span>
+</span><span id="L-202"><a href="#L-202"><span class="linenos">202</span></a><span class="sd">    ...     func=lambda s: s.shape[1],</span>
+</span><span id="L-203"><a href="#L-203"><span class="linenos">203</span></a><span class="sd">    ...     rate=(pylab.array([[500.0, 500.0, 500.0]]), pylab.array([0.0, 1.0, 2.0])),</span>
+</span><span id="L-204"><a href="#L-204"><span class="linenos">204</span></a><span class="sd">    ...     dt=1.0,</span>
+</span><span id="L-205"><a href="#L-205"><span class="linenos">205</span></a><span class="sd">    ... )</span>
+</span><span id="L-206"><a href="#L-206"><span class="linenos">206</span></a><span class="sd">    &gt;&gt;&gt; int(result), round(float(warped_duration), 3)</span>
+</span><span id="L-207"><a href="#L-207"><span class="linenos">207</span></a><span class="sd">    (3, 1.5)</span>
+</span><span id="L-208"><a href="#L-208"><span class="linenos">208</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-209"><a href="#L-209"><span class="linenos">209</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-210"><a href="#L-210"><span class="linenos">210</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="L-211"><a href="#L-211"><span class="linenos">211</span></a>    <span class="k">if</span> <span class="n">rate_kernel</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-212"><a href="#L-212"><span class="linenos">212</span></a>        <span class="n">rate_kernel</span> <span class="o">=</span> <span class="n">gaussian_kernel</span><span class="p">(</span><span class="mf">50.0</span><span class="p">)</span>
+</span><span id="L-213"><a href="#L-213"><span class="linenos">213</span></a>    <span class="k">if</span> <span class="n">rate</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-214"><a href="#L-214"><span class="linenos">214</span></a>        <span class="n">rate</span> <span class="o">=</span> <span class="n">kernel_rate</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_kernel</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
+</span><span id="L-215"><a href="#L-215"><span class="linenos">215</span></a>
+</span><span id="L-216"><a href="#L-216"><span class="linenos">216</span></a>    <span class="n">rate</span><span class="p">,</span> <span class="n">trate</span> <span class="o">=</span> <span class="n">rate</span>
+</span><span id="L-217"><a href="#L-217"><span class="linenos">217</span></a>    <span class="n">rate_tlim</span> <span class="o">=</span> <span class="p">[</span><span class="n">trate</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">trate</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+</span><span id="L-218"><a href="#L-218"><span class="linenos">218</span></a>    <span class="n">spiketimes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_tlim</span><span class="p">)</span>
+</span><span id="L-219"><a href="#L-219"><span class="linenos">219</span></a>
+</span><span id="L-220"><a href="#L-220"><span class="linenos">220</span></a>    <span class="n">ot</span> <span class="o">=</span> <span class="n">pylab</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span> <span class="o">/</span> <span class="mf">1000.0</span> <span class="o">*</span> <span class="n">dt</span>
+</span><span id="L-221"><a href="#L-221"><span class="linenos">221</span></a>    <span class="n">w_spiketimes</span> <span class="o">=</span> <span class="n">spiketimes</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+</span><span id="L-222"><a href="#L-222"><span class="linenos">222</span></a>    <span class="n">w_spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:]</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:],</span> <span class="n">trate</span><span class="p">,</span> <span class="n">ot</span><span class="p">)</span>
+</span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a>
+</span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a>    <span class="k">if</span> <span class="n">window</span> <span class="o">==</span> <span class="s2">&quot;full&quot;</span><span class="p">:</span>
+</span><span id="L-225"><a href="#L-225"><span class="linenos">225</span></a>        <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">w_spiketimes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">),</span> <span class="n">ot</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+</span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a>
+</span><span id="L-227"><a href="#L-227"><span class="linenos">227</span></a>    <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_resolved</span><span class="p">(</span>
+</span><span id="L-228"><a href="#L-228"><span class="linenos">228</span></a>        <span class="n">w_spiketimes</span><span class="p">,</span> <span class="n">window</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">tstep</span><span class="o">=</span><span class="n">step</span>
+</span><span id="L-229"><a href="#L-229"><span class="linenos">229</span></a>    <span class="p">)</span>
+</span><span id="L-230"><a href="#L-230"><span class="linenos">230</span></a>    <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">tresult</span><span class="p">,</span> <span class="n">ot</span><span class="p">,</span> <span class="n">trate</span><span class="p">)</span>
+</span><span id="L-231"><a href="#L-231"><span class="linenos">231</span></a>    <span class="k">return</span> <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span>
 </span></pre></div>
 
 
@@ -285,79 +331,79 @@
 
     </div>
     <a class="headerlink" href="#rate_warped_analysis"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="rate_warped_analysis-137"><a href="#rate_warped_analysis-137"><span class="linenos">137</span></a><span class="k">def</span><span class="w"> </span><span class="nf">rate_warped_analysis</span><span class="p">(</span>
-</span><span id="rate_warped_analysis-138"><a href="#rate_warped_analysis-138"><span class="linenos">138</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-139"><a href="#rate_warped_analysis-139"><span class="linenos">139</span></a>    <span class="n">window</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-140"><a href="#rate_warped_analysis-140"><span class="linenos">140</span></a>    <span class="n">step</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-141"><a href="#rate_warped_analysis-141"><span class="linenos">141</span></a>    <span class="n">tlim</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-142"><a href="#rate_warped_analysis-142"><span class="linenos">142</span></a>    <span class="n">rate</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-143"><a href="#rate_warped_analysis-143"><span class="linenos">143</span></a>    <span class="n">func</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span>
-</span><span id="rate_warped_analysis-144"><a href="#rate_warped_analysis-144"><span class="linenos">144</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-145"><a href="#rate_warped_analysis-145"><span class="linenos">145</span></a>    <span class="n">rate_kernel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-146"><a href="#rate_warped_analysis-146"><span class="linenos">146</span></a>    <span class="n">dt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="rate_warped_analysis-147"><a href="#rate_warped_analysis-147"><span class="linenos">147</span></a><span class="p">):</span>
-</span><span id="rate_warped_analysis-148"><a href="#rate_warped_analysis-148"><span class="linenos">148</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="rate_warped_analysis-149"><a href="#rate_warped_analysis-149"><span class="linenos">149</span></a><span class="sd">    Apply a function after warping time according to instantaneous rate.</span>
-</span><span id="rate_warped_analysis-150"><a href="#rate_warped_analysis-150"><span class="linenos">150</span></a>
-</span><span id="rate_warped_analysis-151"><a href="#rate_warped_analysis-151"><span class="linenos">151</span></a><span class="sd">    Parameters</span>
-</span><span id="rate_warped_analysis-152"><a href="#rate_warped_analysis-152"><span class="linenos">152</span></a><span class="sd">    ----------</span>
-</span><span id="rate_warped_analysis-153"><a href="#rate_warped_analysis-153"><span class="linenos">153</span></a><span class="sd">    spiketimes:</span>
-</span><span id="rate_warped_analysis-154"><a href="#rate_warped_analysis-154"><span class="linenos">154</span></a><span class="sd">        Canonical spike representation.</span>
-</span><span id="rate_warped_analysis-155"><a href="#rate_warped_analysis-155"><span class="linenos">155</span></a><span class="sd">    window:</span>
-</span><span id="rate_warped_analysis-156"><a href="#rate_warped_analysis-156"><span class="linenos">156</span></a><span class="sd">        Window size in warped time. Use `&quot;full&quot;` to analyze the complete warped</span>
-</span><span id="rate_warped_analysis-157"><a href="#rate_warped_analysis-157"><span class="linenos">157</span></a><span class="sd">        recording at once.</span>
-</span><span id="rate_warped_analysis-158"><a href="#rate_warped_analysis-158"><span class="linenos">158</span></a><span class="sd">    step:</span>
-</span><span id="rate_warped_analysis-159"><a href="#rate_warped_analysis-159"><span class="linenos">159</span></a><span class="sd">        Step size in warped time.</span>
-</span><span id="rate_warped_analysis-160"><a href="#rate_warped_analysis-160"><span class="linenos">160</span></a><span class="sd">    tlim:</span>
-</span><span id="rate_warped_analysis-161"><a href="#rate_warped_analysis-161"><span class="linenos">161</span></a><span class="sd">        Optional `[tmin, tmax]` interval in ms.</span>
-</span><span id="rate_warped_analysis-162"><a href="#rate_warped_analysis-162"><span class="linenos">162</span></a><span class="sd">    rate:</span>
-</span><span id="rate_warped_analysis-163"><a href="#rate_warped_analysis-163"><span class="linenos">163</span></a><span class="sd">        Optional precomputed `(rate, time)` tuple as returned by</span>
-</span><span id="rate_warped_analysis-164"><a href="#rate_warped_analysis-164"><span class="linenos">164</span></a><span class="sd">        `kernel_rate(...)`.</span>
-</span><span id="rate_warped_analysis-165"><a href="#rate_warped_analysis-165"><span class="linenos">165</span></a><span class="sd">    func:</span>
-</span><span id="rate_warped_analysis-166"><a href="#rate_warped_analysis-166"><span class="linenos">166</span></a><span class="sd">        Statistic to evaluate on the warped spike train.</span>
-</span><span id="rate_warped_analysis-167"><a href="#rate_warped_analysis-167"><span class="linenos">167</span></a><span class="sd">    kwargs:</span>
-</span><span id="rate_warped_analysis-168"><a href="#rate_warped_analysis-168"><span class="linenos">168</span></a><span class="sd">        Optional keyword arguments forwarded to `func`.</span>
-</span><span id="rate_warped_analysis-169"><a href="#rate_warped_analysis-169"><span class="linenos">169</span></a><span class="sd">    rate_kernel:</span>
-</span><span id="rate_warped_analysis-170"><a href="#rate_warped_analysis-170"><span class="linenos">170</span></a><span class="sd">        Kernel used when `rate` is not provided.</span>
-</span><span id="rate_warped_analysis-171"><a href="#rate_warped_analysis-171"><span class="linenos">171</span></a><span class="sd">    dt:</span>
-</span><span id="rate_warped_analysis-172"><a href="#rate_warped_analysis-172"><span class="linenos">172</span></a><span class="sd">        Sampling interval in ms used for the rate estimate.</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="rate_warped_analysis-160"><a href="#rate_warped_analysis-160"><span class="linenos">160</span></a><span class="k">def</span><span class="w"> </span><span class="nf">rate_warped_analysis</span><span class="p">(</span>
+</span><span id="rate_warped_analysis-161"><a href="#rate_warped_analysis-161"><span class="linenos">161</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-162"><a href="#rate_warped_analysis-162"><span class="linenos">162</span></a>    <span class="n">window</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-163"><a href="#rate_warped_analysis-163"><span class="linenos">163</span></a>    <span class="n">step</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-164"><a href="#rate_warped_analysis-164"><span class="linenos">164</span></a>    <span class="n">tlim</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-165"><a href="#rate_warped_analysis-165"><span class="linenos">165</span></a>    <span class="n">rate</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-166"><a href="#rate_warped_analysis-166"><span class="linenos">166</span></a>    <span class="n">func</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span>
+</span><span id="rate_warped_analysis-167"><a href="#rate_warped_analysis-167"><span class="linenos">167</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-168"><a href="#rate_warped_analysis-168"><span class="linenos">168</span></a>    <span class="n">rate_kernel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-169"><a href="#rate_warped_analysis-169"><span class="linenos">169</span></a>    <span class="n">dt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="rate_warped_analysis-170"><a href="#rate_warped_analysis-170"><span class="linenos">170</span></a><span class="p">):</span>
+</span><span id="rate_warped_analysis-171"><a href="#rate_warped_analysis-171"><span class="linenos">171</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="rate_warped_analysis-172"><a href="#rate_warped_analysis-172"><span class="linenos">172</span></a><span class="sd">    Apply a function after warping time according to instantaneous rate.</span>
 </span><span id="rate_warped_analysis-173"><a href="#rate_warped_analysis-173"><span class="linenos">173</span></a>
-</span><span id="rate_warped_analysis-174"><a href="#rate_warped_analysis-174"><span class="linenos">174</span></a><span class="sd">    Examples</span>
-</span><span id="rate_warped_analysis-175"><a href="#rate_warped_analysis-175"><span class="linenos">175</span></a><span class="sd">    --------</span>
-</span><span id="rate_warped_analysis-176"><a href="#rate_warped_analysis-176"><span class="linenos">176</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 3.0, 6.0], [0.0, 0.0, 0.0]])</span>
-</span><span id="rate_warped_analysis-177"><a href="#rate_warped_analysis-177"><span class="linenos">177</span></a><span class="sd">    &gt;&gt;&gt; result, warped_duration = rate_warped_analysis(</span>
-</span><span id="rate_warped_analysis-178"><a href="#rate_warped_analysis-178"><span class="linenos">178</span></a><span class="sd">    ...     spikes,</span>
-</span><span id="rate_warped_analysis-179"><a href="#rate_warped_analysis-179"><span class="linenos">179</span></a><span class="sd">    ...     window=&quot;full&quot;,</span>
-</span><span id="rate_warped_analysis-180"><a href="#rate_warped_analysis-180"><span class="linenos">180</span></a><span class="sd">    ...     func=lambda s: s.shape[1],</span>
-</span><span id="rate_warped_analysis-181"><a href="#rate_warped_analysis-181"><span class="linenos">181</span></a><span class="sd">    ...     rate=(pylab.array([[500.0, 500.0, 500.0]]), pylab.array([0.0, 1.0, 2.0])),</span>
-</span><span id="rate_warped_analysis-182"><a href="#rate_warped_analysis-182"><span class="linenos">182</span></a><span class="sd">    ...     dt=1.0,</span>
-</span><span id="rate_warped_analysis-183"><a href="#rate_warped_analysis-183"><span class="linenos">183</span></a><span class="sd">    ... )</span>
-</span><span id="rate_warped_analysis-184"><a href="#rate_warped_analysis-184"><span class="linenos">184</span></a><span class="sd">    &gt;&gt;&gt; int(result), round(float(warped_duration), 3)</span>
-</span><span id="rate_warped_analysis-185"><a href="#rate_warped_analysis-185"><span class="linenos">185</span></a><span class="sd">    (3, 1.5)</span>
-</span><span id="rate_warped_analysis-186"><a href="#rate_warped_analysis-186"><span class="linenos">186</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="rate_warped_analysis-187"><a href="#rate_warped_analysis-187"><span class="linenos">187</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="rate_warped_analysis-188"><a href="#rate_warped_analysis-188"><span class="linenos">188</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="rate_warped_analysis-189"><a href="#rate_warped_analysis-189"><span class="linenos">189</span></a>    <span class="k">if</span> <span class="n">rate_kernel</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="rate_warped_analysis-190"><a href="#rate_warped_analysis-190"><span class="linenos">190</span></a>        <span class="n">rate_kernel</span> <span class="o">=</span> <span class="n">gaussian_kernel</span><span class="p">(</span><span class="mf">50.0</span><span class="p">)</span>
-</span><span id="rate_warped_analysis-191"><a href="#rate_warped_analysis-191"><span class="linenos">191</span></a>    <span class="k">if</span> <span class="n">rate</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="rate_warped_analysis-192"><a href="#rate_warped_analysis-192"><span class="linenos">192</span></a>        <span class="n">rate</span> <span class="o">=</span> <span class="n">kernel_rate</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_kernel</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
-</span><span id="rate_warped_analysis-193"><a href="#rate_warped_analysis-193"><span class="linenos">193</span></a>
-</span><span id="rate_warped_analysis-194"><a href="#rate_warped_analysis-194"><span class="linenos">194</span></a>    <span class="n">rate</span><span class="p">,</span> <span class="n">trate</span> <span class="o">=</span> <span class="n">rate</span>
-</span><span id="rate_warped_analysis-195"><a href="#rate_warped_analysis-195"><span class="linenos">195</span></a>    <span class="n">rate_tlim</span> <span class="o">=</span> <span class="p">[</span><span class="n">trate</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">trate</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
-</span><span id="rate_warped_analysis-196"><a href="#rate_warped_analysis-196"><span class="linenos">196</span></a>    <span class="n">spiketimes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_tlim</span><span class="p">)</span>
-</span><span id="rate_warped_analysis-197"><a href="#rate_warped_analysis-197"><span class="linenos">197</span></a>
-</span><span id="rate_warped_analysis-198"><a href="#rate_warped_analysis-198"><span class="linenos">198</span></a>    <span class="n">ot</span> <span class="o">=</span> <span class="n">pylab</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span> <span class="o">/</span> <span class="mf">1000.0</span> <span class="o">*</span> <span class="n">dt</span>
-</span><span id="rate_warped_analysis-199"><a href="#rate_warped_analysis-199"><span class="linenos">199</span></a>    <span class="n">w_spiketimes</span> <span class="o">=</span> <span class="n">spiketimes</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-</span><span id="rate_warped_analysis-200"><a href="#rate_warped_analysis-200"><span class="linenos">200</span></a>    <span class="n">w_spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:]</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:],</span> <span class="n">trate</span><span class="p">,</span> <span class="n">ot</span><span class="p">)</span>
-</span><span id="rate_warped_analysis-201"><a href="#rate_warped_analysis-201"><span class="linenos">201</span></a>
-</span><span id="rate_warped_analysis-202"><a href="#rate_warped_analysis-202"><span class="linenos">202</span></a>    <span class="k">if</span> <span class="n">window</span> <span class="o">==</span> <span class="s2">&quot;full&quot;</span><span class="p">:</span>
-</span><span id="rate_warped_analysis-203"><a href="#rate_warped_analysis-203"><span class="linenos">203</span></a>        <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">w_spiketimes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">),</span> <span class="n">ot</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
-</span><span id="rate_warped_analysis-204"><a href="#rate_warped_analysis-204"><span class="linenos">204</span></a>
-</span><span id="rate_warped_analysis-205"><a href="#rate_warped_analysis-205"><span class="linenos">205</span></a>    <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_resolved</span><span class="p">(</span>
-</span><span id="rate_warped_analysis-206"><a href="#rate_warped_analysis-206"><span class="linenos">206</span></a>        <span class="n">w_spiketimes</span><span class="p">,</span> <span class="n">window</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">tstep</span><span class="o">=</span><span class="n">step</span>
-</span><span id="rate_warped_analysis-207"><a href="#rate_warped_analysis-207"><span class="linenos">207</span></a>    <span class="p">)</span>
-</span><span id="rate_warped_analysis-208"><a href="#rate_warped_analysis-208"><span class="linenos">208</span></a>    <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">tresult</span><span class="p">,</span> <span class="n">ot</span><span class="p">,</span> <span class="n">trate</span><span class="p">)</span>
-</span><span id="rate_warped_analysis-209"><a href="#rate_warped_analysis-209"><span class="linenos">209</span></a>    <span class="k">return</span> <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span>
+</span><span id="rate_warped_analysis-174"><a href="#rate_warped_analysis-174"><span class="linenos">174</span></a><span class="sd">    Parameters</span>
+</span><span id="rate_warped_analysis-175"><a href="#rate_warped_analysis-175"><span class="linenos">175</span></a><span class="sd">    ----------</span>
+</span><span id="rate_warped_analysis-176"><a href="#rate_warped_analysis-176"><span class="linenos">176</span></a><span class="sd">    spiketimes:</span>
+</span><span id="rate_warped_analysis-177"><a href="#rate_warped_analysis-177"><span class="linenos">177</span></a><span class="sd">        Canonical spike representation.</span>
+</span><span id="rate_warped_analysis-178"><a href="#rate_warped_analysis-178"><span class="linenos">178</span></a><span class="sd">    window:</span>
+</span><span id="rate_warped_analysis-179"><a href="#rate_warped_analysis-179"><span class="linenos">179</span></a><span class="sd">        Window size in warped time. Use `&quot;full&quot;` to analyze the complete warped</span>
+</span><span id="rate_warped_analysis-180"><a href="#rate_warped_analysis-180"><span class="linenos">180</span></a><span class="sd">        recording at once.</span>
+</span><span id="rate_warped_analysis-181"><a href="#rate_warped_analysis-181"><span class="linenos">181</span></a><span class="sd">    step:</span>
+</span><span id="rate_warped_analysis-182"><a href="#rate_warped_analysis-182"><span class="linenos">182</span></a><span class="sd">        Step size in warped time.</span>
+</span><span id="rate_warped_analysis-183"><a href="#rate_warped_analysis-183"><span class="linenos">183</span></a><span class="sd">    tlim:</span>
+</span><span id="rate_warped_analysis-184"><a href="#rate_warped_analysis-184"><span class="linenos">184</span></a><span class="sd">        Optional `[tmin, tmax]` interval in ms.</span>
+</span><span id="rate_warped_analysis-185"><a href="#rate_warped_analysis-185"><span class="linenos">185</span></a><span class="sd">    rate:</span>
+</span><span id="rate_warped_analysis-186"><a href="#rate_warped_analysis-186"><span class="linenos">186</span></a><span class="sd">        Optional precomputed `(rate, time)` tuple as returned by</span>
+</span><span id="rate_warped_analysis-187"><a href="#rate_warped_analysis-187"><span class="linenos">187</span></a><span class="sd">        `kernel_rate(...)`.</span>
+</span><span id="rate_warped_analysis-188"><a href="#rate_warped_analysis-188"><span class="linenos">188</span></a><span class="sd">    func:</span>
+</span><span id="rate_warped_analysis-189"><a href="#rate_warped_analysis-189"><span class="linenos">189</span></a><span class="sd">        Statistic to evaluate on the warped spike train.</span>
+</span><span id="rate_warped_analysis-190"><a href="#rate_warped_analysis-190"><span class="linenos">190</span></a><span class="sd">    kwargs:</span>
+</span><span id="rate_warped_analysis-191"><a href="#rate_warped_analysis-191"><span class="linenos">191</span></a><span class="sd">        Optional keyword arguments forwarded to `func`.</span>
+</span><span id="rate_warped_analysis-192"><a href="#rate_warped_analysis-192"><span class="linenos">192</span></a><span class="sd">    rate_kernel:</span>
+</span><span id="rate_warped_analysis-193"><a href="#rate_warped_analysis-193"><span class="linenos">193</span></a><span class="sd">        Kernel used when `rate` is not provided.</span>
+</span><span id="rate_warped_analysis-194"><a href="#rate_warped_analysis-194"><span class="linenos">194</span></a><span class="sd">    dt:</span>
+</span><span id="rate_warped_analysis-195"><a href="#rate_warped_analysis-195"><span class="linenos">195</span></a><span class="sd">        Sampling interval in ms used for the rate estimate.</span>
+</span><span id="rate_warped_analysis-196"><a href="#rate_warped_analysis-196"><span class="linenos">196</span></a>
+</span><span id="rate_warped_analysis-197"><a href="#rate_warped_analysis-197"><span class="linenos">197</span></a><span class="sd">    Examples</span>
+</span><span id="rate_warped_analysis-198"><a href="#rate_warped_analysis-198"><span class="linenos">198</span></a><span class="sd">    --------</span>
+</span><span id="rate_warped_analysis-199"><a href="#rate_warped_analysis-199"><span class="linenos">199</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 3.0, 6.0], [0.0, 0.0, 0.0]])</span>
+</span><span id="rate_warped_analysis-200"><a href="#rate_warped_analysis-200"><span class="linenos">200</span></a><span class="sd">    &gt;&gt;&gt; result, warped_duration = rate_warped_analysis(</span>
+</span><span id="rate_warped_analysis-201"><a href="#rate_warped_analysis-201"><span class="linenos">201</span></a><span class="sd">    ...     spikes,</span>
+</span><span id="rate_warped_analysis-202"><a href="#rate_warped_analysis-202"><span class="linenos">202</span></a><span class="sd">    ...     window=&quot;full&quot;,</span>
+</span><span id="rate_warped_analysis-203"><a href="#rate_warped_analysis-203"><span class="linenos">203</span></a><span class="sd">    ...     func=lambda s: s.shape[1],</span>
+</span><span id="rate_warped_analysis-204"><a href="#rate_warped_analysis-204"><span class="linenos">204</span></a><span class="sd">    ...     rate=(pylab.array([[500.0, 500.0, 500.0]]), pylab.array([0.0, 1.0, 2.0])),</span>
+</span><span id="rate_warped_analysis-205"><a href="#rate_warped_analysis-205"><span class="linenos">205</span></a><span class="sd">    ...     dt=1.0,</span>
+</span><span id="rate_warped_analysis-206"><a href="#rate_warped_analysis-206"><span class="linenos">206</span></a><span class="sd">    ... )</span>
+</span><span id="rate_warped_analysis-207"><a href="#rate_warped_analysis-207"><span class="linenos">207</span></a><span class="sd">    &gt;&gt;&gt; int(result), round(float(warped_duration), 3)</span>
+</span><span id="rate_warped_analysis-208"><a href="#rate_warped_analysis-208"><span class="linenos">208</span></a><span class="sd">    (3, 1.5)</span>
+</span><span id="rate_warped_analysis-209"><a href="#rate_warped_analysis-209"><span class="linenos">209</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="rate_warped_analysis-210"><a href="#rate_warped_analysis-210"><span class="linenos">210</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="rate_warped_analysis-211"><a href="#rate_warped_analysis-211"><span class="linenos">211</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="rate_warped_analysis-212"><a href="#rate_warped_analysis-212"><span class="linenos">212</span></a>    <span class="k">if</span> <span class="n">rate_kernel</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="rate_warped_analysis-213"><a href="#rate_warped_analysis-213"><span class="linenos">213</span></a>        <span class="n">rate_kernel</span> <span class="o">=</span> <span class="n">gaussian_kernel</span><span class="p">(</span><span class="mf">50.0</span><span class="p">)</span>
+</span><span id="rate_warped_analysis-214"><a href="#rate_warped_analysis-214"><span class="linenos">214</span></a>    <span class="k">if</span> <span class="n">rate</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="rate_warped_analysis-215"><a href="#rate_warped_analysis-215"><span class="linenos">215</span></a>        <span class="n">rate</span> <span class="o">=</span> <span class="n">kernel_rate</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_kernel</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
+</span><span id="rate_warped_analysis-216"><a href="#rate_warped_analysis-216"><span class="linenos">216</span></a>
+</span><span id="rate_warped_analysis-217"><a href="#rate_warped_analysis-217"><span class="linenos">217</span></a>    <span class="n">rate</span><span class="p">,</span> <span class="n">trate</span> <span class="o">=</span> <span class="n">rate</span>
+</span><span id="rate_warped_analysis-218"><a href="#rate_warped_analysis-218"><span class="linenos">218</span></a>    <span class="n">rate_tlim</span> <span class="o">=</span> <span class="p">[</span><span class="n">trate</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">trate</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+</span><span id="rate_warped_analysis-219"><a href="#rate_warped_analysis-219"><span class="linenos">219</span></a>    <span class="n">spiketimes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">rate_tlim</span><span class="p">)</span>
+</span><span id="rate_warped_analysis-220"><a href="#rate_warped_analysis-220"><span class="linenos">220</span></a>
+</span><span id="rate_warped_analysis-221"><a href="#rate_warped_analysis-221"><span class="linenos">221</span></a>    <span class="n">ot</span> <span class="o">=</span> <span class="n">pylab</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">rate</span><span class="p">)</span> <span class="o">/</span> <span class="mf">1000.0</span> <span class="o">*</span> <span class="n">dt</span>
+</span><span id="rate_warped_analysis-222"><a href="#rate_warped_analysis-222"><span class="linenos">222</span></a>    <span class="n">w_spiketimes</span> <span class="o">=</span> <span class="n">spiketimes</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+</span><span id="rate_warped_analysis-223"><a href="#rate_warped_analysis-223"><span class="linenos">223</span></a>    <span class="n">w_spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:]</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="p">:],</span> <span class="n">trate</span><span class="p">,</span> <span class="n">ot</span><span class="p">)</span>
+</span><span id="rate_warped_analysis-224"><a href="#rate_warped_analysis-224"><span class="linenos">224</span></a>
+</span><span id="rate_warped_analysis-225"><a href="#rate_warped_analysis-225"><span class="linenos">225</span></a>    <span class="k">if</span> <span class="n">window</span> <span class="o">==</span> <span class="s2">&quot;full&quot;</span><span class="p">:</span>
+</span><span id="rate_warped_analysis-226"><a href="#rate_warped_analysis-226"><span class="linenos">226</span></a>        <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">w_spiketimes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">),</span> <span class="n">ot</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+</span><span id="rate_warped_analysis-227"><a href="#rate_warped_analysis-227"><span class="linenos">227</span></a>
+</span><span id="rate_warped_analysis-228"><a href="#rate_warped_analysis-228"><span class="linenos">228</span></a>    <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_resolved</span><span class="p">(</span>
+</span><span id="rate_warped_analysis-229"><a href="#rate_warped_analysis-229"><span class="linenos">229</span></a>        <span class="n">w_spiketimes</span><span class="p">,</span> <span class="n">window</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">tstep</span><span class="o">=</span><span class="n">step</span>
+</span><span id="rate_warped_analysis-230"><a href="#rate_warped_analysis-230"><span class="linenos">230</span></a>    <span class="p">)</span>
+</span><span id="rate_warped_analysis-231"><a href="#rate_warped_analysis-231"><span class="linenos">231</span></a>    <span class="n">tresult</span> <span class="o">=</span> <span class="n">time_warp</span><span class="p">(</span><span class="n">tresult</span><span class="p">,</span> <span class="n">ot</span><span class="p">,</span> <span class="n">trate</span><span class="p">)</span>
+</span><span id="rate_warped_analysis-232"><a href="#rate_warped_analysis-232"><span class="linenos">232</span></a>    <span class="k">return</span> <span class="n">result</span><span class="p">,</span> <span class="n">tresult</span>
 </span></pre></div>
 
 
@@ -409,68 +455,68 @@ recording at once.</li>
 
     </div>
     <a class="headerlink" href="#time_resolved"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="time_resolved-26"><a href="#time_resolved-26"><span class="linenos">26</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved</span><span class="p">(</span>
-</span><span id="time_resolved-27"><a href="#time_resolved-27"><span class="linenos">27</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
-</span><span id="time_resolved-28"><a href="#time_resolved-28"><span class="linenos">28</span></a>    <span class="n">window</span><span class="p">,</span>
-</span><span id="time_resolved-29"><a href="#time_resolved-29"><span class="linenos">29</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
-</span><span id="time_resolved-30"><a href="#time_resolved-30"><span class="linenos">30</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="time_resolved-31"><a href="#time_resolved-31"><span class="linenos">31</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="time_resolved-32"><a href="#time_resolved-32"><span class="linenos">32</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="time_resolved-33"><a href="#time_resolved-33"><span class="linenos">33</span></a><span class="p">):</span>
-</span><span id="time_resolved-34"><a href="#time_resolved-34"><span class="linenos">34</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="time_resolved-35"><a href="#time_resolved-35"><span class="linenos">35</span></a><span class="sd">    Apply a function to successive windows of a spike train.</span>
-</span><span id="time_resolved-36"><a href="#time_resolved-36"><span class="linenos">36</span></a>
-</span><span id="time_resolved-37"><a href="#time_resolved-37"><span class="linenos">37</span></a><span class="sd">    Parameters</span>
-</span><span id="time_resolved-38"><a href="#time_resolved-38"><span class="linenos">38</span></a><span class="sd">    ----------</span>
-</span><span id="time_resolved-39"><a href="#time_resolved-39"><span class="linenos">39</span></a><span class="sd">    spiketimes:</span>
-</span><span id="time_resolved-40"><a href="#time_resolved-40"><span class="linenos">40</span></a><span class="sd">        Canonical spike representation.</span>
-</span><span id="time_resolved-41"><a href="#time_resolved-41"><span class="linenos">41</span></a><span class="sd">    window:</span>
-</span><span id="time_resolved-42"><a href="#time_resolved-42"><span class="linenos">42</span></a><span class="sd">        Window size in ms.</span>
-</span><span id="time_resolved-43"><a href="#time_resolved-43"><span class="linenos">43</span></a><span class="sd">    func:</span>
-</span><span id="time_resolved-44"><a href="#time_resolved-44"><span class="linenos">44</span></a><span class="sd">        Callable receiving the cropped `spiketimes` of each window.</span>
-</span><span id="time_resolved-45"><a href="#time_resolved-45"><span class="linenos">45</span></a><span class="sd">    kwargs:</span>
-</span><span id="time_resolved-46"><a href="#time_resolved-46"><span class="linenos">46</span></a><span class="sd">        Optional keyword arguments passed to `func`.</span>
-</span><span id="time_resolved-47"><a href="#time_resolved-47"><span class="linenos">47</span></a><span class="sd">    tlim:</span>
-</span><span id="time_resolved-48"><a href="#time_resolved-48"><span class="linenos">48</span></a><span class="sd">        Optional analysis interval `[tmin, tmax]` in ms.</span>
-</span><span id="time_resolved-49"><a href="#time_resolved-49"><span class="linenos">49</span></a><span class="sd">    tstep:</span>
-</span><span id="time_resolved-50"><a href="#time_resolved-50"><span class="linenos">50</span></a><span class="sd">        Window step size in ms.</span>
-</span><span id="time_resolved-51"><a href="#time_resolved-51"><span class="linenos">51</span></a>
-</span><span id="time_resolved-52"><a href="#time_resolved-52"><span class="linenos">52</span></a><span class="sd">    Returns</span>
-</span><span id="time_resolved-53"><a href="#time_resolved-53"><span class="linenos">53</span></a><span class="sd">    -------</span>
-</span><span id="time_resolved-54"><a href="#time_resolved-54"><span class="linenos">54</span></a><span class="sd">    tuple[list, np.ndarray]</span>
-</span><span id="time_resolved-55"><a href="#time_resolved-55"><span class="linenos">55</span></a><span class="sd">        Function outputs and window-center times.</span>
-</span><span id="time_resolved-56"><a href="#time_resolved-56"><span class="linenos">56</span></a>
-</span><span id="time_resolved-57"><a href="#time_resolved-57"><span class="linenos">57</span></a><span class="sd">    Examples</span>
-</span><span id="time_resolved-58"><a href="#time_resolved-58"><span class="linenos">58</span></a><span class="sd">    --------</span>
-</span><span id="time_resolved-59"><a href="#time_resolved-59"><span class="linenos">59</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
-</span><span id="time_resolved-60"><a href="#time_resolved-60"><span class="linenos">60</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
-</span><span id="time_resolved-61"><a href="#time_resolved-61"><span class="linenos">61</span></a><span class="sd">    &gt;&gt;&gt; values</span>
-</span><span id="time_resolved-62"><a href="#time_resolved-62"><span class="linenos">62</span></a><span class="sd">    [1, 1, 1, 1]</span>
-</span><span id="time_resolved-63"><a href="#time_resolved-63"><span class="linenos">63</span></a><span class="sd">    &gt;&gt;&gt; times.tolist()</span>
-</span><span id="time_resolved-64"><a href="#time_resolved-64"><span class="linenos">64</span></a><span class="sd">    [0.5, 1.5, 2.5, 3.5]</span>
-</span><span id="time_resolved-65"><a href="#time_resolved-65"><span class="linenos">65</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="time_resolved-66"><a href="#time_resolved-66"><span class="linenos">66</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="time_resolved-67"><a href="#time_resolved-67"><span class="linenos">67</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="time_resolved-68"><a href="#time_resolved-68"><span class="linenos">68</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="time_resolved-69"><a href="#time_resolved-69"><span class="linenos">69</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
-</span><span id="time_resolved-70"><a href="#time_resolved-70"><span class="linenos">70</span></a>    <span class="n">cut_spikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
-</span><span id="time_resolved-71"><a href="#time_resolved-71"><span class="linenos">71</span></a>
-</span><span id="time_resolved-72"><a href="#time_resolved-72"><span class="linenos">72</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="time_resolved-73"><a href="#time_resolved-73"><span class="linenos">73</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
-</span><span id="time_resolved-74"><a href="#time_resolved-74"><span class="linenos">74</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">-</span> <span class="n">tstep</span> <span class="o">-</span> <span class="n">tmin</span><span class="p">)</span>
-</span><span id="time_resolved-75"><a href="#time_resolved-75"><span class="linenos">75</span></a>
-</span><span id="time_resolved-76"><a href="#time_resolved-76"><span class="linenos">76</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="time_resolved-77"><a href="#time_resolved-77"><span class="linenos">77</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="time_resolved-78"><a href="#time_resolved-78"><span class="linenos">78</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
-</span><span id="time_resolved-79"><a href="#time_resolved-79"><span class="linenos">79</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">cut_spikes</span><span class="p">,</span> <span class="p">[</span><span class="n">tmin</span><span class="p">,</span> <span class="n">tmax</span><span class="p">])</span>
-</span><span id="time_resolved-80"><a href="#time_resolved-80"><span class="linenos">80</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
-</span><span id="time_resolved-81"><a href="#time_resolved-81"><span class="linenos">81</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
-</span><span id="time_resolved-82"><a href="#time_resolved-82"><span class="linenos">82</span></a>
-</span><span id="time_resolved-83"><a href="#time_resolved-83"><span class="linenos">83</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="time_resolved-84"><a href="#time_resolved-84"><span class="linenos">84</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="time_resolved-85"><a href="#time_resolved-85"><span class="linenos">85</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="time_resolved-86"><a href="#time_resolved-86"><span class="linenos">86</span></a>
-</span><span id="time_resolved-87"><a href="#time_resolved-87"><span class="linenos">87</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="time_resolved-49"><a href="#time_resolved-49"><span class="linenos"> 49</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved</span><span class="p">(</span>
+</span><span id="time_resolved-50"><a href="#time_resolved-50"><span class="linenos"> 50</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
+</span><span id="time_resolved-51"><a href="#time_resolved-51"><span class="linenos"> 51</span></a>    <span class="n">window</span><span class="p">,</span>
+</span><span id="time_resolved-52"><a href="#time_resolved-52"><span class="linenos"> 52</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
+</span><span id="time_resolved-53"><a href="#time_resolved-53"><span class="linenos"> 53</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="time_resolved-54"><a href="#time_resolved-54"><span class="linenos"> 54</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="time_resolved-55"><a href="#time_resolved-55"><span class="linenos"> 55</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="time_resolved-56"><a href="#time_resolved-56"><span class="linenos"> 56</span></a><span class="p">):</span>
+</span><span id="time_resolved-57"><a href="#time_resolved-57"><span class="linenos"> 57</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="time_resolved-58"><a href="#time_resolved-58"><span class="linenos"> 58</span></a><span class="sd">    Apply a function to successive windows of a spike train.</span>
+</span><span id="time_resolved-59"><a href="#time_resolved-59"><span class="linenos"> 59</span></a>
+</span><span id="time_resolved-60"><a href="#time_resolved-60"><span class="linenos"> 60</span></a><span class="sd">    Parameters</span>
+</span><span id="time_resolved-61"><a href="#time_resolved-61"><span class="linenos"> 61</span></a><span class="sd">    ----------</span>
+</span><span id="time_resolved-62"><a href="#time_resolved-62"><span class="linenos"> 62</span></a><span class="sd">    spiketimes:</span>
+</span><span id="time_resolved-63"><a href="#time_resolved-63"><span class="linenos"> 63</span></a><span class="sd">        Canonical spike representation.</span>
+</span><span id="time_resolved-64"><a href="#time_resolved-64"><span class="linenos"> 64</span></a><span class="sd">    window:</span>
+</span><span id="time_resolved-65"><a href="#time_resolved-65"><span class="linenos"> 65</span></a><span class="sd">        Window size in ms.</span>
+</span><span id="time_resolved-66"><a href="#time_resolved-66"><span class="linenos"> 66</span></a><span class="sd">    func:</span>
+</span><span id="time_resolved-67"><a href="#time_resolved-67"><span class="linenos"> 67</span></a><span class="sd">        Callable receiving the cropped `spiketimes` of each window.</span>
+</span><span id="time_resolved-68"><a href="#time_resolved-68"><span class="linenos"> 68</span></a><span class="sd">    kwargs:</span>
+</span><span id="time_resolved-69"><a href="#time_resolved-69"><span class="linenos"> 69</span></a><span class="sd">        Optional keyword arguments passed to `func`.</span>
+</span><span id="time_resolved-70"><a href="#time_resolved-70"><span class="linenos"> 70</span></a><span class="sd">    tlim:</span>
+</span><span id="time_resolved-71"><a href="#time_resolved-71"><span class="linenos"> 71</span></a><span class="sd">        Optional analysis interval `[tmin, tmax]` in ms.</span>
+</span><span id="time_resolved-72"><a href="#time_resolved-72"><span class="linenos"> 72</span></a><span class="sd">    tstep:</span>
+</span><span id="time_resolved-73"><a href="#time_resolved-73"><span class="linenos"> 73</span></a><span class="sd">        Window step size in ms.</span>
+</span><span id="time_resolved-74"><a href="#time_resolved-74"><span class="linenos"> 74</span></a>
+</span><span id="time_resolved-75"><a href="#time_resolved-75"><span class="linenos"> 75</span></a><span class="sd">    Returns</span>
+</span><span id="time_resolved-76"><a href="#time_resolved-76"><span class="linenos"> 76</span></a><span class="sd">    -------</span>
+</span><span id="time_resolved-77"><a href="#time_resolved-77"><span class="linenos"> 77</span></a><span class="sd">    tuple[list, np.ndarray]</span>
+</span><span id="time_resolved-78"><a href="#time_resolved-78"><span class="linenos"> 78</span></a><span class="sd">        Function outputs and window-center times.</span>
+</span><span id="time_resolved-79"><a href="#time_resolved-79"><span class="linenos"> 79</span></a>
+</span><span id="time_resolved-80"><a href="#time_resolved-80"><span class="linenos"> 80</span></a><span class="sd">    Examples</span>
+</span><span id="time_resolved-81"><a href="#time_resolved-81"><span class="linenos"> 81</span></a><span class="sd">    --------</span>
+</span><span id="time_resolved-82"><a href="#time_resolved-82"><span class="linenos"> 82</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
+</span><span id="time_resolved-83"><a href="#time_resolved-83"><span class="linenos"> 83</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
+</span><span id="time_resolved-84"><a href="#time_resolved-84"><span class="linenos"> 84</span></a><span class="sd">    &gt;&gt;&gt; values</span>
+</span><span id="time_resolved-85"><a href="#time_resolved-85"><span class="linenos"> 85</span></a><span class="sd">    [1, 1, 1, 1]</span>
+</span><span id="time_resolved-86"><a href="#time_resolved-86"><span class="linenos"> 86</span></a><span class="sd">    &gt;&gt;&gt; times.tolist()</span>
+</span><span id="time_resolved-87"><a href="#time_resolved-87"><span class="linenos"> 87</span></a><span class="sd">    [0.5, 1.5, 2.5, 3.5]</span>
+</span><span id="time_resolved-88"><a href="#time_resolved-88"><span class="linenos"> 88</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="time_resolved-89"><a href="#time_resolved-89"><span class="linenos"> 89</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="time_resolved-90"><a href="#time_resolved-90"><span class="linenos"> 90</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="time_resolved-91"><a href="#time_resolved-91"><span class="linenos"> 91</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="time_resolved-92"><a href="#time_resolved-92"><span class="linenos"> 92</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
+</span><span id="time_resolved-93"><a href="#time_resolved-93"><span class="linenos"> 93</span></a>    <span class="n">cut_spikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="p">)</span>
+</span><span id="time_resolved-94"><a href="#time_resolved-94"><span class="linenos"> 94</span></a>
+</span><span id="time_resolved-95"><a href="#time_resolved-95"><span class="linenos"> 95</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="time_resolved-96"><a href="#time_resolved-96"><span class="linenos"> 96</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
+</span><span id="time_resolved-97"><a href="#time_resolved-97"><span class="linenos"> 97</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">-</span> <span class="n">tstep</span> <span class="o">-</span> <span class="n">tmin</span><span class="p">)</span>
+</span><span id="time_resolved-98"><a href="#time_resolved-98"><span class="linenos"> 98</span></a>
+</span><span id="time_resolved-99"><a href="#time_resolved-99"><span class="linenos"> 99</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="time_resolved-100"><a href="#time_resolved-100"><span class="linenos">100</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="time_resolved-101"><a href="#time_resolved-101"><span class="linenos">101</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+</span><span id="time_resolved-102"><a href="#time_resolved-102"><span class="linenos">102</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">cut_spiketimes</span><span class="p">(</span><span class="n">cut_spikes</span><span class="p">,</span> <span class="p">[</span><span class="n">tmin</span><span class="p">,</span> <span class="n">tmax</span><span class="p">])</span>
+</span><span id="time_resolved-103"><a href="#time_resolved-103"><span class="linenos">103</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
+</span><span id="time_resolved-104"><a href="#time_resolved-104"><span class="linenos">104</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
+</span><span id="time_resolved-105"><a href="#time_resolved-105"><span class="linenos">105</span></a>
+</span><span id="time_resolved-106"><a href="#time_resolved-106"><span class="linenos">106</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="time_resolved-107"><a href="#time_resolved-107"><span class="linenos">107</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="time_resolved-108"><a href="#time_resolved-108"><span class="linenos">108</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="time_resolved-109"><a href="#time_resolved-109"><span class="linenos">109</span></a>
+</span><span id="time_resolved-110"><a href="#time_resolved-110"><span class="linenos">110</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -519,51 +565,51 @@ recording at once.</li>
 
     </div>
     <a class="headerlink" href="#time_resolved_new"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="time_resolved_new-90"><a href="#time_resolved_new-90"><span class="linenos"> 90</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved_new</span><span class="p">(</span>
-</span><span id="time_resolved_new-91"><a href="#time_resolved_new-91"><span class="linenos"> 91</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
-</span><span id="time_resolved_new-92"><a href="#time_resolved_new-92"><span class="linenos"> 92</span></a>    <span class="n">window</span><span class="p">,</span>
-</span><span id="time_resolved_new-93"><a href="#time_resolved_new-93"><span class="linenos"> 93</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
-</span><span id="time_resolved_new-94"><a href="#time_resolved_new-94"><span class="linenos"> 94</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="time_resolved_new-95"><a href="#time_resolved_new-95"><span class="linenos"> 95</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="time_resolved_new-96"><a href="#time_resolved_new-96"><span class="linenos"> 96</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
-</span><span id="time_resolved_new-97"><a href="#time_resolved_new-97"><span class="linenos"> 97</span></a><span class="p">):</span>
-</span><span id="time_resolved_new-98"><a href="#time_resolved_new-98"><span class="linenos"> 98</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-</span><span id="time_resolved_new-99"><a href="#time_resolved_new-99"><span class="linenos"> 99</span></a><span class="sd">    Windowed evaluation using an intermediate binary representation.</span>
-</span><span id="time_resolved_new-100"><a href="#time_resolved_new-100"><span class="linenos">100</span></a>
-</span><span id="time_resolved_new-101"><a href="#time_resolved_new-101"><span class="linenos">101</span></a><span class="sd">    This variant can be faster for repeated window extraction because the spike</span>
-</span><span id="time_resolved_new-102"><a href="#time_resolved_new-102"><span class="linenos">102</span></a><span class="sd">    train is binned once before the loop.</span>
-</span><span id="time_resolved_new-103"><a href="#time_resolved_new-103"><span class="linenos">103</span></a>
-</span><span id="time_resolved_new-104"><a href="#time_resolved_new-104"><span class="linenos">104</span></a><span class="sd">    Examples</span>
-</span><span id="time_resolved_new-105"><a href="#time_resolved_new-105"><span class="linenos">105</span></a><span class="sd">    --------</span>
-</span><span id="time_resolved_new-106"><a href="#time_resolved_new-106"><span class="linenos">106</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
-</span><span id="time_resolved_new-107"><a href="#time_resolved_new-107"><span class="linenos">107</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved_new(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
-</span><span id="time_resolved_new-108"><a href="#time_resolved_new-108"><span class="linenos">108</span></a><span class="sd">    &gt;&gt;&gt; values</span>
-</span><span id="time_resolved_new-109"><a href="#time_resolved_new-109"><span class="linenos">109</span></a><span class="sd">    [1, 1, 1, 1]</span>
-</span><span id="time_resolved_new-110"><a href="#time_resolved_new-110"><span class="linenos">110</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="time_resolved_new-111"><a href="#time_resolved_new-111"><span class="linenos">111</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="time_resolved_new-112"><a href="#time_resolved_new-112"><span class="linenos">112</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="time_resolved_new-113"><a href="#time_resolved_new-113"><span class="linenos">113</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="time_resolved_new-114"><a href="#time_resolved_new-114"><span class="linenos">114</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
-</span><span id="time_resolved_new-115"><a href="#time_resolved_new-115"><span class="linenos">115</span></a>
-</span><span id="time_resolved_new-116"><a href="#time_resolved_new-116"><span class="linenos">116</span></a>    <span class="n">binary</span><span class="p">,</span> <span class="n">btime</span> <span class="o">=</span> <span class="n">spiketimes_to_binary</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="o">=</span><span class="n">tlim</span><span class="p">)</span>
-</span><span id="time_resolved_new-117"><a href="#time_resolved_new-117"><span class="linenos">117</span></a>
-</span><span id="time_resolved_new-118"><a href="#time_resolved_new-118"><span class="linenos">118</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="time_resolved_new-119"><a href="#time_resolved_new-119"><span class="linenos">119</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
-</span><span id="time_resolved_new-120"><a href="#time_resolved_new-120"><span class="linenos">120</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">+</span> <span class="n">tmin</span><span class="p">)</span>
-</span><span id="time_resolved_new-121"><a href="#time_resolved_new-121"><span class="linenos">121</span></a>
-</span><span id="time_resolved_new-122"><a href="#time_resolved_new-122"><span class="linenos">122</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="time_resolved_new-123"><a href="#time_resolved_new-123"><span class="linenos">123</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="time_resolved_new-124"><a href="#time_resolved_new-124"><span class="linenos">124</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
-</span><span id="time_resolved_new-125"><a href="#time_resolved_new-125"><span class="linenos">125</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">binary_to_spiketimes</span><span class="p">(</span>
-</span><span id="time_resolved_new-126"><a href="#time_resolved_new-126"><span class="linenos">126</span></a>            <span class="n">binary</span><span class="p">[:,</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)],</span> <span class="n">btime</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)]</span>
-</span><span id="time_resolved_new-127"><a href="#time_resolved_new-127"><span class="linenos">127</span></a>        <span class="p">)</span>
-</span><span id="time_resolved_new-128"><a href="#time_resolved_new-128"><span class="linenos">128</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
-</span><span id="time_resolved_new-129"><a href="#time_resolved_new-129"><span class="linenos">129</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
-</span><span id="time_resolved_new-130"><a href="#time_resolved_new-130"><span class="linenos">130</span></a>
-</span><span id="time_resolved_new-131"><a href="#time_resolved_new-131"><span class="linenos">131</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="time_resolved_new-132"><a href="#time_resolved_new-132"><span class="linenos">132</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="time_resolved_new-133"><a href="#time_resolved_new-133"><span class="linenos">133</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
-</span><span id="time_resolved_new-134"><a href="#time_resolved_new-134"><span class="linenos">134</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="time_resolved_new-113"><a href="#time_resolved_new-113"><span class="linenos">113</span></a><span class="k">def</span><span class="w"> </span><span class="nf">time_resolved_new</span><span class="p">(</span>
+</span><span id="time_resolved_new-114"><a href="#time_resolved_new-114"><span class="linenos">114</span></a>    <span class="n">spiketimes</span><span class="p">,</span>
+</span><span id="time_resolved_new-115"><a href="#time_resolved_new-115"><span class="linenos">115</span></a>    <span class="n">window</span><span class="p">,</span>
+</span><span id="time_resolved_new-116"><a href="#time_resolved_new-116"><span class="linenos">116</span></a>    <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
+</span><span id="time_resolved_new-117"><a href="#time_resolved_new-117"><span class="linenos">117</span></a>    <span class="n">kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="time_resolved_new-118"><a href="#time_resolved_new-118"><span class="linenos">118</span></a>    <span class="n">tlim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="time_resolved_new-119"><a href="#time_resolved_new-119"><span class="linenos">119</span></a>    <span class="n">tstep</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="time_resolved_new-120"><a href="#time_resolved_new-120"><span class="linenos">120</span></a><span class="p">):</span>
+</span><span id="time_resolved_new-121"><a href="#time_resolved_new-121"><span class="linenos">121</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+</span><span id="time_resolved_new-122"><a href="#time_resolved_new-122"><span class="linenos">122</span></a><span class="sd">    Windowed evaluation using an intermediate binary representation.</span>
+</span><span id="time_resolved_new-123"><a href="#time_resolved_new-123"><span class="linenos">123</span></a>
+</span><span id="time_resolved_new-124"><a href="#time_resolved_new-124"><span class="linenos">124</span></a><span class="sd">    This variant can be faster for repeated window extraction because the spike</span>
+</span><span id="time_resolved_new-125"><a href="#time_resolved_new-125"><span class="linenos">125</span></a><span class="sd">    train is binned once before the loop.</span>
+</span><span id="time_resolved_new-126"><a href="#time_resolved_new-126"><span class="linenos">126</span></a>
+</span><span id="time_resolved_new-127"><a href="#time_resolved_new-127"><span class="linenos">127</span></a><span class="sd">    Examples</span>
+</span><span id="time_resolved_new-128"><a href="#time_resolved_new-128"><span class="linenos">128</span></a><span class="sd">    --------</span>
+</span><span id="time_resolved_new-129"><a href="#time_resolved_new-129"><span class="linenos">129</span></a><span class="sd">    &gt;&gt;&gt; spikes = pylab.array([[0.0, 2.0, 4.0], [0.0, 0.0, 0.0]])</span>
+</span><span id="time_resolved_new-130"><a href="#time_resolved_new-130"><span class="linenos">130</span></a><span class="sd">    &gt;&gt;&gt; values, times = time_resolved_new(spikes, window=2.0, func=lambda s: s.shape[1], tlim=[0.0, 5.0], tstep=1.0)</span>
+</span><span id="time_resolved_new-131"><a href="#time_resolved_new-131"><span class="linenos">131</span></a><span class="sd">    &gt;&gt;&gt; values</span>
+</span><span id="time_resolved_new-132"><a href="#time_resolved_new-132"><span class="linenos">132</span></a><span class="sd">    [1, 1, 1, 1]</span>
+</span><span id="time_resolved_new-133"><a href="#time_resolved_new-133"><span class="linenos">133</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="time_resolved_new-134"><a href="#time_resolved_new-134"><span class="linenos">134</span></a>    <span class="k">if</span> <span class="n">kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="time_resolved_new-135"><a href="#time_resolved_new-135"><span class="linenos">135</span></a>        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="time_resolved_new-136"><a href="#time_resolved_new-136"><span class="linenos">136</span></a>    <span class="k">if</span> <span class="n">tlim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="time_resolved_new-137"><a href="#time_resolved_new-137"><span class="linenos">137</span></a>        <span class="n">tlim</span> <span class="o">=</span> <span class="n">get_time_limits</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">)</span>
+</span><span id="time_resolved_new-138"><a href="#time_resolved_new-138"><span class="linenos">138</span></a>
+</span><span id="time_resolved_new-139"><a href="#time_resolved_new-139"><span class="linenos">139</span></a>    <span class="n">binary</span><span class="p">,</span> <span class="n">btime</span> <span class="o">=</span> <span class="n">spiketimes_to_binary</span><span class="p">(</span><span class="n">spiketimes</span><span class="p">,</span> <span class="n">tlim</span><span class="o">=</span><span class="n">tlim</span><span class="p">)</span>
+</span><span id="time_resolved_new-140"><a href="#time_resolved_new-140"><span class="linenos">140</span></a>
+</span><span id="time_resolved_new-141"><a href="#time_resolved_new-141"><span class="linenos">141</span></a>    <span class="n">tmin</span> <span class="o">=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="time_resolved_new-142"><a href="#time_resolved_new-142"><span class="linenos">142</span></a>    <span class="n">tmax</span> <span class="o">=</span> <span class="n">tmin</span> <span class="o">+</span> <span class="n">window</span>
+</span><span id="time_resolved_new-143"><a href="#time_resolved_new-143"><span class="linenos">143</span></a>    <span class="n">tcenter</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tmax</span> <span class="o">+</span> <span class="n">tmin</span><span class="p">)</span>
+</span><span id="time_resolved_new-144"><a href="#time_resolved_new-144"><span class="linenos">144</span></a>
+</span><span id="time_resolved_new-145"><a href="#time_resolved_new-145"><span class="linenos">145</span></a>    <span class="n">time</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="time_resolved_new-146"><a href="#time_resolved_new-146"><span class="linenos">146</span></a>    <span class="n">func_out</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="time_resolved_new-147"><a href="#time_resolved_new-147"><span class="linenos">147</span></a>    <span class="k">while</span> <span class="n">tmax</span> <span class="o">&lt;=</span> <span class="n">tlim</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+</span><span id="time_resolved_new-148"><a href="#time_resolved_new-148"><span class="linenos">148</span></a>        <span class="n">windowspikes</span> <span class="o">=</span> <span class="n">binary_to_spiketimes</span><span class="p">(</span>
+</span><span id="time_resolved_new-149"><a href="#time_resolved_new-149"><span class="linenos">149</span></a>            <span class="n">binary</span><span class="p">[:,</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)],</span> <span class="n">btime</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">tmin</span><span class="p">)</span> <span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">tmax</span><span class="p">)]</span>
+</span><span id="time_resolved_new-150"><a href="#time_resolved_new-150"><span class="linenos">150</span></a>        <span class="p">)</span>
+</span><span id="time_resolved_new-151"><a href="#time_resolved_new-151"><span class="linenos">151</span></a>        <span class="n">time</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tcenter</span><span class="p">)</span>
+</span><span id="time_resolved_new-152"><a href="#time_resolved_new-152"><span class="linenos">152</span></a>        <span class="n">func_out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">func</span><span class="p">(</span><span class="n">windowspikes</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">))</span>
+</span><span id="time_resolved_new-153"><a href="#time_resolved_new-153"><span class="linenos">153</span></a>
+</span><span id="time_resolved_new-154"><a href="#time_resolved_new-154"><span class="linenos">154</span></a>        <span class="n">tmin</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="time_resolved_new-155"><a href="#time_resolved_new-155"><span class="linenos">155</span></a>        <span class="n">tmax</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="time_resolved_new-156"><a href="#time_resolved_new-156"><span class="linenos">156</span></a>        <span class="n">tcenter</span> <span class="o">+=</span> <span class="n">tstep</span>
+</span><span id="time_resolved_new-157"><a href="#time_resolved_new-157"><span class="linenos">157</span></a>    <span class="k">return</span> <span class="n">func_out</span><span class="p">,</span> <span class="n">pylab</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">time</span><span class="p">)</span>
 </span></pre></div>
 
 

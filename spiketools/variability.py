@@ -2,6 +2,23 @@
 
 Unless noted otherwise, functions operate on canonical `spiketimes` arrays with
 times in row `0` and trial or unit indices in row `1`.
+
+Examples
+--------
+Shared example setup used throughout the documentation:
+
+```python
+from spiketools import gamma_spikes
+from spiketools.variability import cv2, cv_two, ff
+
+rates = [5.6, 6.3, 5.9, 6.5, 5.8, 6.1, 5.7, 6.4, 6.0, 5.5]
+orders = [1, 2, 2, 3, 1, 2, 3, 2, 1, 3]
+spiketimes = gamma_spikes(rates=rates, order=orders, tlim=[0.0, 5000.0], dt=1.0)
+
+fano = ff(spiketimes, tlim=[0.0, 5000.0])
+global_cv2 = cv2(spiketimes)
+local_cv2 = cv_two(spiketimes)
+```
 """
 
 from __future__ import annotations
