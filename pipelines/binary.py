@@ -284,6 +284,7 @@ def run_binary_simulation(
     *,
     output_name: str | None = None,
     population_rate_inits: Sequence[float] | None = None,
+    population_init_seed: int | None = None,
 ) -> Dict[str, Any]:
     binary_cfg = finalize_binary_config(parameter, binary_cfg)
     warm_numba_caches()
@@ -310,7 +311,15 @@ def run_binary_simulation(
             inferred = np.full(len(pops), float(default_rate), dtype=float)
         population_rate_inits = inferred
     if population_rate_inits is not None:
-        _apply_population_rate_initialization(network, population_rate_inits)
+        rng_state = None
+        if population_init_seed is not None:
+            rng_state = np.random.get_state()
+            np.random.seed(int(population_init_seed))
+        try:
+            _apply_population_rate_initialization(network, population_rate_inits)
+        finally:
+            if rng_state is not None:
+                np.random.set_state(rng_state)
     warmup_steps = int(binary_cfg["warmup_steps"])
     batch_size = int(binary_cfg["batch_size"])
     if warmup_steps > 0:
@@ -354,6 +363,12 @@ def run_binary_simulation(
         sample_interval=interval,
         populations=pops,
     )
+    neuron_states = network.reconstruct_states_from_diff_logs(
+        initial_state,
+        state_updates,
+        state_deltas,
+        sample_interval=interval,
+    )
     times = np.arange(rates.shape[0], dtype=np.int64) * interval
     spike_times, spike_ids = network.extract_spike_events_from_diff_logs(state_updates, state_deltas)
     if interval > 1 and state_updates.shape[1] > 0:
@@ -367,6 +382,7 @@ def run_binary_simulation(
         rates=rates,
         times=time_axis,
         names=np.array(names),
+        neuron_states=neuron_states,
         state_updates=state_updates,
         state_deltas=state_deltas,
         initial_state=initial_state,
@@ -382,12 +398,7 @@ def run_binary_simulation(
     plot_path = None
     onset_plot_path = None
     if binary_cfg.get("plot_activity"):
-        states = network.reconstruct_states_from_diff_logs(
-            initial_state,
-            state_updates,
-            state_deltas,
-            sample_interval=1,
-        )
+        states = neuron_states
         plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity.png")
         _save_activity_plot(states, interval, parameter, plot_path)
         onset_plot_path = os.path.join(binary_folder, f"{resolved_output_name}_activity_onsets.png")
@@ -438,6 +449,7 @@ def run_binary_simulation(
         "summary_path": summary_path,
     }
     del rates
+    del neuron_states
     del mean_values
     del network
     gc.collect()

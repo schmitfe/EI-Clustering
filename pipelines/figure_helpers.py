@@ -88,6 +88,7 @@ class InitTask:
     max_pairs: int
     needs_simulation: bool
     needs_analysis: bool
+    population_init_seed: int | None = None
 
 
 def resolve_focus_counts(parameter: Dict[str, Any], explicit: Iterable[int] | None = None) -> List[int]:
@@ -161,8 +162,25 @@ def ensure_fixpoint_bundle(
     folder = run_mean_field_simulation(args, param, r_eplus_values, focus_counts)
     if folder is None:
         folder = ensure_output_folder(param, tag=sim_tag_from_cfg(_filtered_parameter_for_tag(param)))
-    run_mean_field_analysis(folder, param, focus_counts, plot_erfs=sweep_cfg.plot_erfs)
     bundle_path = compute_fixpoint_bundle_path(param)
+    try:
+        run_mean_field_analysis(folder, param, focus_counts, plot_erfs=sweep_cfg.plot_erfs)
+    except FileNotFoundError as exc:
+        if "No .pkl files found" not in str(exc):
+            raise
+        empty_payload = {
+            "metadata": {
+                "source_folder": os.path.abspath(folder),
+                "analysis_parameter": dict(param),
+                "analysis_focus_counts": list(focus_counts),
+                "analysis_error": str(exc),
+                "mean_field_completed": False,
+            },
+            "fixpoints": {},
+        }
+        with open(bundle_path, "wb") as handle:
+            pickle.dump(empty_payload, handle)
+        return folder, bundle_path
     if not os.path.exists(bundle_path):
         raise FileNotFoundError(
             f"Fixpoint bundle {bundle_path} was not generated. Ensure the mean-field pipeline completed successfully."
@@ -320,6 +338,42 @@ def _resolve_fixpoint_candidates(
     if not reduced:
         raise ValueError("No fixpoint candidates matched the requested filters.")
     return reduced
+
+
+def _has_any_fixpoint_candidates(
+    parameter: Dict[str, Any],
+    bundle_path: str,
+    focus_counts: Sequence[int],
+) -> bool:
+    bundle = _load_fixpoint_bundle(bundle_path)
+    q_value = int(parameter.get("Q", 0) or 0)
+    if q_value <= 0:
+        return False
+    r_eplus = parameter.get("R_Eplus")
+    if r_eplus is None:
+        return False
+    try:
+        candidates = _load_fixpoint_candidates(bundle, focus_counts, "any", 2 * q_value, float(r_eplus))
+    except ValueError:
+        return False
+    return bool(candidates)
+
+
+def _uniform_init_candidate(parameter: Dict[str, Any], value: float = 0.1) -> Dict[str, Any]:
+    q_value = int(parameter.get("Q", 0) or 0)
+    if q_value <= 0:
+        raise ValueError("Parameter 'Q' must be positive.")
+    rates = np.full(2 * q_value, float(value), dtype=float)
+    return {
+        "id": f"uniform_{float(value):.3f}",
+        "focus_count": 0,
+        "index": 0,
+        "value": float("nan"),
+        "rates": rates.tolist(),
+        "stability": "mf_fallback",
+        "rep_label": "uniform_init",
+        "source": "uniform_fallback",
+    }
 
 
 def _binary_output_folder(parameter: Dict[str, Any], binary_cfg: Dict[str, Any]) -> str:
@@ -660,12 +714,14 @@ def _sampled_states_from_payload(payload: Dict[str, Any], *, stride: int) -> np.
         initial_state = payload.get("initial_state")
         if updates is None or deltas is None or initial_state is None:
             return np.zeros((0, 0), dtype=np.uint8)
-        interval = int(payload.get("sample_interval", 1) or 1)
+        # The saved diff logs are already decimated to the recording interval.
+        # Reconstruct every stored column here and only apply the analysis
+        # stride below; otherwise the trace collapses to a single sample.
         base_states = ClusteredEI_network.reconstruct_states_from_diff_logs(
             initial_state,
             updates,
             deltas,
-            sample_interval=interval,
+            sample_interval=1,
         )
     step = max(1, int(stride))
     return base_states[::step] if step > 1 else base_states
@@ -906,8 +962,26 @@ def _prepare_multi_init_tasks(spec: MultiInitCorrelationSpec) -> tuple[str, List
     target_rep = spec.parameter.get("R_Eplus")
     if target_rep is None:
         raise ValueError("Parameter 'R_Eplus' must be set before running the correlation workflow.")
-    candidates = _resolve_fixpoint_candidates(spec.parameter, spec.bundle_path, spec.focus_counts, spec.stability_filter)
-    picks = _select_fixpoints(candidates, seed=int(spec.seed_inits), count=max(0, int(spec.n_inits)))
+    fallback_to_uniform = False
+    try:
+        candidates = _resolve_fixpoint_candidates(spec.parameter, spec.bundle_path, spec.focus_counts, spec.stability_filter)
+        picks = _select_fixpoints(candidates, seed=int(spec.seed_inits), count=max(0, int(spec.n_inits)))
+    except (FileNotFoundError, ValueError) as exc:
+        if isinstance(exc, ValueError) and _has_any_fixpoint_candidates(spec.parameter, spec.bundle_path, spec.focus_counts):
+            raise
+        fallback_to_uniform = True
+        print(
+            "No mean-field fixpoints available for "
+            f"R_Eplus={float(target_rep):.4f}; falling back to uniform random init p=0.1."
+        )
+        base_candidate = _uniform_init_candidate(spec.parameter, value=0.1)
+        picks = []
+        for idx in range(max(0, int(spec.n_inits))):
+            candidate = dict(base_candidate)
+            candidate["id"] = f"{base_candidate['id']}_init{idx:04d}"
+            candidate["index"] = idx
+            candidate["population_init_seed"] = int(spec.seed_inits) + idx
+            picks.append(candidate)
     if not picks:
         raise RuntimeError("No initialization tasks were prepared for the correlation workflow.")
     binary_dir = _binary_output_folder(spec.parameter, binary_cfg)
@@ -944,6 +1018,11 @@ def _prepare_multi_init_tasks(spec: MultiInitCorrelationSpec) -> tuple[str, List
                 max_pairs=max(1, int(spec.max_pairs or DEFAULT_MAX_PAIRS)),
                 needs_simulation=needs_simulation,
                 needs_analysis=needs_analysis,
+                population_init_seed=(
+                    int(candidate["population_init_seed"])
+                    if fallback_to_uniform and candidate.get("population_init_seed") is not None
+                    else None
+                ),
             )
         )
     return analysis_dir, tasks
@@ -956,15 +1035,22 @@ def _process_task(task: InitTask) -> Dict[str, Any]:
     try:
         if task.needs_simulation:
             label = os.path.splitext(os.path.basename(task.trace_path))[0]
-            logs.append(
-                f"Simulating init {task.index}: fixpoint {task.candidate.get('id')} "
-                f"(focus {task.candidate.get('focus_count')}, stability {task.candidate.get('stability')})."
-            )
+            if task.candidate.get("source") == "uniform_fallback":
+                logs.append(
+                    f"Simulating init {task.index}: fallback uniform init p=0.1 "
+                    f"(seed {task.population_init_seed})."
+                )
+            else:
+                logs.append(
+                    f"Simulating init {task.index}: fixpoint {task.candidate.get('id')} "
+                    f"(focus {task.candidate.get('focus_count')}, stability {task.candidate.get('stability')})."
+                )
             result = run_binary_simulation(
                 task.parameter,
                 task.binary_cfg,
                 output_name=label,
                 population_rate_inits=task.candidate["rates"],
+                population_init_seed=task.population_init_seed,
             )
             trace_path = str(result["trace_path"])
         else:
@@ -1059,6 +1145,9 @@ def resolve_binary_trace_from_fixpoint(
             binary_cfg,
             output_name=trace_label,
             population_rate_inits=candidate["rates"],
+            population_init_seed=(
+                int(candidate["population_init_seed"]) if candidate.get("population_init_seed") is not None else None
+            ),
         )
         trace_path = str(result["trace_path"])
     return _load_trace_payload(trace_path)
