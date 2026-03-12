@@ -168,7 +168,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-prefix",
         type=str,
-        default="Figures/SuppFigure4",
+        default="Figures/FigureS2",
         help="Prefix for the saved figure files (default: %(default)s.{png,pdf}).",
     )
     return parser.parse_args()
@@ -554,9 +554,9 @@ def _save_figure(fig: plt.Figure, output_prefix: str) -> None:
     base.parent.mkdir(parents=True, exist_ok=True)
     png_path = base.with_suffix(".png")
     pdf_path = base.with_suffix(".pdf")
-    fig.savefig(png_path, dpi=600)
-    fig.savefig(pdf_path, dpi=600)
-    print(f"Stored Supplementary Figure 4 at {png_path} and {pdf_path}")
+    fig.savefig(png_path, dpi=600, bbox_inches="tight", pad_inches=0.05)
+    fig.savefig(pdf_path, dpi=600, bbox_inches="tight", pad_inches=0.05)
+    print(f"Stored Figure S2 at {png_path} and {pdf_path}")
 
 
 def main() -> None:

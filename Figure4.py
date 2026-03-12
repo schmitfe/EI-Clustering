@@ -599,8 +599,8 @@ def _plot_correlation_figure(
     #fig.tight_layout(rect=(0, 0, 1, 0.95))
     base = Path(output_prefix)
     base.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(base.with_suffix(".png"), dpi=600)
-    fig.savefig(base.with_suffix(".pdf"), dpi=600)
+    fig.savefig(base.with_suffix(".png"), dpi=600, bbox_inches="tight", pad_inches=0.05)
+    fig.savefig(base.with_suffix(".pdf"), dpi=600, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
     print(f"Stored Figure 4 at {base.with_suffix('.png')} and {base.with_suffix('.pdf')}")
 
