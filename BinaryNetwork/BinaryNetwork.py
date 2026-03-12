@@ -242,6 +242,18 @@ def warm_numba_caches() -> None:
     _NUMBA_WARMED = True
 
 
+def _compress_flat_samples(flat: np.ndarray, total_pairs: int) -> tuple[np.ndarray, np.ndarray]:
+    flat = np.asarray(flat, dtype=np.int64).ravel()
+    if flat.size == 0:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    if total_pairs <= 2_000_000:
+        counts = np.bincount(flat, minlength=total_pairs)
+        unique = np.flatnonzero(counts)
+        return unique.astype(np.int64, copy=False), counts[unique].astype(np.int64, copy=False)
+    unique, counts = np.unique(flat, return_counts=True)
+    return unique.astype(np.int64, copy=False), counts.astype(np.int64, copy=False)
+
+
 class NetworkElement:
     """Base class for network elements that occupy a slice in the global state."""
     def __init__(self, reference, name="Some Network Element"):
@@ -365,6 +377,19 @@ class Synapse(NetworkElement):
         pre_start, pre_end = int(self.view[0, 0]), int(self.view[0, 1])
         self.reference._write_weight_block(post_start, post_end, pre_start, pre_end, block)
 
+    def _append_sparse_entries(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
+        if self.reference.weight_mode != "sparse":
+            raise RuntimeError("Sparse entries can only be appended in sparse weight mode.")
+        if rows.size == 0:
+            return
+        post_start = int(self.view[1, 0])
+        pre_start = int(self.view[0, 0])
+        self.reference._append_sparse_entries(
+            np.asarray(rows, dtype=np.int64) + post_start,
+            np.asarray(cols, dtype=np.int64) + pre_start,
+            np.asarray(values, dtype=self.reference.weight_dtype),
+        )
+
     def initialze(self):
         raise NotImplementedError
 
@@ -383,13 +408,40 @@ class PairwiseBernoulliSynapse(Synapse):
         self.j = float(j)
 
     def initialze(self):
-        shape = (self.post.N, self.pre.N)
-        block = np.zeros(shape, dtype=self.reference.weight_dtype)
         p = self.p
         iterations = 1
         while p > 1:
             p /= 2.0
             iterations += 1
+        if self.reference.weight_mode == "sparse":
+            total_pairs = self.post.N * self.pre.N
+            if total_pairs == 0 or p <= 0.0:
+                return
+            data_chunks: List[np.ndarray] = []
+            row_chunks: List[np.ndarray] = []
+            col_chunks: List[np.ndarray] = []
+            for _ in range(iterations):
+                sample_count = int(np.random.binomial(total_pairs, p))
+                if sample_count <= 0:
+                    continue
+                if sample_count >= total_pairs:
+                    flat = np.arange(total_pairs, dtype=np.int64)
+                else:
+                    flat = np.random.choice(total_pairs, size=sample_count, replace=False).astype(np.int64, copy=False)
+                rows = flat // self.pre.N
+                cols = flat % self.pre.N
+                row_chunks.append(rows)
+                col_chunks.append(cols)
+                data_chunks.append(np.full(sample_count, self.j, dtype=self.reference.weight_dtype))
+            if data_chunks:
+                self._append_sparse_entries(
+                    np.concatenate(row_chunks),
+                    np.concatenate(col_chunks),
+                    np.concatenate(data_chunks),
+                )
+            return
+        shape = (self.post.N, self.pre.N)
+        block = np.zeros(shape, dtype=self.reference.weight_dtype)
         for _ in range(iterations):
             draws = (np.random.random(size=shape) < p).astype(block.dtype, copy=False)
             block += draws * self.j
@@ -410,6 +462,20 @@ class PoissonSynapse(Synapse):
         self.j = float(j)
 
     def initialze(self):
+        if self.reference.weight_mode == "sparse":
+            total_pairs = self.post.N * self.pre.N
+            if total_pairs == 0 or self.rate <= 0.0:
+                return
+            sample_count = int(np.random.poisson(lam=self.rate * total_pairs))
+            if sample_count <= 0:
+                return
+            flat = np.random.randint(total_pairs, size=sample_count, dtype=np.int64)
+            unique, counts = _compress_flat_samples(flat, total_pairs)
+            rows = unique // self.pre.N
+            cols = unique % self.pre.N
+            values = counts.astype(self.reference.weight_dtype, copy=False) * self.j
+            self._append_sparse_entries(rows, cols, values)
+            return
         shape = (self.post.N, self.pre.N)
         samples = np.random.poisson(lam=self.rate, size=shape).astype(self.reference.weight_dtype, copy=False)
         self._write_block(samples * self.j)
@@ -428,13 +494,18 @@ class FixedIndegreeSynapse(Synapse):
         self.j = float(j)
 
     def initialze(self):
-        block = np.zeros((self.post.N, self.pre.N), dtype=self.reference.weight_dtype)
         p = max(self.p, 0.0)
         target_count = int(round(p * self.pre.N))
         target_count = min(max(target_count, 0), self.pre.N)
         if target_count == 0:
-            self._write_block(block)
             return
+        if self.reference.weight_mode == "sparse":
+            rows = np.repeat(np.arange(self.post.N, dtype=np.int64), target_count)
+            cols = np.random.randint(self.pre.N, size=self.post.N * target_count, dtype=np.int64)
+            values = np.full(rows.size, self.j, dtype=self.reference.weight_dtype)
+            self._append_sparse_entries(rows, cols, values)
+            return
+        block = np.zeros((self.post.N, self.pre.N), dtype=self.reference.weight_dtype)
         for tgt in range(self.post.N):
             pres = np.random.choice(self.pre.N, size=target_count, replace=True)
             np.add.at(block[tgt], pres, self.j)
@@ -453,6 +524,15 @@ class AllToAllSynapse(Synapse):
         self.j = float(j)
 
     def initialze(self):
+        if self.reference.weight_mode == "sparse":
+            total_pairs = self.post.N * self.pre.N
+            if total_pairs == 0:
+                return
+            rows = np.repeat(np.arange(self.post.N, dtype=np.int64), self.pre.N)
+            cols = np.tile(np.arange(self.pre.N, dtype=np.int64), self.post.N)
+            values = np.full(total_pairs, self.j, dtype=self.reference.weight_dtype)
+            self._append_sparse_entries(rows, cols, values)
+            return
         block = np.full((self.post.N, self.pre.N), self.j, dtype=self.reference.weight_dtype)
         self._write_block(block)
 
@@ -605,10 +685,12 @@ class BinaryNetwork:
             row = np.concatenate(self._sparse_rows) if self._sparse_rows else np.zeros(0, dtype=np.int64)
             col = np.concatenate(self._sparse_cols) if self._sparse_cols else np.zeros(0, dtype=np.int64)
             data = np.concatenate(self._sparse_data) if self._sparse_data else np.zeros(0, dtype=self.weight_dtype)
+            if not autapse and row.size:
+                keep = row != col
+                row = row[keep]
+                col = col[keep]
+                data = data[keep]
             matrix = sp.coo_matrix((data, (row, col)), shape=(self.N, self.N), dtype=self.weight_dtype)
-            if not autapse:
-                matrix.setdiag(0.0)
-            matrix.sum_duplicates()
             self.weights_csr = matrix.tocsr()
             self.weights_csc = matrix.tocsc()
             self.weights = self.weights_csr
@@ -639,6 +721,22 @@ class BinaryNetwork:
                 self._sparse_rows.append(row_idx[mask])
                 self._sparse_cols.append(col_idx[mask])
                 self._sparse_data.append(values[mask])
+
+    def _append_sparse_entries(self, row_idx: np.ndarray, col_idx: np.ndarray, values: np.ndarray) -> None:
+        if self.weight_mode != "sparse":
+            raise RuntimeError("Sparse entries can only be appended in sparse weight mode.")
+        rows = np.asarray(row_idx, dtype=np.int64).ravel()
+        cols = np.asarray(col_idx, dtype=np.int64).ravel()
+        data = np.asarray(values, dtype=self.weight_dtype).ravel()
+        if rows.size != cols.size or rows.size != data.size:
+            raise ValueError("Sparse row/col/data arrays must have the same length.")
+        if rows.size == 0:
+            return
+        mask = data != 0.0
+        if mask.any():
+            self._sparse_rows.append(rows[mask])
+            self._sparse_cols.append(cols[mask])
+            self._sparse_data.append(data[mask])
 
     def _choose_weight_mode(self, requested: str, ram_budget_gb: float) -> str:
         requested = str(requested or "auto").lower()
