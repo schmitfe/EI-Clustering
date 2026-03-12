@@ -70,8 +70,8 @@ Estimate smoothed rates from the same spike trains:
 from spiketools import gaussian_kernel, kernel_rate, rate_integral, sliding_counts, triangular_kernel
 
 gauss = gaussian_kernel(25.0, dt=5.0, nstd=2.0)
-# Match the Gaussian cutoff at +/- 50 ms.
-tri = triangular_kernel(50.0 / np.sqrt(6.0), dt=5.0)
+# Match the Gaussian cutoff at +/- 50 ms on the dt = 5 ms grid.
+tri = triangular_kernel((25.0 * 2.0) / (np.sqrt(6.0) * 5.0), dt=5.0)
 rates, rate_time = kernel_rate(
     spiketimes,
     gauss,

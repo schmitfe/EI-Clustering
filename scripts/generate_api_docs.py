@@ -18,6 +18,17 @@ PDOC_PYTHON = Path(
     )
 )
 OUTPUT_DIR = ROOT / "docs"
+DOC_IMAGE_STYLE_MARKER = "/* codex-doc-image-sizing */"
+DOC_IMAGE_STYLE = f"""<style>{DOC_IMAGE_STYLE_MARKER}
+main img {{
+    display: block;
+    max-width: min(100%, 560px);
+    max-height: 340px;
+    width: auto;
+    height: auto;
+    margin: 0.75rem auto;
+}}
+</style>"""
 HIDDEN_OUTPUTS = [
     OUTPUT_DIR / "plotting" / "time_axis.html",
     OUTPUT_DIR / "MeanField" / "solver_utils.html",
@@ -30,6 +41,16 @@ MODULES = [
     "sim_config",
     "!BinaryNetwork.Figure_Simulations",
 ]
+
+
+def inject_doc_css(output_dir: Path) -> None:
+    for html_path in output_dir.rglob("*.html"):
+        text = html_path.read_text(encoding="utf-8")
+        if DOC_IMAGE_STYLE_MARKER in text:
+            continue
+        if "</head>" not in text:
+            continue
+        html_path.write_text(text.replace("</head>", f"{DOC_IMAGE_STYLE}\n</head>", 1), encoding="utf-8")
 
 
 def main() -> None:
@@ -59,6 +80,7 @@ def main() -> None:
         *MODULES,
     ]
     subprocess.run(cmd, cwd=ROOT, env=env, check=True)
+    inject_doc_css(OUTPUT_DIR)
     for path in HIDDEN_OUTPUTS:
         if path.exists():
             path.unlink()

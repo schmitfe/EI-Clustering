@@ -33,7 +33,17 @@
         overflow-x: auto;
         overflow-y: hidden;
     }
-</style></head>
+</style><style>/* codex-doc-image-sizing */
+main img {
+    display: block;
+    max-width: min(100%, 560px);
+    max-height: 340px;
+    width: auto;
+    height: auto;
+    margin: 0.75rem auto;
+}
+</style>
+</head>
 <body>
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
@@ -232,8 +242,8 @@ does.</p>
 <pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">spiketools</span><span class="w"> </span><span class="kn">import</span> <span class="n">gaussian_kernel</span><span class="p">,</span> <span class="n">kernel_rate</span><span class="p">,</span> <span class="n">rate_integral</span><span class="p">,</span> <span class="n">sliding_counts</span><span class="p">,</span> <span class="n">triangular_kernel</span>
 
 <span class="n">gauss</span> <span class="o">=</span> <span class="n">gaussian_kernel</span><span class="p">(</span><span class="mf">25.0</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">nstd</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
-<span class="c1"># Match the Gaussian cutoff at +/- 50 ms.</span>
-<span class="n">tri</span> <span class="o">=</span> <span class="n">triangular_kernel</span><span class="p">(</span><span class="mf">50.0</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">6.0</span><span class="p">),</span> <span class="n">dt</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
+<span class="c1"># Match the Gaussian cutoff at +/- 50 ms on the dt = 5 ms grid.</span>
+<span class="n">tri</span> <span class="o">=</span> <span class="n">triangular_kernel</span><span class="p">((</span><span class="mf">25.0</span> <span class="o">*</span> <span class="mf">2.0</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">6.0</span><span class="p">)</span> <span class="o">*</span> <span class="mf">5.0</span><span class="p">),</span> <span class="n">dt</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
 <span class="n">rates</span><span class="p">,</span> <span class="n">rate_time</span> <span class="o">=</span> <span class="n">kernel_rate</span><span class="p">(</span>
     <span class="n">spiketimes</span><span class="p">,</span>
     <span class="n">gauss</span><span class="p">,</span>
@@ -391,8 +401,8 @@ Trials 0-9 use rate 6 spikes/s and gamma order 0.2; expect ff &gt; 1.
 </span><span id="L-70"><a href="#L-70"><span class="linenos"> 70</span></a><span class="sd">from spiketools import gaussian_kernel, kernel_rate, rate_integral, sliding_counts, triangular_kernel</span>
 </span><span id="L-71"><a href="#L-71"><span class="linenos"> 71</span></a>
 </span><span id="L-72"><a href="#L-72"><span class="linenos"> 72</span></a><span class="sd">gauss = gaussian_kernel(25.0, dt=5.0, nstd=2.0)</span>
-</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a><span class="sd"># Match the Gaussian cutoff at +/- 50 ms.</span>
-</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a><span class="sd">tri = triangular_kernel(50.0 / np.sqrt(6.0), dt=5.0)</span>
+</span><span id="L-73"><a href="#L-73"><span class="linenos"> 73</span></a><span class="sd"># Match the Gaussian cutoff at +/- 50 ms on the dt = 5 ms grid.</span>
+</span><span id="L-74"><a href="#L-74"><span class="linenos"> 74</span></a><span class="sd">tri = triangular_kernel((25.0 * 2.0) / (np.sqrt(6.0) * 5.0), dt=5.0)</span>
 </span><span id="L-75"><a href="#L-75"><span class="linenos"> 75</span></a><span class="sd">rates, rate_time = kernel_rate(</span>
 </span><span id="L-76"><a href="#L-76"><span class="linenos"> 76</span></a><span class="sd">    spiketimes,</span>
 </span><span id="L-77"><a href="#L-77"><span class="linenos"> 77</span></a><span class="sd">    gauss,</span>

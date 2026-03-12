@@ -29,8 +29,8 @@ Inspect both smoothing kernels directly:
 
 ```python
 gauss = gaussian_kernel(25.0, dt=5.0, nstd=2.0)
-# Match the Gaussian cutoff at +/- 50 ms.
-tri = triangular_kernel(50.0 / np.sqrt(6.0), dt=5.0)
+# Match the Gaussian cutoff at +/- 50 ms on the dt = 5 ms grid.
+tri = triangular_kernel((25.0 * 2.0) / (np.sqrt(6.0) * 5.0), dt=5.0)
 
 print(np.round(gauss[:5], 6))
 print(np.round(tri[:5], 6))
@@ -40,7 +40,7 @@ Example output:
 
 ```text
 [0.000415, 0.000886, 0.00175, 0.003188, 0.005362]
-[0.0, 8e-05, 0.00016, 0.00024, 0.00032]
+[0.0, 0.002, 0.004, 0.006, 0.008]
 ```
 
 Run the rate analysis on the same spike trains:

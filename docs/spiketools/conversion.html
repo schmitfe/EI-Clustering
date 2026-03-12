@@ -33,7 +33,17 @@
         overflow-x: auto;
         overflow-y: hidden;
     }
-</style></head>
+</style><style>/* codex-doc-image-sizing */
+main img {
+    display: block;
+    max-width: min(100%, 560px);
+    max-height: 340px;
+    width: auto;
+    height: auto;
+    margin: 0.75rem auto;
+}
+</style>
+</head>
 <body>
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>

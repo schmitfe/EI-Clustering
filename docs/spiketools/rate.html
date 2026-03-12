@@ -33,7 +33,17 @@
         overflow-x: auto;
         overflow-y: hidden;
     }
-</style></head>
+</style><style>/* codex-doc-image-sizing */
+main img {
+    display: block;
+    max-width: min(100%, 560px);
+    max-height: 340px;
+    width: auto;
+    height: auto;
+    margin: 0.75rem auto;
+}
+</style>
+</head>
 <body>
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
@@ -115,8 +125,8 @@ described in <code><a href="conversion.html">spiketools.conversion</a></code>.</
 
 <div class="pdoc-code codehilite">
 <pre><span></span><code><span class="n">gauss</span> <span class="o">=</span> <span class="n">gaussian_kernel</span><span class="p">(</span><span class="mf">25.0</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">nstd</span><span class="o">=</span><span class="mf">2.0</span><span class="p">)</span>
-<span class="c1"># Match the Gaussian cutoff at +/- 50 ms.</span>
-<span class="n">tri</span> <span class="o">=</span> <span class="n">triangular_kernel</span><span class="p">(</span><span class="mf">50.0</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">6.0</span><span class="p">),</span> <span class="n">dt</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
+<span class="c1"># Match the Gaussian cutoff at +/- 50 ms on the dt = 5 ms grid.</span>
+<span class="n">tri</span> <span class="o">=</span> <span class="n">triangular_kernel</span><span class="p">((</span><span class="mf">25.0</span> <span class="o">*</span> <span class="mf">2.0</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">6.0</span><span class="p">)</span> <span class="o">*</span> <span class="mf">5.0</span><span class="p">),</span> <span class="n">dt</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">gauss</span><span class="p">[:</span><span class="mi">5</span><span class="p">],</span> <span class="mi">6</span><span class="p">))</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">tri</span><span class="p">[:</span><span class="mi">5</span><span class="p">],</span> <span class="mi">6</span><span class="p">))</span>
@@ -127,7 +137,7 @@ described in <code><a href="conversion.html">spiketools.conversion</a></code>.</
 
 <div class="pdoc-code codehilite">
 <pre><span></span><code>[0.000415, 0.000886, 0.00175, 0.003188, 0.005362]
-[0.0, 8e-05, 0.00016, 0.00024, 0.00032]
+[0.0, 0.002, 0.004, 0.006, 0.008]
 </code></pre>
 </div>
 
@@ -189,8 +199,8 @@ described in <code><a href="conversion.html">spiketools.conversion</a></code>.</
 </span><span id="L-29"><a href="#L-29"><span class="linenos"> 29</span></a>
 </span><span id="L-30"><a href="#L-30"><span class="linenos"> 30</span></a><span class="sd">```python</span>
 </span><span id="L-31"><a href="#L-31"><span class="linenos"> 31</span></a><span class="sd">gauss = gaussian_kernel(25.0, dt=5.0, nstd=2.0)</span>
-</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a><span class="sd"># Match the Gaussian cutoff at +/- 50 ms.</span>
-</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a><span class="sd">tri = triangular_kernel(50.0 / np.sqrt(6.0), dt=5.0)</span>
+</span><span id="L-32"><a href="#L-32"><span class="linenos"> 32</span></a><span class="sd"># Match the Gaussian cutoff at +/- 50 ms on the dt = 5 ms grid.</span>
+</span><span id="L-33"><a href="#L-33"><span class="linenos"> 33</span></a><span class="sd">tri = triangular_kernel((25.0 * 2.0) / (np.sqrt(6.0) * 5.0), dt=5.0)</span>
 </span><span id="L-34"><a href="#L-34"><span class="linenos"> 34</span></a>
 </span><span id="L-35"><a href="#L-35"><span class="linenos"> 35</span></a><span class="sd">print(np.round(gauss[:5], 6))</span>
 </span><span id="L-36"><a href="#L-36"><span class="linenos"> 36</span></a><span class="sd">print(np.round(tri[:5], 6))</span>
@@ -200,7 +210,7 @@ described in <code><a href="conversion.html">spiketools.conversion</a></code>.</
 </span><span id="L-40"><a href="#L-40"><span class="linenos"> 40</span></a>
 </span><span id="L-41"><a href="#L-41"><span class="linenos"> 41</span></a><span class="sd">```text</span>
 </span><span id="L-42"><a href="#L-42"><span class="linenos"> 42</span></a><span class="sd">[0.000415, 0.000886, 0.00175, 0.003188, 0.005362]</span>
-</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="sd">[0.0, 8e-05, 0.00016, 0.00024, 0.00032]</span>
+</span><span id="L-43"><a href="#L-43"><span class="linenos"> 43</span></a><span class="sd">[0.0, 0.002, 0.004, 0.006, 0.008]</span>
 </span><span id="L-44"><a href="#L-44"><span class="linenos"> 44</span></a><span class="sd">```</span>
 </span><span id="L-45"><a href="#L-45"><span class="linenos"> 45</span></a>
 </span><span id="L-46"><a href="#L-46"><span class="linenos"> 46</span></a><span class="sd">Run the rate analysis on the same spike trains:</span>

@@ -85,7 +85,7 @@ def _shared_rate_examples():
     spiketimes, _, _ = _shared_example_spiketimes()
     dt = 5.0
     gauss = gaussian_kernel(25.0, dt=dt, nstd=2.0)
-    tri = triangular_kernel(50.0 / np.sqrt(6.0), dt=dt)
+    tri = triangular_kernel((25.0 * 2.0) / (np.sqrt(6.0) * dt), dt=dt)
     pooled_rate, rate_time = kernel_rate(spiketimes, gauss, tlim=[0.0, 5000.0], dt=dt, pool=True)
     counts, count_time = sliding_counts(spiketimes, window=250.0, dt=dt, tlim=[0.0, 5000.0])
     integrated = rate_integral(pooled_rate[0], dt=dt)
