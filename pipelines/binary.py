@@ -61,6 +61,13 @@ def ensure_binary_behavior_defaults(cfg: Dict[str, Any] | None) -> Dict[str, Any
     """Normalize the small set of binary options used by the current pipeline."""
     normalized = dict(cfg or {})
     normalized["plot_activity"] = bool(normalized.get("plot_activity", False))
+    normalized["weight_mode"] = str(normalized.get("weight_mode", "auto") or "auto").lower()
+    if normalized["weight_mode"] not in {"auto", "dense", "sparse"}:
+        raise ValueError("binary.weight_mode must be 'auto', 'dense', or 'sparse'.")
+    normalized["ram_budget_gb"] = float(normalized.get("ram_budget_gb", 12.0) or 12.0)
+    normalized["weight_dtype"] = str(normalized.get("weight_dtype", "float32") or "float32").lower()
+    if normalized["weight_dtype"] not in {"float32", "float64"}:
+        raise ValueError("binary.weight_dtype must be 'float32' or 'float64'.")
     if "population_rate_init" in normalized:
         entry = normalized["population_rate_init"]
         if entry is None:
@@ -241,8 +248,13 @@ def run_binary_simulation(
     seed = binary_cfg.get("seed")
     if seed is not None:
         np.random.seed(int(seed))
+    weight_dtype = np.float64 if str(binary_cfg.get("weight_dtype", "float32")).lower() == "float64" else np.float32
     network = ClusteredEI_network(parameter)
-    network.initialize()
+    network.initialize(
+        weight_mode=str(binary_cfg.get("weight_mode", "auto")),
+        ram_budget_gb=float(binary_cfg.get("ram_budget_gb", 12.0) or 12.0),
+        weight_dtype=weight_dtype,
+    )
     default_rate = binary_cfg.get("population_rate_init")
     if population_rate_inits is None and default_rate is not None:
         pops = network.E_pops + network.I_pops

@@ -55,8 +55,29 @@ class CorrelationRunResult:
 
 
 @dataclass(frozen=True)
+class MultiInitCorrelationSpec:
+    key: str
+    label: str
+    parameter: Dict[str, Any]
+    binary_cfg: Dict[str, Any]
+    bundle_path: str
+    focus_counts: Sequence[int]
+    stability_filter: str
+    n_inits: int
+    seed_inits: int
+    seed_network: int
+    stride_analysis: int
+    max_pairs: int
+    analysis_only: bool = False
+    overwrite_simulation: bool = False
+    overwrite_analysis: bool = False
+
+
+@dataclass(frozen=True)
 class InitTask:
     index: int
+    group_key: str
+    group_label: str
     candidate: Dict[str, Any]
     trace_path: str
     analysis_dir: str
@@ -361,8 +382,13 @@ def _instantiate_replay_network(parameter: Dict[str, Any], binary_cfg: Dict[str,
     if seed is None:
         raise ValueError("binary.seed must be defined to reconstruct connectivity-dependent fields.")
     np.random.seed(int(seed))
+    weight_dtype = np.float64 if str(binary_cfg.get("weight_dtype", "float32")).lower() == "float64" else np.float32
     network = ClusteredEI_network(parameter)
-    network.initialize()
+    network.initialize(
+        weight_mode=str(binary_cfg.get("weight_mode", "auto")),
+        ram_budget_gb=float(binary_cfg.get("ram_budget_gb", 12.0) or 12.0),
+        weight_dtype=weight_dtype,
+    )
     return network
 
 
@@ -873,6 +899,55 @@ def _prepare_metadata(
     return metadata
 
 
+def _prepare_multi_init_tasks(spec: MultiInitCorrelationSpec) -> tuple[str, List[InitTask]]:
+    binary_cfg = dict(spec.binary_cfg)
+    binary_cfg["seed"] = int(spec.seed_network)
+    target_rep = spec.parameter.get("R_Eplus")
+    if target_rep is None:
+        raise ValueError("Parameter 'R_Eplus' must be set before running the correlation workflow.")
+    candidates = _resolve_fixpoint_candidates(spec.parameter, spec.bundle_path, spec.focus_counts, spec.stability_filter)
+    picks = _select_fixpoints(candidates, seed=int(spec.seed_inits), count=max(0, int(spec.n_inits)))
+    if not picks:
+        raise RuntimeError("No initialization tasks were prepared for the correlation workflow.")
+    binary_dir = _binary_output_folder(spec.parameter, binary_cfg)
+    analysis_dir = os.path.join(binary_dir, CORR_ANALYSIS_SUBDIR)
+    os.makedirs(analysis_dir, exist_ok=True)
+    _prepare_metadata(
+        analysis_dir,
+        base_output=str(binary_cfg.get("output_name", "activity_trace")),
+        fixpoints_path=spec.bundle_path,
+        focus_counts=spec.focus_counts,
+        stability_filter=spec.stability_filter,
+        seed_network=int(spec.seed_network),
+        binary_cfg=binary_cfg,
+        target_rep=float(target_rep),
+    )
+    tasks: List[InitTask] = []
+    for idx, candidate in enumerate(picks):
+        label = f"{binary_cfg.get('output_name', 'activity_trace')}_init{idx:04d}"
+        trace_path = os.path.join(binary_dir, f"{label}.npz")
+        analysis_path = os.path.join(analysis_dir, f"analysis_init{idx:04d}.npz")
+        needs_simulation = (not spec.analysis_only) and (spec.overwrite_simulation or not os.path.exists(trace_path))
+        needs_analysis = spec.overwrite_analysis or not os.path.exists(analysis_path)
+        tasks.append(
+            InitTask(
+                index=idx,
+                group_key=str(spec.key),
+                group_label=str(spec.label),
+                candidate=candidate,
+                trace_path=trace_path,
+                analysis_dir=analysis_dir,
+                parameter=dict(spec.parameter),
+                binary_cfg=dict(binary_cfg),
+                stride=max(1, int(spec.stride_analysis or 1)),
+                max_pairs=max(1, int(spec.max_pairs or DEFAULT_MAX_PAIRS)),
+                needs_simulation=needs_simulation,
+                needs_analysis=needs_analysis,
+            )
+        )
+    return analysis_dir, tasks
+
+
 def _process_task(task: InitTask) -> Dict[str, Any]:
     logs: List[str] = []
     success = True
@@ -919,6 +994,8 @@ def _process_task(task: InitTask) -> Dict[str, Any]:
         analysis = {}
     return {
         "index": task.index,
+        "group_key": task.group_key,
+        "group_label": task.group_label,
         "candidate": task.candidate,
         "trace_path": trace_path,
         "analysis": analysis,
@@ -937,6 +1014,16 @@ def _execute_tasks(tasks: Sequence[InitTask], jobs: int) -> List[Dict[str, Any]]
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
         future_map = {pool.submit(_process_task, task): task for task in tasks}
         return [future.result() for future in concurrent.futures.as_completed(future_map)]
+
+
+def _log_task_results(results: Sequence[Dict[str, Any]]) -> None:
+    for entry in results:
+        idx = entry.get("index")
+        label = str(entry.get("group_label", "task"))
+        for line in entry.get("logs", []):
+            print(f"[{label} init {idx:04d}] {line}")
+        if not entry.get("success", False):
+            print(f"[{label} init {idx:04d}] Failed: {entry.get('error')}")
 
 
 def resolve_binary_trace_from_fixpoint(
@@ -992,56 +1079,27 @@ def run_multi_init_correlation(
     overwrite_simulation: bool = False,
     overwrite_analysis: bool = False,
 ) -> CorrelationRunResult:
-    binary_cfg = dict(binary_cfg)
-    binary_cfg["seed"] = int(seed_network)
-    target_rep = parameter.get("R_Eplus")
-    if target_rep is None:
-        raise ValueError("Parameter 'R_Eplus' must be set before running the correlation workflow.")
-    candidates = _resolve_fixpoint_candidates(parameter, bundle_path, focus_counts, stability_filter)
-    picks = _select_fixpoints(candidates, seed=int(seed_inits), count=max(0, int(n_inits)))
-    if not picks:
-        raise RuntimeError("No initialization tasks were prepared for the correlation workflow.")
-    binary_dir = _binary_output_folder(parameter, binary_cfg)
-    analysis_dir = os.path.join(binary_dir, CORR_ANALYSIS_SUBDIR)
-    os.makedirs(analysis_dir, exist_ok=True)
-    _prepare_metadata(
-        analysis_dir,
-        base_output=str(binary_cfg.get("output_name", "activity_trace")),
-        fixpoints_path=bundle_path,
-        focus_counts=focus_counts,
-        stability_filter=stability_filter,
-        seed_network=seed_network,
-        binary_cfg=binary_cfg,
-        target_rep=float(target_rep),
-    )
-    tasks: List[InitTask] = []
-    for idx, candidate in enumerate(picks):
-        label = f"{binary_cfg.get('output_name', 'activity_trace')}_init{idx:04d}"
-        trace_path = os.path.join(binary_dir, f"{label}.npz")
-        analysis_path = os.path.join(analysis_dir, f"analysis_init{idx:04d}.npz")
-        needs_simulation = (not analysis_only) and (overwrite_simulation or not os.path.exists(trace_path))
-        needs_analysis = overwrite_analysis or not os.path.exists(analysis_path)
-        tasks.append(
-            InitTask(
-                index=idx,
-                candidate=candidate,
-                trace_path=trace_path,
-                analysis_dir=analysis_dir,
-                parameter=dict(parameter),
-                binary_cfg=dict(binary_cfg),
-                stride=max(1, int(stride_analysis or 1)),
-                max_pairs=max(1, int(max_pairs or DEFAULT_MAX_PAIRS)),
-                needs_simulation=needs_simulation,
-                needs_analysis=needs_analysis,
-            )
+    analysis_dir, tasks = _prepare_multi_init_tasks(
+        MultiInitCorrelationSpec(
+            key=str(binary_cfg.get("output_name", "activity_trace")),
+            label=str(binary_cfg.get("output_name", "activity_trace")),
+            parameter=dict(parameter),
+            binary_cfg=dict(binary_cfg),
+            bundle_path=bundle_path,
+            focus_counts=tuple(focus_counts),
+            stability_filter=stability_filter,
+            n_inits=int(n_inits),
+            seed_inits=int(seed_inits),
+            seed_network=int(seed_network),
+            stride_analysis=max(1, int(stride_analysis or 1)),
+            max_pairs=max(1, int(max_pairs or DEFAULT_MAX_PAIRS)),
+            analysis_only=analysis_only,
+            overwrite_simulation=overwrite_simulation,
+            overwrite_analysis=overwrite_analysis,
         )
+    )
     results = _execute_tasks(tasks, max(1, int(jobs)))
-    for entry in results:
-        idx = entry.get("index")
-        for line in entry.get("logs", []):
-            print(f"[init {idx:04d}] {line}")
-        if not entry.get("success", False):
-            print(f"[init {idx:04d}] Failed: {entry.get('error')}")
+    _log_task_results(results)
     summary = _collect_results(results)
     _save_summary(analysis_dir, summary)
     return CorrelationRunResult(
@@ -1049,6 +1107,37 @@ def run_multi_init_correlation(
         analysis_dir=analysis_dir,
         trace_paths=summary.get("trace_paths", []),
     )
+
+
+def run_multi_init_correlation_batch(
+    specs: Sequence[MultiInitCorrelationSpec],
+    *,
+    jobs: int,
+) -> Dict[str, CorrelationRunResult]:
+    if not specs:
+        return {}
+    prepared: List[tuple[MultiInitCorrelationSpec, str, List[InitTask]]] = []
+    all_tasks: List[InitTask] = []
+    for spec in specs:
+        analysis_dir, tasks = _prepare_multi_init_tasks(spec)
+        prepared.append((spec, analysis_dir, tasks))
+        all_tasks.extend(tasks)
+    results = _execute_tasks(all_tasks, max(1, int(jobs)))
+    _log_task_results(results)
+    grouped: Dict[str, List[Dict[str, Any]]] = {str(spec.key): [] for spec, _, _ in prepared}
+    for entry in results:
+        grouped.setdefault(str(entry.get("group_key", "")), []).append(entry)
+    output: Dict[str, CorrelationRunResult] = {}
+    for spec, analysis_dir, _ in prepared:
+        group_results = grouped.get(str(spec.key), [])
+        summary = _collect_results(group_results)
+        _save_summary(analysis_dir, summary)
+        output[str(spec.key)] = CorrelationRunResult(
+            summary=summary,
+            analysis_dir=analysis_dir,
+            trace_paths=summary.get("trace_paths", []),
+        )
+    return output
 
 
 def mean_connectivity(parameter: Dict[str, Any]) -> float:

@@ -372,7 +372,8 @@ def _run_network_initializations(
 ) -> List[str]:
     if len(network_seeds) != len(init_seed_bases):
         raise ValueError("Network seed and initialization seed lists must have the same length.")
-    analysis_dirs: List[str] = []
+    specs: List[helpers.MultiInitCorrelationSpec] = []
+    ordered_keys: List[str] = []
     for net_idx, (network_seed, init_seed) in enumerate(zip(network_seeds, init_seed_bases)):
         run_param = deepcopy(parameter)
         run_param_binary = dict(run_param.get("binary") or {})
@@ -381,27 +382,34 @@ def _run_network_initializations(
         run_param["binary"] = run_param_binary
         per_run_overrides = _with_output_name(binary_overrides, output_name)
         binary_cfg = helpers.resolve_binary_config(run_param, per_run_overrides)
-        result = helpers.run_multi_init_correlation(
-            run_param,
-            binary_cfg=binary_cfg,
-            bundle_path=bundle_path,
-            focus_counts=focus_counts,
-            stability_filter=stability_filter,
-            n_inits=n_inits,
-            seed_inits=int(init_seed),
-            seed_network=int(network_seed),
-            stride_analysis=stride_analysis,
-            max_pairs=max_pairs,
-            jobs=jobs,
-            analysis_only=analysis_only,
-            overwrite_simulation=overwrite_simulation,
-            overwrite_analysis=overwrite_analysis,
+        ordered_keys.append(output_name)
+        specs.append(
+            helpers.MultiInitCorrelationSpec(
+                key=output_name,
+                label=f"net{net_idx:03d}",
+                parameter=run_param,
+                binary_cfg=binary_cfg,
+                bundle_path=bundle_path,
+                focus_counts=tuple(focus_counts),
+                stability_filter=stability_filter,
+                n_inits=int(n_inits),
+                seed_inits=int(init_seed),
+                seed_network=int(network_seed),
+                stride_analysis=stride_analysis,
+                max_pairs=max_pairs,
+                analysis_only=analysis_only,
+                overwrite_simulation=overwrite_simulation,
+                overwrite_analysis=overwrite_analysis,
+            )
         )
+    results = helpers.run_multi_init_correlation_batch(specs, jobs=max(1, int(jobs)))
+    analysis_dirs: List[str] = []
+    for net_idx, (network_seed, init_seed, output_name) in enumerate(zip(network_seeds, init_seed_bases, ordered_keys)):
         print(
             f"     network {net_idx + 1:03d}/{len(network_seeds)} "
             f"(seed={int(network_seed)}, init-seed={int(init_seed)}, output={output_name})"
         )
-        analysis_dirs.append(result.analysis_dir)
+        analysis_dirs.append(results[output_name].analysis_dir)
     return analysis_dirs
 
 

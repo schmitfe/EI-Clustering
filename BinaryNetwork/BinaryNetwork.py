@@ -131,6 +131,54 @@ def _sparse_batch_kernel(
             log_states[log_offset + idx, :] = state
 
 
+@njit(cache=True)
+def _reconstruct_states_kernel(initial_state, updates, deltas, stride):
+    steps = updates.shape[1]
+    if steps == 0:
+        return np.zeros((0, initial_state.size), dtype=np.uint8)
+    sample_count = ((steps - 1) // stride) + 1
+    state = initial_state.copy()
+    samples = np.zeros((sample_count, state.size), dtype=np.uint8)
+    sample_idx = 0
+    for step in range(steps):
+        for row in range(updates.shape[0]):
+            delta = deltas[row, step]
+            if delta == 0:
+                continue
+            unit = updates[row, step]
+            state_value = int(state[unit]) + int(delta)
+            state[unit] = 1 if state_value > 0 else 0
+        if step % stride == 0:
+            samples[sample_idx, :] = state
+            sample_idx += 1
+    return samples
+
+
+@njit(cache=True)
+def _population_rates_kernel(cluster_sums, sizes, cluster_of, updates, deltas, stride):
+    steps = updates.shape[1]
+    pop_count = cluster_sums.size
+    if steps == 0 or pop_count == 0:
+        return np.zeros((0, pop_count), dtype=np.float32)
+    sample_count = ((steps - 1) // stride) + 1
+    samples = np.zeros((sample_count, pop_count), dtype=np.float32)
+    running = cluster_sums.copy()
+    sample_idx = 0
+    for step in range(steps):
+        for row in range(updates.shape[0]):
+            delta = deltas[row, step]
+            if delta == 0:
+                continue
+            unit = updates[row, step]
+            cluster_idx = cluster_of[unit]
+            running[cluster_idx] += int(delta)
+        if step % stride == 0:
+            for pop_idx in range(pop_count):
+                samples[sample_idx, pop_idx] = running[pop_idx] / sizes[pop_idx]
+            sample_idx += 1
+    return samples
+
+
 class NetworkElement:
     """Base class for network elements that occupy a slice in the global state."""
     def __init__(self, reference, name="Some Network Element"):
@@ -383,6 +431,8 @@ class BinaryNetwork:
         self.field = None
         self.weight_mode = "dense"
         self.weight_dtype = np.float32
+        self._population_views = np.zeros((0, 2), dtype=np.int64)
+        self._population_cdf = np.zeros(0, dtype=np.float64)
         self._sparse_rows: List[np.ndarray] = []
         self._sparse_cols: List[np.ndarray] = []
         self._sparse_data: List[np.ndarray] = []
@@ -434,11 +484,16 @@ class BinaryNetwork:
         self.population_lookup = np.zeros(self.N, dtype=np.int32)
         self.neuron_lookup = np.zeros(self.N, dtype=np.int32)
         self.thresholds = np.zeros(self.N, dtype=self.weight_dtype)
+        pop_count = len(self.population)
+        pop_views = np.zeros((pop_count, 2), dtype=np.int64)
+        pop_update_mass = np.zeros(pop_count, dtype=np.float64)
         N_start = 0
         for idx, population in enumerate(self.population):
             population.set_view([N_start, N_start + population.N])
             N_start += population.N
             population.initialze()
+            pop_views[idx, :] = population.view
+            pop_update_mass[idx] = population.N / max(population.tau, 1e-9)
             self.update_prob[population.view[0]:population.view[1]] = 1.0 / max(population.tau, 1e-9)
             self.population_lookup[population.view[0]:population.view[1]] = idx
             self.neuron_lookup[population.view[0]:population.view[1]] = np.arange(
@@ -451,6 +506,11 @@ class BinaryNetwork:
         if not math.isfinite(total) or total <= 0:
             raise RuntimeError("Invalid update probabilities. Check tau values.")
         self.update_prob /= total
+        pop_mass_total = float(pop_update_mass.sum())
+        if not math.isfinite(pop_mass_total) or pop_mass_total <= 0:
+            raise RuntimeError("Invalid population update masses. Check tau values.")
+        self._population_views = pop_views
+        self._population_cdf = np.cumsum(pop_update_mass / pop_mass_total)
         self.weight_mode = self._choose_weight_mode(weight_mode, ram_budget_gb)
         self.weights_dense = None
         self.weights_csr = None
@@ -534,7 +594,21 @@ class BinaryNetwork:
     def _select_neurons(self, count: int) -> np.ndarray:
         if count <= 0:
             return np.zeros(0, dtype=np.int64)
-        return np.random.choice(self.N, size=count, p=self.update_prob)
+        if self._population_cdf.size == 0:
+            return np.random.choice(self.N, size=count, p=self.update_prob)
+        pop_indices = np.searchsorted(self._population_cdf, np.random.random(size=count), side="right")
+        pop_indices = np.minimum(pop_indices, self._population_views.shape[0] - 1)
+        counts = np.bincount(pop_indices, minlength=self._population_views.shape[0])
+        neurons = np.empty(count, dtype=np.int64)
+        offset = 0
+        for pop_idx, pop_count in enumerate(counts):
+            if pop_count == 0:
+                continue
+            start, end = self._population_views[pop_idx]
+            neurons[offset:offset + pop_count] = np.random.randint(start, end, size=pop_count)
+            offset += pop_count
+        np.random.shuffle(neurons)
+        return neurons
 
     def _update_batch_dense(self, neurons: np.ndarray, log_states, log_enabled: bool, log_offset: int):
         if neurons.size == 0:
@@ -738,22 +812,7 @@ class BinaryNetwork:
         if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
             return np.zeros((0, state.size), dtype=np.uint8)
         stride = max(1, int(sample_interval))
-        states: List[np.ndarray] = []
-        for step in range(update_arr.shape[1]):
-            units = update_arr[:, step]
-            delta_step = delta_arr[:, step]
-            for unit, delta in zip(units, delta_step):
-                delta_val = int(delta)
-                if delta_val == 0:
-                    continue
-                unit_idx = int(unit)
-                state_value = int(state[unit_idx]) + delta_val
-                state[unit_idx] = 1 if state_value > 0 else 0
-            if step % stride == 0:
-                states.append(state.astype(np.uint8, copy=True))
-        if not states:
-            return np.zeros((0, state.size), dtype=np.uint8)
-        return np.stack(states, axis=0)
+        return _reconstruct_states_kernel(state, update_arr, delta_arr, stride)
 
     def population_rates_from_diff_logs(
         self,
@@ -795,35 +854,18 @@ class BinaryNetwork:
             delta_arr = delta_arr[None, :]
         if update_arr.ndim != 2 or delta_arr.shape != update_arr.shape:
             return np.zeros((0, len(pops)), dtype=np.float32)
-        state = np.asarray(initial_state, dtype=np.int8).ravel().copy()
+        initial = np.asarray(initial_state, dtype=np.int8).ravel()
         pop_count = len(pops)
         sizes = np.zeros(pop_count, dtype=np.float32)
-        cluster_of = np.empty(state.size, dtype=np.int32)
+        cluster_of = np.empty(initial.size, dtype=np.int32)
         cluster_sums = np.zeros(pop_count, dtype=np.int64)
         for idx, pop in enumerate(pops):
             start, end = int(pop.view[0]), int(pop.view[1])
             cluster_of[start:end] = idx
             sizes[idx] = max(1, end - start)
-            cluster_sums[idx] = int(state[start:end].sum())
+            cluster_sums[idx] = int(initial[start:end].sum())
         stride = max(1, int(sample_interval))
-        samples: List[np.ndarray] = []
-        for step in range(update_arr.shape[1]):
-            units = update_arr[:, step]
-            delta_step = delta_arr[:, step]
-            for unit, delta in zip(units, delta_step):
-                delta_val = int(delta)
-                if delta_val == 0:
-                    continue
-                unit_idx = int(unit)
-                cluster_idx = int(cluster_of[unit_idx])
-                cluster_sums[cluster_idx] += delta_val
-                state_value = int(state[unit_idx]) + delta_val
-                state[unit_idx] = 1 if state_value > 0 else 0
-            if step % stride == 0:
-                samples.append((cluster_sums.astype(np.float32, copy=False) / sizes).copy())
-        if not samples:
-            return np.zeros((0, pop_count), dtype=np.float32)
-        return np.stack(samples, axis=0)
+        return _population_rates_kernel(cluster_sums, sizes, cluster_of, update_arr, delta_arr, stride)
 
     @staticmethod
     def extract_spike_events_from_diff_logs(
