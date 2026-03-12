@@ -8,7 +8,7 @@ import os
 from typing import Optional
 import numpy as np
 import matplotlib.image as mpimg
-from .font import FontCfg
+from .font import FontCfg, add_panel_label
 
 def _imread_any(path: str, *, pdf_page: int = 0, pdf_zoom: float = 2.0) -> np.ndarray:
     """
@@ -57,6 +57,8 @@ def add_image_ax(ax, path, label=None, fc: Optional[FontCfg]=None, *, pdf_page: 
     ---------------
     The axes displays the image and, when `label` is provided, a bold panel
     label is drawn near the upper-left corner.
+
+    ![add_image_ax example](plotting_assets/add_image_ax_example.png)
     """
     ax.axis('off')
     try:
@@ -71,7 +73,6 @@ def add_image_ax(ax, path, label=None, fc: Optional[FontCfg]=None, *, pdf_page: 
         ax.text(0.5, 0.5, f"Error loading:\n{os.path.basename(path)}\n{e}", ha='center', va='center', fontsize=10)
         ax.set_box_aspect(1)
     if label:
-        fs = (fc.letter if fc is not None else 12)
-        ax.text(-0.05, 0.99, label, transform=ax.transAxes,
-                va='top', ha='left', fontsize=fs, fontweight='bold')
+        label_cfg = fc if fc is not None else FontCfg().resolve()
+        add_panel_label(ax, label, label_cfg)
     return ax

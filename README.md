@@ -32,7 +32,7 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
 - Figure2:
 `python Figure2.py  --rows 0.3 0.1  --columns 0 0.5 1.0  --r-eplus-start 1  --r-eplus-end 20  --r-eplus-step 0.1  --bif-r-eplus-min 1  --bif-r-eplus-max 20  --bif-bisection-tol 0.05  --bif-rj 0.75  --bif-rj 0.5  --bif-avg-connectivity-range 0.01 0.31 0.005 --bif-fixpoint-threshold 2  --marker-focus-count 1  --line-focus-counts 5 4 3 2 1  --line-colormap viridis_r --jobs 1 --bif-jobs 1 --bif-rj 0.8`
 - Figure3:
-`python Figure3.py --config default_simulation -O R_Eplus=7.25 --column-override a:kappa=0 --column-override a:R_j=0.81 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5 4 3 2 1  --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2 -O binary.seed=3 --jobs 3 --erf-jobs 1 --output-prefix Figures/Figure3 --column-override c:binary.seed=6`
+`python Figure3.py --config default_simulation -O R_Eplus=7.25 --column-override a:kappa=0 --column-override a:R_j=0.81 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5 4 3 2 1  --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2 -O binary.seed=3 --jobs 3 --erf-jobs 1 --output-prefix Figures/Figure3 --column-override c:binary.seed=3`
 - Figure4:
 `python Figure4.py --config default_simulation --kappas 0 0.125 0.25 0.375 0.5 0.625 0.75 0.875 1.0 --mean-connectivity 0.2 0.25 0.3 --n-networks 20 --n-inits 20 --focus-counts 1 2 3 4 -O R_Eplus=8. --jobs 120 --warmup-steps 200000 --simulation-steps 12000000 --sample-interval 12000 -O N_E=8000 -O N_I=2000 --no-std-shading -O R_j=0.8`
 - Figure5:

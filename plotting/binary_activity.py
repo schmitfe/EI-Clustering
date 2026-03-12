@@ -238,6 +238,8 @@ def plot_binary_raster(
     ---------------
     `times` is `array([10., 20.])` and `ids` is `array([0, 1])`. The axes
     shows two onset markers at those coordinates.
+
+    ![Binary raster example](plotting_assets/binary_raster_example.png)
     """
     events = collect_binary_onset_events(state_source, sample_interval, window=window)
     spike_times, spike_ids = events

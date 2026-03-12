@@ -56,6 +56,8 @@ def add_corner_tag(ax, text, color, fc: FontCfg, *, x=0.985, y=0.985):
     Expected output
     ---------------
     The axes receives one bold text box near its upper-right corner.
+
+    ![add_corner_tag example](plotting_assets/add_corner_tag_example.png)
     """
     ax.text(
         x, y, text,
@@ -72,15 +74,18 @@ def add_corner_tag(ax, text, color, fc: FontCfg, *, x=0.985, y=0.985):
         clip_on=False
     )
 
-def add_panel_label(ax, text, fc: FontCfg, *, x=0.01, y=0.99):
+def add_panel_label(ax, text, fc: FontCfg, *, x=-0.12, y=1.03):
     """Add a bold panel label in axes coordinates.
 
     Expected output
     ---------------
-    One bold label appears near the upper-left corner of the axes.
+    One bold label appears slightly above and left of the axes, matching the
+    figure panel style used across this repository.
+
+    ![add_panel_label example](plotting_assets/add_panel_label_example.png)
     """
     ax.text(x, y, text, transform=ax.transAxes,
-            ha="left", va="top", fontsize=fc.letter, fontweight="bold")
+            ha="left", va="top", fontsize=fc.letter, fontweight="bold", clip_on=False)
 def add_panel_labels_column_left_of_ylabel(
     axs: List[plt.Axes],
     texts: List[str],
@@ -99,6 +104,8 @@ def add_panel_labels_column_left_of_ylabel(
     ---------------
     Each axes receives one label, and all labels are aligned in a shared
     vertical column left of the y-axis labels.
+
+    ![Shared panel-label column example](plotting_assets/add_panel_labels_column_left_of_ylabel_example.png)
     """
     if not axs:
         return
@@ -152,6 +159,8 @@ def style_axes(ax, fc: FontCfg, *, set_xlabel=True, set_ylabel=True):
     Expected output
     ---------------
     The x-label, y-label, and tick labels use the sizes defined by `fc`.
+
+    ![style_axes comparison](plotting_assets/style_axes_comparison.png)
     """
     if set_xlabel and ax.xaxis.label is not None:
         ax.xaxis.label.set_size(fc.label)
@@ -166,6 +175,8 @@ def style_colorbar(cbar, fc: FontCfg, *, set_label=True):
     Expected output
     ---------------
     The colorbar label and tick labels use the sizes defined by `fc`.
+
+    ![style_colorbar comparison](plotting_assets/style_colorbar_comparison.png)
     """
     if cbar is None:
         return
@@ -192,6 +203,8 @@ def style_legend(ax, fc: FontCfg):
     Expected output
     ---------------
     All legend labels on the axes use `fc.legend`.
+
+    ![style_legend comparison](plotting_assets/style_legend_comparison.png)
     """
     leg = ax.get_legend()
     if leg is not None:

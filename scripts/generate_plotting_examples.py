@@ -61,7 +61,7 @@ def generate_spike_raster_example(output_path: Path) -> None:
     ax.set_ylabel("Neuron index")
     ax.set_title("Spike raster example")
     style_axes(ax, FontCfg(base=10.0, scale=1.1).resolve())
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.18, top=0.88, wspace=0.2)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
@@ -93,6 +93,206 @@ def generate_grouped_spike_raster_example(output_path: Path) -> None:
     ax.set_ylabel("Neuron index")
     ax.set_title("Grouped spike raster with RasterGroup / RasterLabels")
     style_axes(ax, FontCfg(base=10.0, scale=1.1).resolve())
+    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.18, top=0.86, wspace=0.35)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_binary_raster_example(output_path: Path) -> None:
+    from plotting import BinaryStateSource, FontCfg, RasterLabels, plot_binary_raster, style_axes
+
+    states = np.array(
+        [
+            [0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0],
+            [1, 1, 0, 0, 0, 0],
+            [1, 1, 0, 1, 0, 0],
+            [0, 1, 0, 1, 1, 0],
+            [0, 1, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1],
+        ],
+        dtype=np.uint8,
+    )
+    fig, ax = plt.subplots(figsize=(5.8, 2.8))
+    plot_binary_raster(
+        ax,
+        state_source=BinaryStateSource.from_array(states),
+        sample_interval=10,
+        n_exc=4,
+        n_inh=2,
+        labels=RasterLabels(mapping={"exc": "Exc", "inh": "Inh"}, kwargs={"fontsize": 9}),
+    )
+    ax.set_xlabel("Time [ms]")
+    ax.set_ylabel("Neuron index")
+    ax.set_title("Binary onset raster example")
+    style_axes(ax, FontCfg(base=10.0, scale=1.1).resolve())
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.18, top=0.88, wspace=0.2)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_add_image_ax_example(output_path: Path, image_example_path: Path) -> None:
+    from plotting import FontCfg, add_image_ax
+
+    fig, ax = plt.subplots(figsize=(5.4, 2.6))
+    add_image_ax(ax, str(image_example_path), label="A", fc=FontCfg(base=10.0, scale=1.1).resolve())
+    ax.set_title("Image embedding example")
+    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.18, top=0.86, wspace=0.35)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_corner_tag_example(output_path: Path) -> None:
+    from plotting import FontCfg, add_corner_tag, style_axes
+
+    fc = FontCfg(base=10.0, scale=1.1).resolve()
+    x = np.linspace(0.0, 10.0, 200)
+    y = 0.4 + 0.25 * np.sin(x / 1.4)
+    fig, ax = plt.subplots(figsize=(4.6, 2.6))
+    ax.plot(x, y, linewidth=2.2, color="#1f77b4")
+    ax.set_xlabel("Time [a.u.]")
+    ax.set_ylabel("Signal")
+    ax.set_title("Corner tag example")
+    style_axes(ax, fc)
+    add_corner_tag(ax, "Demo", "#333333", fc)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_panel_label_example(output_path: Path) -> None:
+    from plotting import FontCfg, add_panel_label, style_axes
+
+    fc = FontCfg(base=10.0, scale=1.1).resolve()
+    x = np.linspace(0.0, 8.0, 160)
+    y = 0.2 + 0.6 / (1.0 + np.exp(-1.3 * (x - 3.5)))
+    fig, ax = plt.subplots(figsize=(4.6, 2.6))
+    ax.plot(x, y, linewidth=2.2, color="#2ca02c")
+    ax.set_xlabel("Driven input [a.u.]")
+    ax.set_ylabel("Mean rate")
+    ax.set_title("Panel label example")
+    style_axes(ax, fc)
+    add_panel_label(ax, "A", fc)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_panel_label_column_example(output_path: Path) -> None:
+    from plotting import FontCfg, add_panel_labels_column_left_of_ylabel, style_axes
+
+    fc = FontCfg(base=10.0, scale=1.1).resolve()
+    x = np.linspace(0.0, 6.0, 120)
+    fig, axs = plt.subplots(2, 1, figsize=(4.8, 4.2), sharex=True)
+    axs[0].plot(x, np.sin(x), color="#1f77b4", linewidth=2.0)
+    axs[1].plot(x, np.cos(x), color="#d84ab3", linewidth=2.0)
+    axs[0].set_ylabel("Trace A")
+    axs[1].set_ylabel("Trace B")
+    axs[1].set_xlabel("Time [a.u.]")
+    axs[0].set_title("Shared panel-label column")
+    for ax in axs:
+        style_axes(ax, fc)
+    add_panel_labels_column_left_of_ylabel(list(axs), ["A", "B"], fc, y_axes=1.01)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_listed_colorbar_example(output_path: Path) -> None:
+    from plotting import FontCfg, LINE_COLORS, draw_listed_colorbar, style_axes, style_colorbar
+
+    fc = FontCfg(base=10.0, scale=1.1).resolve()
+    x = np.linspace(0.0, 12.0, 240)
+    fig = plt.figure(figsize=(5.2, 2.8))
+    grid = fig.add_gridspec(1, 2, width_ratios=[1.0, 0.18], wspace=0.2)
+    ax = fig.add_subplot(grid[0, 0])
+    cax = fig.add_subplot(grid[0, 1])
+    ax.plot(x, 0.2 + 0.45 / (1.0 + np.exp(-(x - 5.0))), color=LINE_COLORS[0], linewidth=2.2)
+    ax.set_xlabel("Driven input [a.u.]")
+    ax.set_ylabel("Mean rate")
+    ax.set_title("Discrete colorbar example")
+    style_axes(ax, fc)
+    cbar = draw_listed_colorbar(
+        fig,
+        cax,
+        entries=[(1.0, LINE_COLORS[0]), (2.0, LINE_COLORS[1]), (3.0, LINE_COLORS[2])],
+        font_cfg=fc,
+        label="Focus",
+    )
+    style_colorbar(cbar, fc)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.18, top=0.88, wspace=0.2)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_style_axes_comparison(output_path: Path) -> None:
+    from plotting import FontCfg, style_axes
+
+    fc = FontCfg(base=10.0, scale=1.4).resolve()
+    x = np.linspace(0.0, 8.0, 160)
+    y = 0.3 + 0.35 * np.sin(x / 1.5)
+    fig, axs = plt.subplots(1, 2, figsize=(8.4, 2.8), sharey=True)
+    for ax in axs:
+        ax.plot(x, y, color="#1f77b4", linewidth=2.2)
+        ax.set_xlabel("Time [ms]")
+        ax.set_ylabel("Rate")
+    axs[0].set_title("Before style_axes")
+    axs[1].set_title("After style_axes")
+    style_axes(axs[1], fc)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_style_colorbar_comparison(output_path: Path) -> None:
+    from plotting import FontCfg, LINE_COLORS, draw_listed_colorbar, style_colorbar
+
+    fc = FontCfg(base=10.0, scale=1.4).resolve()
+    fig = plt.figure(figsize=(8.2, 2.8))
+    outer = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.0], wspace=0.35)
+    for idx in range(2):
+        grid = outer[0, idx].subgridspec(1, 2, width_ratios=[1.0, 0.18], wspace=0.18)
+        ax = fig.add_subplot(grid[0, 0])
+        cax = fig.add_subplot(grid[0, 1])
+        x = np.linspace(0.0, 10.0, 120)
+        ax.plot(x, 0.15 + 0.5 / (1.0 + np.exp(-(x - 4.5))), color=LINE_COLORS[0], linewidth=2.0)
+        ax.set_title("Before style_colorbar" if idx == 0 else "After style_colorbar")
+        cbar = draw_listed_colorbar(
+            fig,
+            cax,
+            entries=[(1.0, LINE_COLORS[0]), (2.0, LINE_COLORS[1]), (3.0, LINE_COLORS[2])],
+            font_cfg=fc,
+            label="Focus",
+        )
+        if idx == 1:
+            style_colorbar(cbar, fc)
+    fig.subplots_adjust(left=0.08, right=0.97, bottom=0.18, top=0.86, wspace=0.35)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_style_legend_comparison(output_path: Path) -> None:
+    from plotting import FontCfg, LINE_COLORS, style_legend
+
+    fc = FontCfg(base=10.0, scale=1.4).resolve()
+    x = np.linspace(0.0, 8.0, 160)
+    fig, axs = plt.subplots(1, 2, figsize=(8.4, 2.8), sharey=True)
+    for idx, ax in enumerate(axs):
+        ax.plot(x, np.sin(x / 1.6), color=LINE_COLORS[0], linewidth=2.0, label="Trace A")
+        ax.plot(x, np.cos(x / 1.4), color=LINE_COLORS[1], linewidth=2.0, label="Trace B")
+        ax.legend(loc="upper right", frameon=False)
+        ax.set_title("Before style_legend" if idx == 0 else "After style_legend")
+        if idx == 1:
+            style_legend(ax, fc)
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=180)
@@ -146,7 +346,7 @@ def generate_plotting_showcase(output_path: Path, image_example_path: Path) -> N
         0.05 + 0.30 / (1.0 + np.exp(-7.0 * (time - 0.68))),
     ]
 
-    fig, axs = plt.subplots(2, 2, figsize=(10.4, 7.2))
+    fig, axs = plt.subplots(2, 2, figsize=(10.8, 7.2))
 
     plot_spike_raster(
         axs[0, 0],
@@ -180,16 +380,20 @@ def generate_plotting_showcase(output_path: Path, image_example_path: Path) -> N
     add_panel_label(axs[0, 1], "B", fc)
     style_axes(axs[0, 1], fc)
 
+    panel_c_spec = axs[1, 0].get_subplotspec()
+    fig.delaxes(axs[1, 0])
+    panel_c_grid = panel_c_spec.subgridspec(1, 2, width_ratios=[1.0, 0.14], wspace=0.18)
+    ax_lines = fig.add_subplot(panel_c_grid[0, 0])
+    cax = fig.add_subplot(panel_c_grid[0, 1])
     for idx, trace in enumerate(traces, start=1):
-        axs[1, 0].plot(time * 180.0, trace, linewidth=2.2, color=LINE_COLORS[idx - 1], label=f"{idx} focus")
-    axs[1, 0].set_xlabel("Driven input [a.u.]")
-    axs[1, 0].set_ylabel("Mean rate")
-    axs[1, 0].set_title("Lines with discrete colorbar")
-    axs[1, 0].set_ylim(0.0, 0.8)
-    style_axes(axs[1, 0], fc)
-    axs[1, 0].legend(loc="upper left", frameon=False)
-    style_legend(axs[1, 0], fc)
-    cax = axs[1, 0].inset_axes([0.78, 0.18, 0.18, 0.64])
+        ax_lines.plot(time * 180.0, trace, linewidth=2.2, color=LINE_COLORS[idx - 1], label=f"{idx} focus")
+    ax_lines.set_xlabel("Driven input [a.u.]")
+    ax_lines.set_ylabel("Mean rate")
+    ax_lines.set_title("Lines with discrete colorbar")
+    ax_lines.set_ylim(0.0, 0.8)
+    style_axes(ax_lines, fc)
+    ax_lines.legend(loc="upper left", frameon=False)
+    style_legend(ax_lines, fc)
     cbar = draw_listed_colorbar(
         fig,
         cax,
@@ -198,7 +402,7 @@ def generate_plotting_showcase(output_path: Path, image_example_path: Path) -> N
         label="Focus",
     )
     style_colorbar(cbar, fc)
-    add_panel_label(axs[1, 0], "C", fc)
+    add_panel_label(ax_lines, "C", fc)
 
     add_image_ax(axs[1, 1], str(image_example_path), fc=fc)
     axs[1, 1].set_title("Embedded image via add_image_ax")
@@ -214,10 +418,28 @@ def main() -> None:
     assets_dir = ROOT / "docs" / "plotting_assets"
     spike_raster = assets_dir / "spike_raster_example.png"
     grouped_raster = assets_dir / "grouped_spike_raster_example.png"
+    binary_raster = assets_dir / "binary_raster_example.png"
+    image_ax = assets_dir / "add_image_ax_example.png"
+    corner_tag = assets_dir / "add_corner_tag_example.png"
+    panel_label = assets_dir / "add_panel_label_example.png"
+    panel_label_column = assets_dir / "add_panel_labels_column_left_of_ylabel_example.png"
+    listed_colorbar = assets_dir / "draw_listed_colorbar_example.png"
+    style_axes = assets_dir / "style_axes_comparison.png"
+    style_colorbar = assets_dir / "style_colorbar_comparison.png"
+    style_legend = assets_dir / "style_legend_comparison.png"
     showcase = assets_dir / "plotting_showcase.png"
 
     generate_spike_raster_example(spike_raster)
     generate_grouped_spike_raster_example(grouped_raster)
+    generate_binary_raster_example(binary_raster)
+    generate_add_image_ax_example(image_ax, grouped_raster)
+    generate_corner_tag_example(corner_tag)
+    generate_panel_label_example(panel_label)
+    generate_panel_label_column_example(panel_label_column)
+    generate_listed_colorbar_example(listed_colorbar)
+    generate_style_axes_comparison(style_axes)
+    generate_style_colorbar_comparison(style_colorbar)
+    generate_style_legend_comparison(style_legend)
     generate_plotting_showcase(showcase, grouped_raster)
     print(f"Wrote {assets_dir}")
 

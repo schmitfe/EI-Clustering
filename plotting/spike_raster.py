@@ -200,6 +200,8 @@ def plot_spike_raster(
     ---------------
     The axes contains one grouped raster with group-specific colors and three
     group labels at the right margin.
+
+    ![Spike raster example](plotting_assets/grouped_spike_raster_example.png)
     """
     times = np.asarray(spike_times_ms, dtype=float)
     neuron_ids = np.asarray(spike_ids, dtype=int)
@@ -259,7 +261,7 @@ def plot_spike_raster(
 
     # Limits
     if times.size:
-        xmin = float(times.min() if t_start is None else t_start)
+        xmin = 0.0 if t_start is None else float(t_start)
         xmax = float(times.max() if t_end is None else t_end)
         if t_start is not None:
             xmin = float(t_start)
@@ -268,7 +270,7 @@ def plot_spike_raster(
         if xmin == xmax:
             xmax = xmin + 1.0
         ax.set_xlim(xmin, xmax)
-    elif t_start is not None or t_end is not None:
+    else:
         xmin = float(t_start if t_start is not None else 0.0)
         xmax = float(t_end if t_end is not None else xmin + 1.0)
         if xmin == xmax:

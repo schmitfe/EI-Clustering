@@ -169,7 +169,7 @@ def draw_listed_colorbar(
     width_fraction: Optional[float] = None,
     use_parent_axis: bool = False,
     label_kwargs: Optional[Mapping[str, Any]] = None,
-) -> None:
+):
     """Draw a discrete listed colorbar from `(value, color)` entries.
 
     Examples
@@ -195,6 +195,8 @@ def draw_listed_colorbar(
     ---------------
     The second axes contains a two-level discrete colorbar with ticks at `1.0`
     and `2.0`.
+
+    ![Discrete colorbar example](plotting_assets/draw_listed_colorbar_example.png)
     """
     if not entries:
         axis.set_axis_off()
@@ -217,20 +219,23 @@ def draw_listed_colorbar(
     if use_parent_axis:
         colorbar_kwargs["ax"] = axis
     else:
-        axis.set_axis_off()
         target_axis: "Axes" = axis
         inset = [0.0, 0.0, 1.0, 1.0]
         use_inset = False
+        effective_width_fraction = width_fraction
+        if effective_width_fraction is None and orientation == "vertical":
+            effective_width_fraction = 0.25
         if height_fraction is not None and 0.0 < height_fraction < 1.0:
             inset_height = height_fraction
             inset[1] = (1.0 - inset_height) / 2.0
             inset[3] = inset_height
             use_inset = True
-        if width_fraction is not None and 0.0 < width_fraction < 1.0:
-            inset[0] = 0.0
-            inset[2] = width_fraction
+        if effective_width_fraction is not None and 0.0 < effective_width_fraction < 1.0:
+            inset[0] = (1.0 - effective_width_fraction) / 2.0
+            inset[2] = effective_width_fraction
             use_inset = True
         if use_inset:
+            axis.set_axis_off()
             target_axis = axis.inset_axes(inset)
         colorbar_kwargs["cax"] = target_axis
     colorbar = fig.colorbar(scalar, **colorbar_kwargs)
