@@ -34,7 +34,10 @@ __all__ = [
     "FixedIndegreeSynapse",
     "AllToAllSynapse",
     "BinaryNetwork",
+    "warm_numba_caches",
 ]
+
+_NUMBA_WARMED = False
 
 
 @njit(cache=True)
@@ -177,6 +180,66 @@ def _population_rates_kernel(cluster_sums, sizes, cluster_of, updates, deltas, s
                 samples[sample_idx, pop_idx] = running[pop_idx] / sizes[pop_idx]
             sample_idx += 1
     return samples
+
+
+def warm_numba_caches() -> None:
+    """Compile and cache the numba kernels once per process."""
+    global _NUMBA_WARMED
+    if _NUMBA_WARMED:
+        return
+    neurons = np.array([0], dtype=np.int64)
+    state = np.zeros(2, dtype=np.int8)
+    field = np.zeros(2, dtype=np.float32)
+    thresholds = np.zeros(2, dtype=np.float32)
+    weights = np.zeros((2, 2), dtype=np.float32)
+    log_states = np.zeros((1, 2), dtype=np.int8)
+    update_log = np.zeros(1, dtype=np.uint16)
+    delta_log = np.zeros(1, dtype=np.int8)
+    _dense_batch_kernel(
+        neurons,
+        state.copy(),
+        field.copy(),
+        thresholds,
+        weights,
+        log_states,
+        False,
+        0,
+        update_log,
+        delta_log,
+        False,
+        0,
+    )
+    _sparse_batch_kernel(
+        neurons,
+        state.copy(),
+        field.copy(),
+        thresholds,
+        np.zeros(0, dtype=np.float32),
+        np.zeros(0, dtype=np.int32),
+        np.array([0, 0], dtype=np.int32),
+        log_states,
+        False,
+        0,
+        update_log,
+        delta_log,
+        False,
+        0,
+    )
+    _reconstruct_states_kernel(
+        np.zeros(2, dtype=np.int8),
+        np.zeros((1, 1), dtype=np.int64),
+        np.zeros((1, 1), dtype=np.int8),
+        1,
+    )
+    _population_rates_kernel(
+        np.zeros(1, dtype=np.int64),
+        np.ones(1, dtype=np.float32),
+        np.zeros(2, dtype=np.int32),
+        np.zeros((1, 1), dtype=np.int64),
+        np.zeros((1, 1), dtype=np.int8),
+        1,
+    )
+    _NUMBA_WARMED = True
 
 
 class NetworkElement:

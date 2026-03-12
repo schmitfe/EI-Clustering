@@ -10,9 +10,12 @@ from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 
 from BinaryNetwork.ClusteredEI_network import ClusteredEI_network
+from BinaryNetwork.BinaryNetwork import warm_numba_caches
 
 from MeanField.rate_system import ensure_output_folder
 from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg, write_yaml_config
+
+DEFAULT_BATCH_SIZE = 200
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,6 +84,42 @@ def ensure_binary_behavior_defaults(cfg: Dict[str, Any] | None) -> Dict[str, Any
     return normalized
 
 
+def _mean_connectivity(parameter: Dict[str, Any]) -> float:
+    n_e = float(parameter.get("N_E", 0.0) or 0.0)
+    n_i = float(parameter.get("N_I", 0.0) or 0.0)
+    total = (n_e + n_i) ** 2
+    if total <= 0:
+        return 0.0
+    numerator = (
+        (n_e ** 2) * float(parameter.get("p0_ee", 0.0) or 0.0)
+        + (n_e * n_i) * (float(parameter.get("p0_ei", 0.0) or 0.0) + float(parameter.get("p0_ie", 0.0) or 0.0))
+        + (n_i ** 2) * float(parameter.get("p0_ii", 0.0) or 0.0)
+    )
+    return numerator / total
+
+
+def finalize_binary_config(parameter: Dict[str, Any], cfg: Dict[str, Any] | None) -> Dict[str, Any]:
+    normalized = ensure_binary_behavior_defaults(cfg)
+    requested_mode = str(normalized.get("weight_mode", "auto") or "auto").lower()
+    normalized["requested_weight_mode"] = requested_mode
+    if requested_mode != "auto":
+        normalized["weight_mode"] = requested_mode
+        return normalized
+    n_total = int(parameter.get("N_E", 0) or 0) + int(parameter.get("N_I", 0) or 0)
+    total_steps = int(normalized.get("warmup_steps", 0) or 0) + int(normalized.get("simulation_steps", 0) or 0)
+    mean_conn = _mean_connectivity(parameter)
+    bytes_per_entry = np.dtype(np.float64 if normalized["weight_dtype"] == "float64" else np.float32).itemsize
+    dense_bytes = n_total * n_total * bytes_per_entry
+    dense_fits = dense_bytes <= (0.6 * float(normalized.get("ram_budget_gb", 12.0) or 12.0) * (1024 ** 3))
+    if not dense_fits:
+        normalized["weight_mode"] = "sparse"
+    elif total_steps >= 500_000 and n_total >= 4_000 and 0.0 < mean_conn < 0.45:
+        normalized["weight_mode"] = "sparse"
+    else:
+        normalized["weight_mode"] = "dense"
+    return normalized
+
+
 def _resolve_binary_config(parameter: Dict, args: argparse.Namespace) -> Dict:
     cfg = dict(parameter.get("binary", {}))
     cfg["warmup_steps"] = args.warmup_steps if args.warmup_steps is not None else cfg.get("warmup_steps", 5000)
@@ -90,7 +129,7 @@ def _resolve_binary_config(parameter: Dict, args: argparse.Namespace) -> Dict:
     cfg["sample_interval"] = (
         args.sample_interval if args.sample_interval is not None else cfg.get("sample_interval", 10)
     )
-    cfg["batch_size"] = args.batch_size if args.batch_size is not None else cfg.get("batch_size", 1)
+    cfg["batch_size"] = args.batch_size if args.batch_size is not None else cfg.get("batch_size", DEFAULT_BATCH_SIZE)
     cfg["seed"] = args.seed if args.seed is not None else cfg.get("seed")
     cfg["output_name"] = args.output_name or cfg.get("output_name", "activity_trace")
     cfg["plot_activity"] = bool(args.plot_activity or cfg.get("plot_activity", False))
@@ -102,7 +141,7 @@ def _resolve_binary_config(parameter: Dict, args: argparse.Namespace) -> Dict:
         cfg["population_rate_init"] = float(args.population_rate_init)
     else:
         cfg["population_rate_init"] = cfg.get("population_rate_init", 0.1)
-    return ensure_binary_behavior_defaults(cfg)
+    return finalize_binary_config(parameter, cfg)
 
 
 def _apply_population_rate_initialization(
@@ -244,7 +283,8 @@ def run_binary_simulation(
     output_name: str | None = None,
     population_rate_inits: Sequence[float] | None = None,
 ) -> Dict[str, Any]:
-    binary_cfg = ensure_binary_behavior_defaults(binary_cfg)
+    binary_cfg = finalize_binary_config(parameter, binary_cfg)
+    warm_numba_caches()
     seed = binary_cfg.get("seed")
     if seed is not None:
         np.random.seed(int(seed))

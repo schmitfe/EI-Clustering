@@ -24,7 +24,7 @@ binary:
   warmup_steps: 60000
   simulation_steps: 3000000
   sample_interval: 10
-  batch_size: 10
+  batch_size: 200
   state_chunk_size: 0
   population_rate_init: 0.1
   seed: null

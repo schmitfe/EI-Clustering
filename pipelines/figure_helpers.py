@@ -11,10 +11,11 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 
+from BinaryNetwork.BinaryNetwork import warm_numba_caches
 from BinaryNetwork.ClusteredEI_network import ClusteredEI_network
 from MeanField.rate_system import ensure_output_folder
 from pipelines.binary import (
-    ensure_binary_behavior_defaults,
+    finalize_binary_config,
     run_binary_simulation,
 )
 from pipelines.mean_field import run_analysis as run_mean_field_analysis
@@ -117,10 +118,10 @@ def resolve_binary_config(parameter: Dict[str, Any], overrides: BinaryRunSetting
     if overrides.batch_size is not None:
         cfg["batch_size"] = int(overrides.batch_size)
     else:
-        cfg["batch_size"] = int(cfg.get("batch_size", 1))
+        cfg["batch_size"] = int(cfg.get("batch_size", 200))
     cfg["seed"] = overrides.seed if overrides.seed is not None else cfg.get("seed")
     cfg["output_name"] = overrides.output_name or cfg.get("output_name", "activity_trace")
-    return ensure_binary_behavior_defaults(cfg)
+    return finalize_binary_config(parameter, cfg)
 
 
 def _filtered_parameter_for_tag(parameter: Dict[str, Any]) -> Dict[str, Any]:
@@ -1008,6 +1009,7 @@ def _process_task(task: InitTask) -> Dict[str, Any]:
 def _execute_tasks(tasks: Sequence[InitTask], jobs: int) -> List[Dict[str, Any]]:
     if not tasks:
         return []
+    warm_numba_caches()
     if jobs <= 1:
         return [_process_task(task) for task in tasks]
     max_workers = min(int(jobs), len(tasks))
