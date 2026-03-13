@@ -15,4 +15,3 @@ The NEST environment is separate on purpose:
 
 The version ranges are intentionally conservative rather than a full export:
 - they match the packages used by the current figure code
-- they stay compatible with the Python 3.12 module stack used on the cluster
