@@ -36,6 +36,8 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
 
 
 ### Commands to generate Figures:
+`Figure4.py` and the fixed-indegree `FigureS4` command below are long-running with the manuscript-scale settings. For cluster runs, use [`scripts/submit_figure4_slurm.py`](/home/fschmitt/Documents/git/EI-Clustering/scripts/submit_figure4_slurm.py), which accepts the normal `Figure4.py` arguments plus optional `--slurm-*` wrapper flags.
+
 #### Main Text:
 - Figure1:
 `python Figure1.py --panel-override c1:kappa=0 --panel-override c2:kappa=1 --raster-neuron-step 2 -O R_Eplus=7.25 -O R_j=0.8`

@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+"""Submit Figure 4/S4 runs as a Slurm job array.
+
+Usage
+-----
+Pass the regular ``Figure4.py`` arguments directly and add cluster settings via
+``--slurm-*`` flags. The wrapper chunks the ``--kappas`` and
+``--mean-connectivity`` sweeps across array jobs, then submits an optional
+dependent final job that reruns ``Figure4.py --analysis-only`` on the shared
+cache to render the final figure.
+
+Example
+-------
+python scripts/submit_figure4_slurm.py \\
+    --slurm-partition gpu \\
+    --slurm-nodelist agmn-srv-5 \\
+    --slurm-cpus-per-task 20 \\
+    --slurm-mem 20G \\
+    --kappas 0:1:0.125 \\
+    --mean-connectivity 0.2:0.3:0.05 \\
+    --focus-counts 1:4:1 \\
+    -O R_Eplus=8 -O R_j=0.8 -O connection_type=fixed_indegree \\
+    --simulation-steps 12000000 \\
+    --sample-interval 12000 \\
+    --no-std-shading \\
+    --output-prefix Figures/FigureS4
+"""
 from __future__ import annotations
 
 import argparse
