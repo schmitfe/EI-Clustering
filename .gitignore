@@ -50,3 +50,4 @@ plots/
 *.pickle
 
 .DS_Store
+/slurm/
