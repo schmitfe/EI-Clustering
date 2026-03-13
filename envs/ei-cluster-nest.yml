@@ -1,0 +1,19 @@
+name: ei-cluster-nest
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy>=1.26,<2
+  - scipy>=1.13,<1.15
+  - matplotlib>=3.9,<3.11
+  - numba>=0.60,<0.62
+  - pyyaml>=6
+  - sympy>=1.12
+  - pymupdf>=1.24,<2
+  - jax>=0.4.30,<0.5
+  - jaxlib>=0.4.30,<0.5
+  - nest-simulator>=3.7,<4
+  - pip
+  - pip:
+      - equinox>=0.11.10,<0.12
+      - optimistix>=0.0.10,<0.1

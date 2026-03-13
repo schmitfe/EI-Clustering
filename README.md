@@ -10,6 +10,12 @@ Mean-field solvers, binary-network simulations, figure-generation scripts, and r
 - Configuration defaults are defined under `sim_config/`. Always override parameters through the CLI rather than environment variables so runs remain reproducible.
 - Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, and optional binary traces, while plots go to `plots/`.
 
+## Environments
+- Conda environment files for the figure workflows live under [`envs/`](envs/README.md).
+- Use [`envs/ei-cluster-core.yml`](envs/ei-cluster-core.yml) for the binary/mean-field figures and shared plotting/docs tooling.
+- Use [`envs/ei-cluster-nest.yml`](envs/ei-cluster-nest.yml) when you also need the NEST-based spiking path (`Figure5`, `pipelines/spiking.py`, `NEST/EI_clustered_network/`).
+- The split is intentional: `nest-simulator` is only required for the spiking workflow and is easiest to keep isolated from the rest of the stack.
+
 ## API Documentation
 - The generated API docs live under [`docs/`](docs/index.html) with the entry page at [`docs/index.html`](docs/index.html).
 - Regenerate the site locally with `python scripts/generate_api_docs.py`.
