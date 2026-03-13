@@ -218,7 +218,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bif-bisection-tol",
         type=float,
-        default=0.1,
+        default=0.05,
         help="Minimum R_Eplus step resolved by the bifurcation bisection (default: %(default)s).",
     )
     parser.add_argument(
@@ -236,7 +236,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bif-fixpoint-threshold",
         type=int,
-        default=3,
+        default=2,
         help="Number of fixpoints required to count as a bifurcation (default: %(default)s).",
     )
     parser.add_argument(
@@ -252,6 +252,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bif-jobs",
+        default = 1,
         type=int,
         help="Worker processes used for bifurcation searches (default: CPU count).",
     )
@@ -1023,7 +1024,7 @@ def _compute_bifurcation_curves(
                 )
                 tasks.append(task)
     if tasks:
-        jobs = args.bif_jobs or mp.cpu_count()
+        jobs = args.bif_jobs
         if jobs <= 1:
             new_entries = [_task_entry(task) for task in tasks]
         else:

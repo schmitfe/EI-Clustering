@@ -183,7 +183,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--jobs",
         type=int,
-        default=1,
+        default=2,
         help="Worker processes for the multi-init simulations (default: %(default)s).",
     )
     return parser.parse_args()

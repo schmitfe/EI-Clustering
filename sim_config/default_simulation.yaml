@@ -27,6 +27,6 @@ binary:
   batch_size: 200
   state_chunk_size: 0
   population_rate_init: 0.1
-  seed: null
+  seed: 1
   output_name: activity_trace
   plot_activity: false
