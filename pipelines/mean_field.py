@@ -464,10 +464,10 @@ def run_simulation(
     tag = sim_tag_from_cfg(filtered)
     folder = ensure_output_folder(parameter, tag=tag)
     params_path = os.path.join(folder, "params.yaml")
-    if args.overwrite_simulation or not os.path.exists(params_path):
-        summary = dict(filtered)
-        summary["focus_counts"] = list(focus_counts)
-        write_yaml_config(summary, params_path)
+    summary = dict(filtered)
+    summary["focus_counts"] = list(focus_counts)
+    summary["r_eplus_values"] = [float(value) for value in r_eplus_values]
+    write_yaml_config(summary, params_path)
     produced_any = False
     existing_detected = False
     sweep_kwargs = dict(

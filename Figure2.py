@@ -543,6 +543,86 @@ def _summary_path(parameter: Mapping[str, float]) -> str:
     )
 
 
+def _normalize_r_eplus_values(values: Sequence[float], *, decimals: int = 8) -> List[float]:
+    return sorted({float(round(float(value), decimals)) for value in values})
+
+
+def _format_missing_r_values(values: Sequence[float], *, limit: int = 5) -> str:
+    ordered = [float(v) for v in values]
+    if not ordered:
+        return "[]"
+    if len(ordered) <= limit:
+        return "[" + ", ".join(f"{value:.2f}" for value in ordered) + "]"
+    head = ", ".join(f"{value:.2f}" for value in ordered[:limit])
+    return f"[{head}, ...] (total={len(ordered)})"
+
+
+def _summary_covers_request(
+    summary_path: str,
+    *,
+    focus_counts: Sequence[int],
+    r_values: Sequence[float],
+) -> bool:
+    try:
+        summary = _load_summary(summary_path)
+    except Exception as exc:
+        print(f"Existing summary at {summary_path} could not be read ({exc}); regenerating.")
+        return False
+    fixpoints = summary.get("fixpoints", {})
+    requested_focus = sorted({int(fc) for fc in focus_counts})
+    missing_focus = [fc for fc in requested_focus if fc not in fixpoints]
+    if missing_focus:
+        print(
+            f"Existing summary at {summary_path} is missing focus counts {missing_focus}; regenerating."
+        )
+        return False
+    expected_values = set(_normalize_r_eplus_values(r_values))
+    for focus_count in requested_focus:
+        available_values = {
+            float(round(_key_to_r_eplus(key), 8))
+            for key in fixpoints.get(focus_count, {})
+            if math.isfinite(_key_to_r_eplus(key))
+        }
+        missing_values = sorted(expected_values - available_values)
+        if missing_values:
+            print(
+                f"Existing summary at {summary_path} is missing R_Eplus values "
+                f"for focus_count={focus_count}: {_format_missing_r_values(missing_values)}; regenerating."
+            )
+            return False
+    return True
+
+
+def _filter_summary_to_request(
+    summary: Mapping[str, Any],
+    *,
+    focus_counts: Sequence[int],
+    r_values: Sequence[float],
+) -> Dict[str, Any]:
+    requested_focus = sorted({int(fc) for fc in focus_counts})
+    requested_values = set(_normalize_r_eplus_values(r_values))
+    filtered_fixpoints: Dict[int, Dict[str, Any]] = {}
+    original_fixpoints = summary.get("fixpoints", {})
+    for focus_count in requested_focus:
+        block = _coerce_focus_block(original_fixpoints, focus_count)
+        if not block:
+            continue
+        filtered_block = {
+            key: fixpoint_group
+            for key, fixpoint_group in block.items()
+            if float(round(_key_to_r_eplus(key), 8)) in requested_values
+        }
+        if filtered_block:
+            filtered_fixpoints[int(focus_count)] = filtered_block
+    filtered_summary = dict(summary)
+    filtered_summary["fixpoints"] = filtered_fixpoints
+    metadata = dict(filtered_summary.get("metadata", {}))
+    metadata["requested_focus_counts"] = list(requested_focus)
+    metadata["requested_r_eplus_values"] = list(_normalize_r_eplus_values(r_values))
+    filtered_summary["metadata"] = metadata
+    return filtered_summary
+
+
 def _cache_key(kappa: float, r_j: float, prob_scale: float, *, decimals: int = 9) -> Tuple[float, float, float]:
     return (
         round(float(kappa), decimals),
@@ -1195,10 +1275,9 @@ def _ensure_fixpoint_summary(
     focus_counts: Sequence[int],
 ) -> str:
     parameter = dict(parameter)
-    parameter["focus_counts"] = list(sorted(set(int(fc) for fc in focus_counts)))
+    requested_focus_counts = list(sorted(set(int(fc) for fc in focus_counts)))
+    parameter["focus_counts"] = requested_focus_counts
     summary_path = _summary_path(parameter)
-    if not args.overwrite_analysis and os.path.exists(summary_path):
-        return summary_path
     pipeline_args = SimpleNamespace(
         v_start=args.v_start,
         v_end=args.v_end,
@@ -1212,11 +1291,17 @@ def _ensure_fixpoint_summary(
         r_eplus_step=args.r_eplus_step,
     )
     r_values = resolve_r_eplus(pipeline_args, parameter)
-    focus_counts = list(sorted(set(int(fc) for fc in focus_counts)))
-    folder = run_simulation(pipeline_args, parameter, r_values, focus_counts)
+    if not args.overwrite_analysis and os.path.exists(summary_path):
+        if _summary_covers_request(
+            summary_path,
+            focus_counts=requested_focus_counts,
+            r_values=r_values,
+        ):
+            return summary_path
+    folder = run_simulation(pipeline_args, parameter, r_values, requested_focus_counts)
     if folder is None:
         raise RuntimeError("Simulation did not produce any data folder.")
-    run_analysis(folder, parameter, focus_counts, plot_erfs=False)
+    run_analysis(folder, parameter, requested_focus_counts, plot_erfs=False)
     if not os.path.exists(summary_path):
         raise FileNotFoundError(f"Expected summary file not found at {summary_path}")
     return summary_path
@@ -1418,7 +1503,11 @@ def main() -> None:
             parameter = dict(row_parameter)
             parameter["kappa"] = float(kappa)
             summary_path = _ensure_fixpoint_summary(args, parameter, focus_counts)
-            summary = _load_summary(summary_path)
+            summary = _filter_summary_to_request(
+                _load_summary(summary_path),
+                focus_counts=focus_counts,
+                r_values=resolve_r_eplus(args, parameter),
+            )
             label_coords = PANEL_LABEL_ABOVE_COORDS
             label_align = PANEL_LABEL_ABOVE_ALIGN
             onset_x = plot_panel(
@@ -1532,6 +1621,7 @@ def main() -> None:
         font_cfg=font_cfg,
         label="# active clusters",
         height_fraction=COLORBAR_HEIGHT_FRACTION,
+        width_fraction=1.0,
         label_kwargs={"rotation": -90, "va": "bottom", "labelpad": 10},
     )
     save_kwargs = {"dpi": 600}
