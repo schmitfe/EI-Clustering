@@ -76,6 +76,10 @@ class RateSystem:
     # Minimum allowed variance to prevent numerical instabilities.
     # Chosen small enough to avoid affecting dynamics, only avoids divide-by-zero.
     VAR_EPS = 1e-12
+    # Accept near-roots even when the underlying SciPy solver does not set success=True.
+    RESIDUAL_ACCEPT_TOL = 5e-4
+    # Smallest continuation step introduced when adaptively subdividing the ERF sweep.
+    ADAPTIVE_CONTINUATION_MIN_STEP = 1e-3
 
     def __init__(
         self,
@@ -283,15 +287,108 @@ class RateSystem:
                 self.use_jax = False
         return self._solve_with_scipy(initial)
 
+    @staticmethod
+    def _residual_norm(residual: np.ndarray) -> float:
+        arr = np.asarray(residual, dtype=float).ravel()
+        if arr.size == 0:
+            return 0.0
+        return float(np.linalg.norm(arr))
+
+    def _normalize_solver_result(
+        self,
+        x: np.ndarray,
+        residual: np.ndarray,
+        success: bool,
+        *,
+        method: str,
+    ) -> Tuple[np.ndarray, np.ndarray, bool]:
+        x_arr = np.asarray(x, dtype=float).ravel()
+        residual_arr = np.asarray(residual, dtype=float).ravel()
+        finite = np.isfinite(x_arr).all() and np.isfinite(residual_arr).all()
+        accepted = bool(success) and finite
+        if (not accepted) and finite:
+            residual_norm = self._residual_norm(residual_arr)
+            if residual_norm <= self.RESIDUAL_ACCEPT_TOL:
+                logger.debug(
+                    "Accepting near-root from %s at v_focus %.6f with residual norm %.3e.",
+                    method,
+                    float(self.v_focus),
+                    residual_norm,
+                )
+                accepted = True
+        return x_arr, residual_arr, accepted
+
     def _solve_with_scipy(self, initial: np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool]:
-        result = optimize.root(
+        best_x = np.asarray(initial, dtype=float).ravel()
+        best_residual = np.asarray(self.residual_numpy(best_x), dtype=float).ravel()
+        best_norm = self._residual_norm(best_residual)
+
+        def remember(x: np.ndarray, residual: np.ndarray) -> None:
+            nonlocal best_x, best_residual, best_norm
+            if not (np.isfinite(x).all() and np.isfinite(residual).all()):
+                return
+            norm = self._residual_norm(residual)
+            if norm < best_norm:
+                best_x = np.asarray(x, dtype=float).ravel()
+                best_residual = np.asarray(residual, dtype=float).ravel()
+                best_norm = norm
+
+        hybr = optimize.root(
             self.residual_numpy,
             initial,
             method="hybr",
             tol=self.root_tol,
             options={"maxfev": self.max_function_evals},
         )
-        return result.x, result.fun, bool(result.success)
+        x_hybr, residual_hybr, success_hybr = self._normalize_solver_result(
+            hybr.x,
+            hybr.fun,
+            bool(hybr.success),
+            method="scipy.root(hybr)",
+        )
+        if success_hybr:
+            return x_hybr, residual_hybr, True
+        remember(x_hybr, residual_hybr)
+
+        lm_initial = x_hybr if np.isfinite(x_hybr).all() else np.asarray(initial, dtype=float).ravel()
+        lm = optimize.root(
+            self.residual_numpy,
+            lm_initial,
+            method="lm",
+            tol=self.root_tol,
+            options={"maxiter": self.max_function_evals},
+        )
+        x_lm, residual_lm, success_lm = self._normalize_solver_result(
+            lm.x,
+            lm.fun,
+            bool(lm.success),
+            method="scipy.root(lm)",
+        )
+        if success_lm:
+            return x_lm, residual_lm, True
+        remember(x_lm, residual_lm)
+
+        ls_initial = x_lm if np.isfinite(x_lm).all() else lm_initial
+        ls = optimize.least_squares(
+            self.residual_numpy,
+            ls_initial,
+            method="trf",
+            xtol=self.root_tol,
+            ftol=self.root_tol,
+            gtol=self.root_tol,
+            max_nfev=self.max_function_evals,
+        )
+        x_ls, residual_ls, success_ls = self._normalize_solver_result(
+            ls.x,
+            ls.fun,
+            bool(ls.success),
+            method="scipy.least_squares(trf)",
+        )
+        if success_ls:
+            return x_ls, residual_ls, True
+        remember(x_ls, residual_ls)
+
+        return best_x, best_residual, False
 
     def _solve_with_optimistix(self, initial: np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool]:
         args = self._prepare_jax_args()
@@ -481,8 +578,41 @@ class RateSystem:
         y_data: List[float] = []
         solves: List[np.ndarray] = []
         step = (end - start) / max(step_number, 1)
+        adaptive_min_step = min(abs(step), cls.ADAPTIVE_CONTINUATION_MIN_STEP) if step != 0 else cls.ADAPTIVE_CONTINUATION_MIN_STEP
         aborted = False
         fallback_values = list(fallback_initials) if fallback_initials is not None else [0.02, 0.2, 0.5, 0.8, 0.98]
+
+        def solve_with_fallback_initials(
+            system: "RateSystem",
+            initial: Optional[np.ndarray],
+        ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], bool]:
+            best_solution: Optional[np.ndarray] = None
+            best_residual: Optional[np.ndarray] = None
+            best_norm = float("inf")
+            candidates: List[Optional[np.ndarray]] = [initial]
+            for seed in fallback_values:
+                if system.dim == 0:
+                    candidate = np.zeros((0,), dtype=float)
+                else:
+                    candidate = np.full((system.dim,), float(seed), dtype=float)
+                candidates.append(candidate)
+            for candidate in candidates:
+                try:
+                    solution, residual, success = system.solve(candidate)
+                except SolverConvergenceError as exc:
+                    logger.debug("Skipping v_in %.6f: %s", float(system.v_focus), str(exc))
+                    continue
+                residual_arr = np.asarray(residual, dtype=float).ravel()
+                if success:
+                    return np.asarray(solution, dtype=float).ravel(), residual_arr, True
+                if np.isfinite(residual_arr).all():
+                    residual_norm = cls._residual_norm(residual_arr)
+                    if residual_norm < best_norm:
+                        best_solution = np.asarray(solution, dtype=float).ravel()
+                        best_residual = residual_arr
+                        best_norm = residual_norm
+            return best_solution, best_residual, False
+
         vector_values: Optional[List[float]] = None
         if retry_step is None:
             vector_values = []
@@ -507,9 +637,8 @@ class RateSystem:
                 failure = np.flatnonzero(~success_flags)
                 prefix_limit = int(failure[0]) if failure.size else len(vector_values)
         if vector_values is not None:
-            total_points = len(vector_values)
             idx = 0
-            while idx < total_points:
+            while idx < len(vector_values):
                 v_in = vector_values[idx]
                 system.v_focus = float(v_in)
                 use_prefetched = prefetched_solutions is not None and idx < prefix_limit
@@ -517,89 +646,41 @@ class RateSystem:
                     solution = np.asarray(prefetched_solutions[idx], dtype=float)
                     success = True
                 else:
-                    skip_due_to_solver = False
-                    try:
-                        solution, residual, success = system.solve(current_initial)
-                    except SolverConvergenceError as exc:
-                        logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
-                        skip_due_to_solver = True
-                    if skip_due_to_solver:
-                        idx += 1
-                        continue
+                    solution, residual, success = solve_with_fallback_initials(system, current_initial)
                     if not success:
-                        for seed in fallback_values:
-                            if system.dim == 0:
-                                candidate = np.zeros((0,), dtype=float)
-                            else:
-                                candidate = np.full((system.dim,), float(seed), dtype=float)
-                            try:
-                                solution, residual, success = system.solve(candidate)
-                            except SolverConvergenceError as exc:
-                                logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
-                                skip_due_to_solver = True
-                                break
-                            if success:
-                                break
-                        if skip_due_to_solver:
-                            idx += 1
-                            continue
-                        if not success:
-                            aborted = True
-                            break
+                        prev_v = x_data[-1] if x_data else None
+                        if prev_v is not None:
+                            gap = float(v_in) - float(prev_v)
+                            if gap > adaptive_min_step + ERF_EPS:
+                                midpoint = float(prev_v) + 0.5 * gap
+                                vector_values.insert(idx, midpoint)
+                                prefetched_solutions = None
+                                prefix_limit = 0
+                                continue
+                        aborted = True
+                        break
                 phi_values = system.phi_numpy(solution)
                 x_data.append(system.v_focus)
                 y_data.append(system.focus_output(phi_values))
                 solves.append(solution)
                 current_initial = solution
                 idx += 1
-            completed = (not aborted) and (vector_values is not None and len(x_data) == len(vector_values))
+            completed = (not aborted) and (len(x_data) == len(vector_values))
         else:
             v_in = float(start)
             next_value = v_in
             while v_in <= end + ERF_EPS:
                 system.v_focus = float(v_in)
-                skip_due_to_solver = False
-                try:
-                    solution, residual, success = system.solve(current_initial)
-                except SolverConvergenceError as exc:
-                    logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
-                    skip_due_to_solver = True
-                if skip_due_to_solver:
-                    if step == 0:
-                        aborted = True
-                        break
-                    v_in = system.v_focus + step
-                    next_value = v_in
-                    continue
+                solution, residual, success = solve_with_fallback_initials(system, current_initial)
                 if not success:
-                    for seed in fallback_values:
-                        if system.dim == 0:
-                            candidate = np.zeros((0,), dtype=float)
-                        else:
-                            candidate = np.full((system.dim,), float(seed), dtype=float)
-                        try:
-                            solution, residual, success = system.solve(candidate)
-                        except SolverConvergenceError as exc:
-                            logger.debug("Skipping v_in %.6f: %s", float(v_in), str(exc))
-                            skip_due_to_solver = True
-                            break
-                        if success:
-                            break
-                    if skip_due_to_solver:
-                        if step == 0:
-                            aborted = True
-                            break
-                        v_in = system.v_focus + step
-                        next_value = v_in
-                        continue
-                    if retry_step is not None and not success:
+                    if retry_step is not None:
                         v_in += retry_step
                         next_value = v_in
-                        current_initial = solution
+                        if solution is not None:
+                            current_initial = solution
                         continue
-                    if not success:
-                        aborted = True
-                        break
+                    aborted = True
+                    break
                 phi_values = system.phi_numpy(solution)
                 x_data.append(system.v_focus)
                 y_data.append(system.focus_output(phi_values))
