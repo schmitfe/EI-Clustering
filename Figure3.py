@@ -20,6 +20,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 import numpy as np  # noqa: E402
 
+from figure_cli import add_v_sweep_arguments, parse_int_values, resolve_float_values, resolve_v_sweep
 import pipelines.mean_field as ei_pipeline  # noqa: E402
 from MeanField.rate_system import ensure_output_folder  # noqa: E402
 from pipelines.binary import ensure_binary_behavior_defaults, finalize_binary_config, run_binary_simulation  # noqa: E402
@@ -48,13 +49,14 @@ def parse_args() -> argparse.Namespace:
         )
     )
     add_override_arguments(parser)
-    parser.add_argument("--r-eplus", type=float, action="append", help="Explicit R_Eplus values to analyze.")
-    parser.add_argument("--r-eplus-start", type=float, help="Start of an R_Eplus sweep (inclusive).")
-    parser.add_argument("--r-eplus-end", type=float, help="End of an R_Eplus sweep (inclusive).")
-    parser.add_argument("--r-eplus-step", type=float, help="Step size for the R_Eplus sweep.")
-    parser.add_argument("--v-start", type=float, default=0.0, help="ERF sweep start value (default: %(default)s).")
-    parser.add_argument("--v-end", type=float, default=1.0, help="ERF sweep end value (default: %(default)s).")
-    parser.add_argument("--v-steps", type=int, default=1000, help="ERF samples per sweep (default: %(default)s).")
+    parser.add_argument(
+        "--r-eplus",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Explicit R_Eplus values or range expressions (e.g., 6 8 or 1:20:0.5).",
+    )
+    add_v_sweep_arguments(parser)
     parser.add_argument("--retry-step", type=float, help="Optional retry increment for solver restarts.")
     parser.add_argument(
         "--delta-rep-mf",
@@ -92,9 +94,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--focus-counts",
-        type=int,
+        type=str,
         nargs="+",
-        help="Focus counts to include (default: all values from 1..Q).",
+        help="Focus counts or integer ranges to include (e.g., 1 2 4 or 1:4:1). Defaults to all values from 1..Q.",
     )
     parser.add_argument(
         "--stability-filter",
@@ -158,24 +160,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def _resolve_r_eplus_list(args: argparse.Namespace, parameter: Dict[str, Any]) -> List[float]:
-    if args.r_eplus:
-        return [float(val) for val in args.r_eplus]
-    if (
-        args.r_eplus_start is not None
-        and args.r_eplus_end is not None
-        and args.r_eplus_step is not None
-    ):
-        start = float(args.r_eplus_start)
-        end = float(args.r_eplus_end)
-        step = float(args.r_eplus_step)
-        if step <= 0:
-            raise ValueError("--r-eplus-step must be positive.")
-        count = int(np.floor((end - start) / step)) + 1
-        values = np.round(np.linspace(start, start + step * (count - 1), count), decimals=6)
-        valid = [float(val) for val in values if (step > 0 and val <= end + 1e-12)]
-        if not valid:
-            raise ValueError("R_Eplus sweep produced no valid values.")
-        return valid
+    values = resolve_float_values(args.r_eplus, option_name="--r-eplus")
+    if values:
+        return list(values)
     base = parameter.get("R_Eplus")
     if base is None:
         raise ValueError("Provide at least one R_Eplus value via the config or --r-eplus.")
@@ -1137,16 +1124,18 @@ def main() -> None:
     args = parse_args()
     base_parameter = load_from_args(args)
     r_eplus_values = _resolve_r_eplus_list(args, base_parameter)
+    parsed_focus_counts = parse_int_values(args.focus_counts, option_name="--focus-counts")
     column_override_map = _parse_column_override_entries(args.column_override)
     column_title_map = _parse_column_title_entries(args.column_title)
     known_labels = {_normalize_label(spec.label) for spec in COLUMN_SPECS}
     _validate_column_keys(column_override_map, known_labels, "column overrides")
     _validate_column_keys(column_title_map, known_labels, "column titles")
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
+    v_start, v_stop, v_steps = resolve_v_sweep(args)
     sweep_cfg = PipelineSweepSettings(
-        v_start=args.v_start,
-        v_end=args.v_end,
-        v_steps=args.v_steps,
+        v_start=v_start,
+        v_end=v_stop,
+        v_steps=v_steps,
         retry_step=args.retry_step,
         jobs=max(1, int(args.erf_jobs or 1)),
         overwrite_simulation=bool(args.overwrite_erf),
@@ -1174,7 +1163,7 @@ def main() -> None:
                 column_override_map=column_override_map,
             )
             title_text = _resolve_column_title(column_param, spec, title_map=column_title_map)
-            focus_counts = _resolve_focus_counts(column_param, args.focus_counts)
+            focus_counts = _resolve_focus_counts(column_param, parsed_focus_counts)
             focus_union.update(int(value) for value in focus_counts)
             column_param["R_Eplus"] = float(column_param.get("R_Eplus", r_value) or r_value)
             binary_cfg = _resolve_binary_config(column_param, binary_overrides)

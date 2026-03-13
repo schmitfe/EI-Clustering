@@ -14,6 +14,7 @@ import numpy as np  # noqa: E402
 from matplotlib.patches import Circle  # noqa: E402
 
 from BinaryNetwork.ClusteredEI_network import ClusteredEI_network  # noqa: E402
+from figure_cli import resolve_float_values
 from plotting import FontCfg, add_panel_label, style_axes  # noqa: E402
 from sim_config import add_override_arguments, deep_update, load_from_args, parse_overrides  # noqa: E402
 
@@ -30,11 +31,10 @@ def parse_args() -> argparse.Namespace:
     )
     add_override_arguments(parser)
     parser.add_argument(
-        "--kappa-values",
-        type=float,
+        "--kappas",
+        type=str,
         nargs="+",
-        default=[0.0, 0.5, 1.0],
-        help="Kappa values to plot (default: %(default)s).",
+        help="Kappa values or range expressions to plot (e.g., 0 0.5 1 or 0:1:0.5). Defaults to 0 0.5 1.",
     )
     parser.add_argument(
         "--seed",
@@ -185,7 +185,7 @@ def _plot_eigenvalues(
 def main() -> None:
     args = parse_args()
     base_parameter = load_from_args(args)
-    kappa_values = [float(value) for value in args.kappa_values]
+    kappa_values = list(resolve_float_values(args.kappas, option_name="--kappas", default=(0.0, 0.5, 1.0)) or [])
     column_overrides = _parse_column_overrides(args.column_override, len(kappa_values))
     eigvals: List[np.ndarray] = []
     for idx, kappa in enumerate(kappa_values):

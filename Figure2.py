@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import numpy as np
 
+from figure_cli import add_v_sweep_arguments, parse_int_values, resolve_float_values, resolve_v_sweep
 from MeanField.ei_cluster_network import EIClusterNetwork
 from plotting import (
     FontCfg,
@@ -81,10 +82,10 @@ def parse_args() -> argparse.Namespace:
     add_override_arguments(parser)
     parser.add_argument(
         "--rows",
-        type=float,
+        type=str,
         nargs="+",
-        default=[0.3, 0.1],
-        help="Average connectivity values defining the row order (default: %(default)s).",
+        default=["0.3", "0.1"],
+        help="Average connectivity values or ranges defining the row order (default: %(default)s).",
     )
     parser.add_argument(
         "--row-parameter",
@@ -98,10 +99,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--columns",
-        type=float,
+        type=str,
         nargs="+",
-        default=[0.0, 0.5, 1.0],
-        help="Kappa values defining the column order (default: %(default)s).",
+        default=["0.0", "0.5", "1.0"],
+        help="Kappa values or ranges defining the column order (default: %(default)s).",
     )
     parser.add_argument(
         "--x-min",
@@ -135,10 +136,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--line-focus-counts",
-        type=int,
+        type=str,
         nargs="*",
         default=None,
-        help="Other focus counts rendered as stable lines (omit to disable).",
+        help="Other focus counts or ranges rendered as stable lines (omit to disable).",
     )
     parser.add_argument(
         "--line-colormap",
@@ -151,9 +152,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--extra-focus-counts",
-        type=int,
+        type=str,
         nargs="+",
-        help="Additional focus counts to include during simulation.",
+        help="Additional focus counts or ranges to include during simulation.",
     )
     parser.add_argument(
         "--output",
@@ -167,14 +168,15 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Also export a PDF copy (default: enabled).",
     )
-    parser.add_argument("--v-start", type=float, default=0.0)
-    parser.add_argument("--v-end", type=float, default=1.0)
-    parser.add_argument("--v-steps", type=int, default=1000)
+    add_v_sweep_arguments(parser)
     parser.add_argument("--retry-step", type=float, default=None)
-    parser.add_argument("--r-eplus", type=float, action="append")
-    parser.add_argument("--r-eplus-start", type=float, default=1.0, help="Default start for R_Eplus sweep (default: %(default)s).")
-    parser.add_argument("--r-eplus-end", type=float, default=20.0, help="Default end for R_Eplus sweep (default: %(default)s).")
-    parser.add_argument("--r-eplus-step", type=float, default=0.25, help="Default step for R_Eplus sweep (default: %(default)s).")
+    parser.add_argument(
+        "--r-eplus",
+        type=str,
+        nargs="+",
+        default=["1:20:0.25"],
+        help="Explicit R_Eplus values or range expressions.",
+    )
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--overwrite-simulation", action="store_true")
     parser.add_argument("--overwrite-analysis", action="store_true")
@@ -185,42 +187,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bif-rj",
-        type=float,
-        action="append",
-        help="Explicit R_j value used for bifurcation curves (may repeat). Defaults to config value.",
-    )
-    parser.add_argument(
-        "--bif-rj-range",
-        type=float,
-        nargs=3,
-        metavar=("START", "END", "STEP"),
-        help="Optional inclusive range for R_j values used in the bifurcation row.",
+        type=str,
+        nargs="+",
+        help="Explicit R_j values or ranges used for bifurcation curves. Defaults to the config value.",
     )
     parser.add_argument(
         "--bif-prob-scale",
-        type=float,
-        action="append",
-        help="Explicit probability scaling factors for bifurcation curves (may repeat).",
-    )
-    parser.add_argument(
-        "--bif-prob-scale-range",
-        type=float,
-        nargs=3,
-        metavar=("START", "END", "STEP"),
-        help="Inclusive range of probability scaling factors (default: 0.1 1.0 0.1).",
+        type=str,
+        nargs="+",
+        help="Explicit probability scaling factors or ranges for bifurcation curves.",
     )
     parser.add_argument(
         "--bif-avg-connectivity",
-        type=float,
-        action="append",
-        help="Explicit average connectivity values (0-1) targeted in the bifurcation row.",
-    )
-    parser.add_argument(
-        "--bif-avg-connectivity-range",
-        type=float,
-        nargs=3,
-        metavar=("START", "END", "STEP"),
-        help="Inclusive range of average connectivity values explored in the bifurcation row.",
+        type=str,
+        nargs="+",
+        help="Explicit average connectivity values or ranges (0-1) targeted in the bifurcation row.",
     )
     parser.add_argument(
         "--bif-r-eplus-min",
@@ -640,34 +621,13 @@ def _normalize_float_list(values: Iterable[float], *, decimals: int = 10) -> Lis
 
 
 def _resolve_scale_values(
-    explicit: Optional[Sequence[float]],
-    range_values: Optional[Sequence[float]],
+    explicit: Optional[Sequence[str]],
     *,
     default_range: Tuple[float, float, float] = (0.1, 1.0, 0.1),
 ) -> List[float]:
-    collected: List[float] = []
-    if explicit:
-        collected.extend(float(v) for v in explicit)
-    source_range = range_values if range_values is not None else default_range
-    if source_range and len(source_range) == 3:
-        start, end, step = [float(v) for v in source_range]
-        if step == 0:
-            raise ValueError("Probability scaling range step must be non-zero.")
-        direction = 1 if step > 0 else -1
-        compare = (lambda a, b: a <= b) if direction > 0 else (lambda a, b: a >= b)
-        cursor = start
-        while compare(cursor, end + (1e-12 * direction)):
-            collected.append(cursor)
-            cursor += step
-    if not collected:
-        start, end, step = default_range
-        direction = 1 if step > 0 else -1
-        compare = (lambda a, b: a <= b) if direction > 0 else (lambda a, b: a >= b)
-        cursor = start
-        while compare(cursor, end + (1e-12 * direction)):
-            collected.append(cursor)
-            cursor += step
-    return _normalize_float_list(collected)
+    default_values = [f"{float(default_range[0]):g}:{float(default_range[1]):g}:{float(default_range[2]):g}"]
+    values = resolve_float_values(explicit or default_values, option_name="--bif-prob-scale")
+    return _normalize_float_list(values or [])
 
 
 def _apply_probability_scale(parameter: Mapping[str, Any], scale: float) -> Dict[str, Any]:
@@ -688,26 +648,13 @@ def _apply_probability_scale(parameter: Mapping[str, Any], scale: float) -> Dict
 
 
 def _resolve_value_list(
-    explicit: Optional[Sequence[float]],
-    range_values: Optional[Sequence[float]],
+    explicit: Optional[Sequence[str]],
     fallback: float,
+    *,
+    option_name: str,
 ) -> List[float]:
-    collected: List[float] = []
-    if explicit:
-        collected.extend(float(v) for v in explicit)
-    if range_values and len(range_values) == 3:
-        start, end, step = [float(v) for v in range_values]
-        if step == 0:
-            raise ValueError("Range step must be non-zero.")
-        direction = 1 if step > 0 else -1
-        compare = (lambda a, b: a <= b) if direction > 0 else (lambda a, b: a >= b)
-        cursor = start
-        while compare(cursor, end + (1e-12 * direction)):
-            collected.append(cursor)
-            cursor += step
-    if not collected:
-        return [float(fallback)]
-    return _normalize_float_list(collected)
+    values = resolve_float_values(explicit, option_name=option_name, default=(float(fallback),))
+    return _normalize_float_list(values or [float(fallback)])
 
 
 def _resolve_focus_count(parameter: Mapping[str, Any], override: Optional[int] = None) -> int:
@@ -1278,17 +1225,19 @@ def _ensure_fixpoint_summary(
     requested_focus_counts = list(sorted(set(int(fc) for fc in focus_counts)))
     parameter["focus_counts"] = requested_focus_counts
     summary_path = _summary_path(parameter)
+    v_start, v_stop, v_steps = resolve_v_sweep(args)
+    explicit_r_eplus = resolve_float_values(args.r_eplus, option_name="--r-eplus")
     pipeline_args = SimpleNamespace(
-        v_start=args.v_start,
-        v_end=args.v_end,
-        v_steps=args.v_steps,
+        v_start=v_start,
+        v_end=v_stop,
+        v_steps=v_steps,
         retry_step=args.retry_step,
         overwrite_simulation=args.overwrite_simulation,
         jobs=args.jobs,
-        r_eplus=args.r_eplus,
-        r_eplus_start=args.r_eplus_start,
-        r_eplus_end=args.r_eplus_end,
-        r_eplus_step=args.r_eplus_step,
+        r_eplus=explicit_r_eplus,
+        r_eplus_start=None,
+        r_eplus_end=None,
+        r_eplus_step=None,
     )
     r_values = resolve_r_eplus(pipeline_args, parameter)
     if not args.overwrite_analysis and os.path.exists(summary_path):
@@ -1386,16 +1335,17 @@ def main() -> None:
     base_avg_conn = _mean_connectivity(base_parameter)
     if base_avg_conn is None or base_avg_conn <= 0:
         raise SystemExit("Base configuration has invalid average connectivity; cannot run Figure_MF.")
-    row_order = [float(val) for val in args.rows]
-    col_order = [float(val) for val in args.columns]
+    row_order = list(resolve_float_values(args.rows, option_name="--rows", default=(0.3, 0.1)) or [])
+    col_order = list(resolve_float_values(args.columns, option_name="--columns", default=(0.0, 0.5, 1.0)) or [])
     if not col_order:
         raise SystemExit("At least one kappa column must be specified via --columns.")
+    line_focus_counts = parse_int_values(args.line_focus_counts, option_name="--line-focus-counts") or []
+    extra_focus_counts = parse_int_values(args.extra_focus_counts, option_name="--extra-focus-counts") or []
     focus_counts = {args.marker_focus_count}
-    if args.line_focus_counts:
-        focus_counts.update(args.line_focus_counts)
-    if args.extra_focus_counts:
-        focus_counts.update(args.extra_focus_counts)
+    focus_counts.update(line_focus_counts)
+    focus_counts.update(extra_focus_counts)
     focus_counts = sorted({max(1, int(fc)) for fc in focus_counts})
+    v_start, v_stop, v_steps = resolve_v_sweep(args)
     n_rows = len(row_order)
     n_cols = len(col_order)
     total_rows = n_rows + 1
@@ -1430,7 +1380,7 @@ def main() -> None:
         bif_axes.append(ax)
         if shared_bif_ax is None:
             shared_bif_ax = ax
-    all_focus_counts = list(args.line_focus_counts or [])
+    all_focus_counts = list(line_focus_counts)
     color_map, colorbar_entries = _prepare_line_color_map(
         all_focus_counts,
         colormap=args.line_colormap,
@@ -1438,15 +1388,22 @@ def main() -> None:
     total_panels = total_rows * n_cols
     letters = [chr(ord("a") + idx) for idx in range(total_panels)]
     base_rj = float(base_parameter.get("R_j", 0.0))
-    rj_values = _resolve_value_list(args.bif_rj, args.bif_rj_range, base_rj)
+    explicit_r_eplus = resolve_float_values(args.r_eplus, option_name="--r-eplus")
+    pipeline_r_eplus_args = SimpleNamespace(
+        r_eplus=explicit_r_eplus,
+        r_eplus_start=None,
+        r_eplus_end=None,
+        r_eplus_step=None,
+    )
+    rj_values = _resolve_value_list(args.bif_rj, base_rj, option_name="--bif-rj")
     if not rj_values:
         rj_values = [base_rj]
-    prob_scales = _resolve_scale_values(args.bif_prob_scale, args.bif_prob_scale_range)
-    if args.bif_avg_connectivity or args.bif_avg_connectivity_range:
+    prob_scales = _resolve_scale_values(args.bif_prob_scale)
+    if args.bif_avg_connectivity:
         avg_targets = _resolve_value_list(
             args.bif_avg_connectivity,
-            args.bif_avg_connectivity_range,
             base_avg_conn,
+            option_name="--bif-avg-connectivity",
         )
         converted = [
             max(float(value), MIN_PROBABILITY) / base_avg_conn
@@ -1472,9 +1429,9 @@ def main() -> None:
     if search["max"] <= search["min"]:
         raise SystemExit("Bifurcation search max bound must exceed the min bound.")
     sweep_kwargs = dict(
-        start=float(args.v_start),
-        end=float(args.v_end),
-        step_number=int(args.v_steps),
+        start=float(v_start),
+        end=float(v_stop),
+        step_number=int(v_steps),
         retry_step=args.retry_step,
     )
     bif_curves = _compute_bifurcation_curves(
@@ -1506,7 +1463,7 @@ def main() -> None:
             summary = _filter_summary_to_request(
                 _load_summary(summary_path),
                 focus_counts=focus_counts,
-                r_values=resolve_r_eplus(args, parameter),
+                r_values=resolve_r_eplus(pipeline_r_eplus_args, parameter),
             )
             label_coords = PANEL_LABEL_ABOVE_COORDS
             label_align = PANEL_LABEL_ABOVE_ALIGN
@@ -1514,7 +1471,7 @@ def main() -> None:
                 ax,
                 summary=summary,
                 marker_focus=args.marker_focus_count,
-                line_focus_counts=args.line_focus_counts or [],
+                line_focus_counts=line_focus_counts,
                 letter=letter,
                 color_map=color_map,
                 label_coords=label_coords,

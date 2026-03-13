@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 
+from figure_cli import resolve_float_values
 from plotting import (
     FontCfg,
     RasterLabels,
@@ -36,11 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Figure 5 with spiking-network rasters and rates.")
     add_override_arguments(parser)
     parser.add_argument(
-        "--kappa-values",
-        type=float,
+        "--kappas",
+        type=str,
         nargs="+",
-        default=[0.0, 0.5, 1.0],
-        help="List of kappa values to simulate (default: %(default)s).",
+        help="Kappa values or range expressions to simulate (e.g., 0 0.5 1 or 0:1:0.5). Defaults to 0 0.5 1.",
     )
     parser.add_argument(
         "--neuron-stride",
@@ -267,7 +267,7 @@ def simulate_runs(
 def main() -> None:
     args = parse_args()
     base_parameter = load_from_args(args)
-    kappas = [float(value) for value in args.kappa_values]
+    kappas = list(resolve_float_values(args.kappas, option_name="--kappas", default=(0.0, 0.5, 1.0)) or [])
     if len(kappas) != 3:
         raise ValueError("Figure 5 expects exactly three kappa values to populate the 3-column layout.")
     column_overrides = (

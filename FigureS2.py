@@ -15,6 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
+from figure_cli import add_v_sweep_arguments, parse_int_values, resolve_float_values, resolve_v_sweep
 from pipelines import figure_helpers as helpers  # noqa: E402
 from plotting import (  # noqa: E402
     BinaryStateSource,
@@ -53,22 +54,20 @@ def parse_args() -> argparse.Namespace:
         "--kappas",
         type=str,
         nargs="+",
+        default=["0.0", "0.25", "0.5", "0.75", "1.0"],
         help="Explicit list of kappas or range expressions (e.g., 0.0 0.5 1.0 or 0:1:0.25).",
     )
-    parser.add_argument("--kappa-start", type=float, help="Start of the kappa sweep (inclusive).")
-    parser.add_argument("--kappa-stop", type=float, help="End of the kappa sweep (inclusive).")
-    parser.add_argument("--kappa-step", type=float, help="Step size for the kappa sweep.")
     parser.add_argument(
         "--mean-connectivity",
-        type=float,
+        type=str,
         nargs="+",
-        help="List of target mean connectivities (e.g., 0.2 0.25 0.3). Defaults to the base config.",
+        help="Target mean connectivities or range expressions (e.g., 0.2 0.25 0.3 or 0.2:0.3:0.05). Defaults to the base config.",
     )
     parser.add_argument(
         "--focus-counts",
-        type=int,
+        type=str,
         nargs="+",
-        help="Focus counts to include (default: all values from 1..Q).",
+        help="Focus counts or integer ranges to include (e.g., 1 2 4 or 1:4:1). Defaults to all values from 1..Q.",
     )
     parser.add_argument(
         "--stability-filter",
@@ -150,9 +149,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Show Exc/Inh labels on raster plots.",
     )
-    parser.add_argument("--v-start", type=float, default=0.0, help="ERF sweep start value (default: %(default)s).")
-    parser.add_argument("--v-end", type=float, default=1.0, help="ERF sweep end value (default: %(default)s).")
-    parser.add_argument("--v-steps", type=int, default=1000, help="ERF samples per sweep (default: %(default)s).")
+    add_v_sweep_arguments(parser)
     parser.add_argument("--retry-step", type=float, help="Optional retry increment for solver restarts.")
     parser.add_argument(
         "--erf-jobs",
@@ -174,40 +171,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _kappa_sequence(start: float, stop: float, step: float) -> List[float]:
-    if step <= 0:
-        raise ValueError("--kappa-step must be positive.")
-    values = np.arange(start, stop + 1e-12, step, dtype=float)
-    if values.size == 0:
-        raise ValueError("Kappa sweep produced no values. Adjust the start/stop/step inputs.")
-    return [float(val) for val in values]
-
-
-def _parse_explicit_kappas(values: Iterable[str]) -> List[float]:
-    resolved: List[float] = []
-    for raw in values:
-        if ":" in raw:
-            try:
-                start, stop, step = (float(part) for part in raw.split(":"))
-            except ValueError as exc:  # pragma: no cover - defensive
-                raise ValueError(f"Invalid kappa range '{raw}'. Use start:stop:step.") from exc
-            resolved.extend(_kappa_sequence(start, stop, step))
-        else:
-            resolved.append(float(raw))
-    if not resolved:
-        raise ValueError("No kappas were provided via --kappas.")
-    ordered_unique = list(dict.fromkeys(resolved))
-    return ordered_unique
-
-
 def _resolve_kappa_values(args: argparse.Namespace) -> List[float]:
-    if args.kappas:
-        return _parse_explicit_kappas(args.kappas)
-    if args.kappa_start is not None and args.kappa_stop is not None and args.kappa_step is not None:
-        return _kappa_sequence(float(args.kappa_start), float(args.kappa_stop), float(args.kappa_step))
-    if args.kappa_start is not None or args.kappa_stop is not None or args.kappa_step is not None:
-        raise ValueError("Provide --kappa-start/stop/step together or rely on --kappas.")
-    return list(DEFAULT_KAPPA_VALUES)
+    values = resolve_float_values(args.kappas, option_name="--kappas", default=DEFAULT_KAPPA_VALUES)
+    return list(values or [])
+
+
+def _resolve_mean_connectivity_values(values: Sequence[str] | None) -> List[float] | None:
+    return resolve_float_values(values, option_name="--mean-connectivity")
 
 
 def _build_instances(parameter: Dict[str, Any], targets: Sequence[float] | None) -> List[ConnectivityInstance]:
@@ -563,16 +533,18 @@ def main() -> None:
     args = parse_args()
     base_parameter = load_from_args(args)
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
-    focus_counts = helpers.resolve_focus_counts(base_parameter, args.focus_counts)
+    parsed_focus_counts = parse_int_values(args.focus_counts, option_name="--focus-counts")
+    focus_counts = helpers.resolve_focus_counts(base_parameter, parsed_focus_counts)
     kappa_values = sorted(_resolve_kappa_values(args))
-    instances = _build_instances(base_parameter, args.mean_connectivity)
+    instances = _build_instances(base_parameter, _resolve_mean_connectivity_values(args.mean_connectivity))
     instances.sort(key=lambda inst: inst.value)
     if not instances:
         raise ValueError("No connectivity instances were generated.")
+    v_start, v_stop, v_steps = resolve_v_sweep(args)
     sweep_cfg = helpers.PipelineSweepSettings(
-        v_start=args.v_start,
-        v_end=args.v_end,
-        v_steps=args.v_steps,
+        v_start=v_start,
+        v_end=v_stop,
+        v_steps=v_steps,
         retry_step=args.retry_step,
         jobs=max(1, int(args.erf_jobs or 1)),
         overwrite_simulation=bool(args.overwrite_erf),
