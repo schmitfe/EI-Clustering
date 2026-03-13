@@ -22,7 +22,7 @@ plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
 REPO_ROOT = Path(__file__).resolve().parent
 FIGURES_DIR = REPO_ROOT / "Figures"
-DEFAULT_OUTPUT = FIGURES_DIR / "FigureEigenvalues"
+DEFAULT_OUTPUT = FIGURES_DIR / "FigureS1"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
