@@ -39,18 +39,7 @@ FIGURES_DIR = REPO_ROOT / "Figures"
 EXTERNAL_IMAGE_PATH = FIGURES_DIR / "external" / "Network_single.jpg"
 EXTERNAL_IMAGE_PATH2 = FIGURES_DIR / "external" / "Legend.jpg"
 OUTPUT_PREFIX = FIGURES_DIR / "Figure1"
-
-BASE_RASTER_OVERRIDES: tuple[str, ...] = (
-    "R_Eplus=1.5",
-    "binary.seed=3",
-    "binary.warmup_steps=5000",
-    "binary.simulation_steps=20000",
-    "binary.sample_interval=10",
-    "binary.batch_size=10",
-    "binary.log_decimate_factor=1",
-    "binary.state_chunk_size=2000",
-)
-RASTER_WINDOW_DURATION = 4000
+RASTER_WINDOW_DURATION = 3000000
 
 
 @dataclass(frozen=True)
@@ -113,7 +102,6 @@ RASTER_PANELS: list[RasterPanelSpec] = [
     RasterPanelSpec(
         label="c1",
         config_name="default_simulation",
-        overrides=BASE_RASTER_OVERRIDES,
         output_name="figure1_b1",
         window_start=2000,
         window_duration=RASTER_WINDOW_DURATION,
@@ -122,7 +110,6 @@ RASTER_PANELS: list[RasterPanelSpec] = [
     RasterPanelSpec(
         label="c2",
         config_name="default_simulation",
-        overrides=BASE_RASTER_OVERRIDES,
         output_name="figure1_b2",
         window_start=12000,
         window_duration=RASTER_WINDOW_DURATION,

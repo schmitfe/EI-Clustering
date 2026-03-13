@@ -38,11 +38,11 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
 ### Commands to generate Figures:
 #### Main Text:
 - Figure1:
-`python Figure1.py --panel-window c1:0:3000000 --panel-window c2:0:3000000 --panel-override c1:kappa=0 --panel-override c2:kappa=1 --raster-neuron-step 2 -O R_Eplus=7.25 -O R_j=0.8`
+`python Figure1.py --panel-override c1:kappa=0 --panel-override c2:kappa=1 --raster-neuron-step 2 -O R_Eplus=7.25 -O R_j=0.8`
 - Figure2:
 `python Figure2.py --line-colormap viridis_r --columns 0:1:0.5 --r-eplus 1:20:0.1 --bif-rj 0.5 0.75 0.8 --bif-avg-connectivity 0.01:0.31:0.005 --line-focus-counts 5:1:-1`
 - Figure3:
-`python Figure3.py  -O binary.seed=3 --jobs 3 -O R_Eplus=7.25 --column-override a:kappa=0 --column-override a:R_j=0.81 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5:1:-1 --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2`
+`python Figure3.py --jobs 3 -O R_Eplus=7.25 --column-override a:kappa=0 --column-override a:R_j=0.81 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5:1:-1 --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2`
 - Figure4:
 `python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:4:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
 - Figure5:
