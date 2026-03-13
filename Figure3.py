@@ -1304,6 +1304,7 @@ def main() -> None:
             font_cfg=font_cfg,
             label="MF prediction: # active clusters",
             height_fraction=0.8,
+            width_fraction=1.0,
             use_parent_axis=False,
         )
         colorbar_ax.get_xaxis().set_visible(False)
