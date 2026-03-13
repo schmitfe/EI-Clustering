@@ -151,7 +151,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-prefix",
         type=str,
-        default="Figures/Figure3_alt",
+        default="Figures/Figure3",
         help="Prefix for the saved figure files (default: %(default)s.{png,pdf}).",
     )
     return parser.parse_args()
