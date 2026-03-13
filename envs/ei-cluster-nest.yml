@@ -10,10 +10,10 @@ dependencies:
   - pyyaml>=6
   - sympy>=1.12
   - pymupdf>=1.24,<2
-  - jax>=0.4.30,<0.5
-  - jaxlib>=0.4.30,<0.5
   - nest-simulator>=3.7,<4
   - pip
   - pip:
+      - jax>=0.4.30,<0.5
+      - jaxlib>=0.4.30,<0.5
       - equinox>=0.11.10,<0.12
       - optimistix>=0.0.10,<0.1

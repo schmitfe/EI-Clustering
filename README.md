@@ -15,6 +15,10 @@ Mean-field solvers, binary-network simulations, figure-generation scripts, and r
 - Use [`envs/ei-cluster-core.yml`](envs/ei-cluster-core.yml) for the binary/mean-field figures and shared plotting/docs tooling.
 - Use [`envs/ei-cluster-nest.yml`](envs/ei-cluster-nest.yml) when you also need the NEST-based spiking path (`Figure5`, `pipelines/spiking.py`, `NEST/EI_clustered_network/`).
 - The split is intentional: `nest-simulator` is only required for the spiking workflow and is easiest to keep isolated from the rest of the stack.
+- Recommended solver:
+  `mamba env create -f envs/ei-cluster-core.yml`
+  `mamba env create -f envs/ei-cluster-nest.yml`
+- `conda env create ...` remains a fallback, but `mamba` is the preferred path for environment resolution.
 
 ## API Documentation
 - The generated API docs live under [`docs/`](docs/index.html) with the entry page at [`docs/index.html`](docs/index.html).
