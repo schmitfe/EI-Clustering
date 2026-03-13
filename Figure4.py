@@ -65,14 +65,11 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         help="Explicit list of kappas or range expressions (e.g., 0.0 0.5 1.0 or 0:1:0.25).",
     )
-    parser.add_argument("--kappa-start", type=float, help="Start of the kappa sweep (inclusive).")
-    parser.add_argument("--kappa-stop", type=float, help="End of the kappa sweep (inclusive).")
-    parser.add_argument("--kappa-step", type=float, help="Step size for the kappa sweep.")
     parser.add_argument(
         "--mean-connectivity",
-        type=float,
+        type=str,
         nargs="+",
-        help="Optional list of target mean connectivities (e.g., 0.1 0.3). Defaults to the base config.",
+        help="Optional list of target mean connectivities or range expressions (e.g., 0.2 0.25 0.3 or 0.2:0.3:0.05). Defaults to the base config.",
     )
     parser.add_argument(
         "--focus-counts",
@@ -89,13 +86,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--n-networks",
         type=int,
-        default=50,
+        default=20,
         help="Number of network seeds simulated per kappa (default: %(default)s).",
     )
     parser.add_argument(
         "--n-inits",
         type=int,
-        default=5,
+        default=20,
         help="Fixpoint initializations per network (default: %(default)s).",
     )
     parser.add_argument(
@@ -184,18 +181,27 @@ def _kappa_sequence(start: float, stop: float, step: float) -> List[float]:
 
 
 def _parse_explicit_kappas(values: Iterable[str]) -> List[float]:
+    return _parse_explicit_float_values(values, value_name="kappa", empty_message="No kappas were provided via --kappas.")
+
+
+def _parse_explicit_float_values(
+    values: Iterable[str],
+    *,
+    value_name: str,
+    empty_message: str,
+) -> List[float]:
     resolved: List[float] = []
     for raw in values:
         if ":" in raw:
             try:
                 start, stop, step = (float(part) for part in raw.split(":"))
             except ValueError as exc:  # pragma: no cover - defensive
-                raise ValueError(f"Invalid kappa range '{raw}'. Use start:stop:step.") from exc
+                raise ValueError(f"Invalid {value_name} range '{raw}'. Use start:stop:step.") from exc
             resolved.extend(_kappa_sequence(start, stop, step))
         else:
             resolved.append(float(raw))
     if not resolved:
-        raise ValueError("No kappas were provided via --kappas.")
+        raise ValueError(empty_message)
     # Preserve order while removing duplicates that can occur when combining ranges and explicit values.
     ordered_unique = list(dict.fromkeys(resolved))
     return ordered_unique
@@ -209,6 +215,18 @@ def _resolve_kappa_values(args: argparse.Namespace) -> List[float]:
     if args.kappa_start is not None or args.kappa_stop is not None or args.kappa_step is not None:
         raise ValueError("Provide --kappa-start/stop/step together or rely on --kappas.")
     return list(DEFAULT_KAPPA_VALUES)
+
+
+def _resolve_mean_connectivity_values(values: Sequence[str] | None) -> List[float] | None:
+    if not values:
+        return None
+    return _parse_explicit_float_values(
+        values,
+        value_name="mean-connectivity",
+        empty_message="No values were provided via --mean-connectivity.",
+    )
+
+
 def _build_instances(parameter: Dict[str, Any], targets: Sequence[float] | None) -> List[ConnectivityInstance]:
     instances: List[ConnectivityInstance] = []
     if targets:
@@ -628,7 +646,7 @@ def main() -> None:
         seed=args.seed,
         output_name=args.output_name,
     )
-    instances = _build_instances(parameter, args.mean_connectivity)
+    instances = _build_instances(parameter, _resolve_mean_connectivity_values(args.mean_connectivity))
     if not instances:
         raise ValueError("No connectivity instances were generated.")
     base_seed = args.seed if args.seed is not None else 0

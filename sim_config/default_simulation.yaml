@@ -21,7 +21,7 @@ initial_activity:
   excitatory: null
   inhibitory: null
 binary:
-  warmup_steps: 60000
+  warmup_steps: 200000
   simulation_steps: 3000000
   sample_interval: 10
   batch_size: 200
