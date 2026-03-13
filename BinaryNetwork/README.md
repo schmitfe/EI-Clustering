@@ -4,7 +4,7 @@
 
 ## Running the pipeline
 - Invoke `python -m pipelines.binary [-O path=value ...]` using the configs from `sim_config/`. Use the helper flags to override the common binary settings directly: `--warmup-steps`, `--simulation-steps`, `--sample-interval`, `--batch-size`, `--seed`, `--output-name`, and `--plot-activity`.
-- The script respects global clustering parameters (`kappa`, `connection_type`, `R_Eplus`, `R_j`, etc.) and mirrors the mixed probability/weight scheme from the mean-field solver. Bernoulli, Poisson, and fixed-indegree synapse generation are all supported.
+- The script respects global clustering parameters (`kappa`, `connection_type`, `R_Eplus`, `R_j`, etc.) and mirrors the mixed probability/weight scheme from the mean-field solver. Bernoulli, Poisson, and fixed-indegree synapse generation are all supported. For `connection_type=fixed_indegree`, set `multapses: true` to sample with replacement or `multapses: false` to sample without replacement.
 - Simulation-specific defaults live under the `binary` section of the YAML (`warmup_steps`, `simulation_steps`, `sample_interval`, `batch_size`, `seed`, `output_name`, and optional `plot_activity`). Override nested fields via dotted `-O binary.sample_interval=25` arguments if the dedicated CLI flag is insufficient.
 
 ## Outputs

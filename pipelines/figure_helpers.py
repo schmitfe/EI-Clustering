@@ -378,7 +378,10 @@ def _uniform_init_candidate(parameter: Dict[str, Any], value: float = 0.1) -> Di
     q_value = int(parameter.get("Q", 0) or 0)
     if q_value <= 0:
         raise ValueError("Parameter 'Q' must be positive.")
-    rates = np.full(2 * q_value, float(value), dtype=float)
+    rng = np.random.default_rng()
+    low = max(0.0, float(value) - 0.2)
+    high = min(1.0, float(value) + 0.2)
+    rates = rng.uniform(low=low, high=high, size=2 * q_value).astype(float)
     return {
         "id": f"uniform_{float(value):.3f}",
         "focus_count": 0,
@@ -1087,9 +1090,9 @@ def _prepare_multi_init_tasks(spec: MultiInitCorrelationSpec) -> tuple[str, List
         if spec.verbose:
             print(
                 "No mean-field fixpoints available for "
-                f"R_Eplus={float(target_rep):.4f}; falling back to uniform random init p=0.1."
+                f"R_Eplus={float(target_rep):.4f}; falling back to uniform random init m=0.5."
             )
-        base_candidate = _uniform_init_candidate(spec.parameter, value=0.1)
+        base_candidate = _uniform_init_candidate(spec.parameter, value=0.5)
         picks = []
         for idx in range(max(0, int(spec.n_inits))):
             candidate = dict(base_candidate)

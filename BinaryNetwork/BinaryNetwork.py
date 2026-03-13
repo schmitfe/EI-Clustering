@@ -487,27 +487,42 @@ class FixedIndegreeSynapse(Synapse):
     Expected output
     ---------------
     Each target row receives approximately `round(p * N_pre)` incoming entries.
+    When `multapses` is `True`, presynaptic partners are sampled with replacement.
+    When `multapses` is `False`, partners are sampled without replacement.
     """
-    def __init__(self, reference, pre, post, p=0.5, j=1.0):
+    def __init__(self, reference, pre, post, p=0.5, j=1.0, multapses=True):
         super().__init__(reference, pre, post)
         self.p = float(p)
         self.j = float(j)
+        self.multapses = bool(multapses)
 
     def initialze(self):
         p = max(self.p, 0.0)
         target_count = int(round(p * self.pre.N))
-        target_count = min(max(target_count, 0), self.pre.N)
+        target_count = max(target_count, 0)
         if target_count == 0:
             return
+        if (not self.multapses) and target_count > self.pre.N:
+            raise ValueError(
+                f"Fixed-indegree sampling without multapses requested indegree {target_count} "
+                f"from only {self.pre.N} presynaptic neurons."
+            )
         if self.reference.weight_mode == "sparse":
             rows = np.repeat(np.arange(self.post.N, dtype=np.int64), target_count)
-            cols = np.random.randint(self.pre.N, size=self.post.N * target_count, dtype=np.int64)
+            if self.multapses:
+                cols = np.random.randint(self.pre.N, size=self.post.N * target_count, dtype=np.int64)
+            else:
+                col_chunks = [
+                    np.random.choice(self.pre.N, size=target_count, replace=False).astype(np.int64, copy=False)
+                    for _ in range(self.post.N)
+                ]
+                cols = np.concatenate(col_chunks) if col_chunks else np.zeros(0, dtype=np.int64)
             values = np.full(rows.size, self.j, dtype=self.reference.weight_dtype)
             self._append_sparse_entries(rows, cols, values)
             return
         block = np.zeros((self.post.N, self.pre.N), dtype=self.reference.weight_dtype)
         for tgt in range(self.post.N):
-            pres = np.random.choice(self.pre.N, size=target_count, replace=True)
+            pres = np.random.choice(self.pre.N, size=target_count, replace=self.multapses)
             np.add.at(block[tgt], pres, self.j)
         self._write_block(block)
 

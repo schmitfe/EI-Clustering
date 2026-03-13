@@ -243,6 +243,7 @@ class ClusteredEI_network(BaseBinaryNetwork):
         self.parameter = dict(parameter)
         self.Q = int(self.parameter["Q"])
         self.connection_type = _normalize_conn_type(connection_type or self.parameter.get("connection_type"))
+        self.multapses = bool(self.parameter.get("multapses", True))
         self.kappa = float(kappa if kappa is not None else self.parameter.get("kappa", 0.0))
         self.connection_parameters = _compute_cluster_parameters(self.parameter, self.kappa)
         self.E_sizes = _split_counts(int(self.parameter["N_E"]), self.Q)
@@ -292,7 +293,14 @@ class ClusteredEI_network(BaseBinaryNetwork):
         if self.connection_type == "poisson":
             return lambda pre, post, p, j: PoissonSynapse(self, pre, post, rate=p, j=j)
         if self.connection_type == "fixed-indegree":
-            return lambda pre, post, p, j: FixedIndegreeSynapse(self, pre, post, p=p, j=j)
+            return lambda pre, post, p, j: FixedIndegreeSynapse(
+                self,
+                pre,
+                post,
+                p=p,
+                j=j,
+                multapses=self.multapses,
+            )
         return lambda pre, post, p, j: PairwiseBernoulliSynapse(self, pre, post, p=p, j=j)
 
     def _build_synapses(self):
