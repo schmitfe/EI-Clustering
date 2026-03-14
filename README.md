@@ -44,19 +44,19 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
 - Figure2:
 `python Figure2.py --line-colormap viridis_r --columns 0:1:0.5 --r-eplus 1:20:0.1 --bif-rj 0.5 0.75 0.8 --bif-avg-connectivity 0.01:0.31:0.005 --line-focus-counts 5:1:-1`
 - Figure3:
-`python Figure3.py --jobs 3 -O R_Eplus=7.25 --column-override a:kappa=0 --column-override a:R_j=0.81 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5:1:-1 --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2`
+`python Figure3.py --jobs 3 -O R_Eplus=7.25 --column-override a:kappa=0 -O R_j=0.75 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5:1:-1 --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2 --column-override a:R_j=0.8`
 - Figure4:
-`python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:4:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
+`python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
 - Figure5:
 `python Figure5.py --column-override 0:spiking.net.rep=5.9 --column-override 1:spiking.net.rep=5.2`
 #### Supplements:
 - Figure S1 (Eigenvalues):
 `python FigureS1.py -O R_Eplus=7.25 -O R_j=0.8`
 - Figure S2 (Event plots of correlation analysis):
-`python FigureS2.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:4:1 -O R_Eplus=8 -O R_j=0.8 --simulation-steps 12000000 --sample-interval 12000 --analysis-only --init-index 0 --network-index 3 --raster-stride 20 --show-rates --show-raster-labels`
+`python FigureS2.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 --simulation-steps 12000000 --sample-interval 12000 --analysis-only --init-index 0 --network-index 0 --raster-stride 20 --show-rates --show-raster-labels`
 - Sfig3:
 `python Figure2.py --columns 0:1:0.5 --r-eplus 1:20:0.1 --bif-rj 0.5 0.75 0.8 --bif-avg-connectivity 0.01:0.31:0.005 --bif-fixpoint-threshold 2 --line-focus-counts 5:1:-1 --line-colormap viridis_r -O connection_type=fixed_indegree --output Figures/FigureS3`
 - Sfig4:
-`python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:4:1 -O R_Eplus=8 -O R_j=0.8 -O connection_type=fixed_indegree --jobs 20 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading --output-prefix Figures/FigureS4`
+`python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 -O connection_type=fixed_indegree --jobs 20 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading --output-prefix Figures/FigureS4`
 - Sfig5:
 `python Figure5.py -O spiking.net.rep=5.0 -O spiking.net.connection_rule=fixed_indegree --output-prefix Figures/FigureS5`
