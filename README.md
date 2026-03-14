@@ -48,7 +48,7 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
 - Figure4:
 `python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
 - Figure5:
-`python Figure5.py --column-override 0:spiking.net.rep=5.9 --column-override 1:spiking.net.rep=5.2`
+`python Figure5.py -O spiking.net.rep=5.0 -O spiking.sim.randseed=3 --column-override 0:spiking.sim.randseed=2`
 #### Supplements:
 - Figure S1 (Eigenvalues):
 `python FigureS1.py -O R_Eplus=7.25 -O R_j=0.8`
