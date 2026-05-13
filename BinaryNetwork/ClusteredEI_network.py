@@ -47,9 +47,9 @@ def _mix_scales(R_plus: float, Q: int, kappa: float) -> Tuple[float, float, floa
         weight = value ** kappa
         return value ** (1.0 - kappa), value ** (1.0 - kappa), weight, weight
     prob_in = positive ** (1.0 - kappa)
-    prob_out = (Q - prob_in) / (Q - 1)
+    prob_out = ((Q - positive) / (Q - 1))**(1.0 - kappa)
     weight_in = positive ** kappa
-    weight_out = (Q - weight_in) / (Q - 1)
+    weight_out = ((Q - positive) / (Q - 1))**kappa
     return prob_in, prob_out, weight_in, weight_out
 
 

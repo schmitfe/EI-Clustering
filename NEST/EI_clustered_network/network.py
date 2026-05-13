@@ -99,7 +99,7 @@ class ClusteredNetwork:
         """
 
         nest.ResetKernel()
-        nest.set_verbosity("M_WARNING")
+        #nest.set_verbosity("M_WARNING")
         nest.local_num_threads = self._params.get("n_vp", 4)
         nest.resolution = self._params.get("dt")
         self._params["randseed"] = self._params.get("randseed")
@@ -330,9 +330,9 @@ class ClusteredNetwork:
 
         kappa = float(self._params["kappa"])
         prob_in = r_plus ** (1.0 - kappa)
-        prob_out = (n_clusters - prob_in) / float(n_clusters - 1)
+        prob_out = ((n_clusters - r_plus) / float(n_clusters - 1))**(1.0 - kappa)
         weight_in = r_plus ** kappa
-        weight_out = (n_clusters - weight_in) / float(n_clusters - 1)
+        weight_out = ((n_clusters - r_plus) / float(n_clusters - 1))**kappa
         return prob_in, prob_out, weight_in, weight_out
 
     @staticmethod
