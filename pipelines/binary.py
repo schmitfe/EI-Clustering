@@ -169,6 +169,60 @@ def _apply_population_rate_initialization(
     network._recompute_field()
 
 
+def _population_export_payload(pops: Sequence[Any]) -> Dict[str, np.ndarray]:
+    starts = np.array([int(pop.view[0]) for pop in pops], dtype=np.int64)
+    ends = np.array([int(pop.view[1]) for pop in pops], dtype=np.int64)
+    sizes = ends - starts
+    offsets = np.zeros(len(pops) + 1, dtype=np.int64)
+    if sizes.size:
+        offsets[1:] = np.cumsum(sizes, dtype=np.int64)
+    neuron_ids = np.concatenate(
+        [np.arange(start, end, dtype=np.int64) for start, end in zip(starts, ends)],
+        axis=0,
+    ) if len(pops) else np.zeros(0, dtype=np.int64)
+    return {
+        "population_names": np.array([str(pop.name) for pop in pops]),
+        "population_start_ids": starts,
+        "population_end_ids": ends,
+        "population_sizes": sizes,
+        "population_neuron_id_offsets": offsets,
+        "population_neuron_ids": neuron_ids,
+        "population_cell_types": np.array([str(getattr(pop, "cell_type", "")) for pop in pops]),
+        "population_cluster_indices": np.array(
+            [int(getattr(pop, "cluster_index", -1)) for pop in pops],
+            dtype=np.int64,
+        ),
+    }
+
+
+def _weight_export_payload(
+    network: ClusteredEI_network,
+    pops: Sequence[Any],
+    *,
+    seed: int,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "weight_mode": np.array(str(network.weight_mode)),
+        "weight_dtype": np.array(str(np.dtype(network.weight_dtype))),
+        "weight_shape": np.array([int(network.N), int(network.N)], dtype=np.int64),
+        "seed": np.array(int(seed), dtype=np.int64),
+    }
+    payload.update(_population_export_payload(pops))
+    if network.weight_mode == "dense":
+        if network.weights_dense is None:
+            raise RuntimeError("Dense weight export requested, but network.weights_dense is not available.")
+        payload["weight_format"] = np.array("dense")
+        payload["weights"] = np.asarray(network.weights_dense, dtype=network.weight_dtype)
+    else:
+        if network.weights_csr is None:
+            raise RuntimeError("Sparse weight export requested, but network.weights_csr is not available.")
+        payload["weight_format"] = np.array("csr")
+        payload["weights_data"] = np.asarray(network.weights_csr.data, dtype=network.weight_dtype)
+        payload["weights_indices"] = np.asarray(network.weights_csr.indices, dtype=np.int64)
+        payload["weights_indptr"] = np.asarray(network.weights_csr.indptr, dtype=np.int64)
+    return payload
+
+
 def _save_activity_plot(states: np.ndarray, interval: int, parameter: Dict, path: str) -> None:
     if states.size == 0:
         raise RuntimeError("Cannot plot activity: no neuron states were recorded.")
@@ -377,11 +431,20 @@ def run_binary_simulation(
     mean_values = rates.mean(axis=0) if rates.size else np.zeros(pop_count)
     mean_rates = {name: float(value) for name, value in zip(names, mean_values)}
     time_axis = times
+    weight_path = os.path.join(binary_folder, f"{resolved_output_name}_weights.npz")
+    population_payload = _population_export_payload(pops)
+
+    np.savez_compressed(
+        weight_path,
+        **_weight_export_payload(network, pops, seed=seed),
+    )
+
     np.savez_compressed(
         os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         rates=rates,
         times=time_axis,
         names=np.array(names),
+        **population_payload,
         neuron_states=neuron_states,
         state_updates=state_updates,
         state_deltas=state_deltas,
@@ -417,6 +480,12 @@ def run_binary_simulation(
             "file": os.path.basename(plot_path) if plot_path else None,
             "onsets_file": os.path.basename(onset_plot_path) if onset_plot_path else None,
         },
+        "weights": {
+            "file": os.path.basename(weight_path),
+            "mode": str(network.weight_mode),
+            "format": "dense" if network.weight_mode == "dense" else "csr",
+            "dtype": str(np.dtype(network.weight_dtype)),
+        },
         "state_chunks": {
             "enabled": False,
             "chunk_size": 0,
@@ -446,6 +515,7 @@ def run_binary_simulation(
         "names": names,
         "mean_rates": mean_rates,
         "trace_path": os.path.join(binary_folder, f"{resolved_output_name}.npz"),
+        "weight_path": weight_path,
         "summary_path": summary_path,
     }
     del rates

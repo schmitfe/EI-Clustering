@@ -1120,6 +1120,13 @@ def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
     print(f"Stored Figure 3 panel at {png_path} and {pdf_path}")
 
 
+def _print_column_output_paths(column_contexts: Sequence[ColumnContext]) -> None:
+    print("Figure 3 column output mapping:")
+    for context in column_contexts:
+        output_dir = os.path.abspath(os.path.dirname(context.trace_path))
+        print(f"  {context.spec.label}: {output_dir}")
+
+
 def main() -> None:
     args = parse_args()
     base_parameter = load_from_args(args)
@@ -1228,6 +1235,7 @@ def main() -> None:
             else:
                 for task in simulation_tasks:
                     _simulate_binary_task(task)
+        _print_column_output_paths(column_contexts)
         n_cols = len(column_contexts)
         fig = plt.figure(figsize=(4.2 * n_cols + 1.4, 5))
         outer = fig.add_gridspec(
