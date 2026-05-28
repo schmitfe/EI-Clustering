@@ -7,10 +7,12 @@ The input is the `*_weights.npz` file written by `pipelines/binary.py`.
 
 For each post-population / pre-population block, the script computes:
 
-- `mean_indegree`, `std_indegree`
-  Statistics of the number of realized incoming synapses per post neuron.
-- `mean_weight`, `std_weight`
-  Statistics of the realized non-zero synaptic weights inside the block.
+- `mean_indegree`, `std_indegree`, `var_indegree`
+  Statistics of the realized incoming synapse multiplicity per post neuron.
+- `mean_weight`, `std_weight`, `var_weight`
+  Statistics of individual realized synaptic weight quanta inside the block.
+- `mean_entry_weight`, `std_entry_weight`, `var_entry_weight`
+  Statistics of the accumulated weight-matrix entries, including zeros.
 
 Rows in the output matrices correspond to post-synaptic populations and
 columns correspond to pre-synaptic populations.
@@ -28,8 +30,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Analyze a dumped binary-network weight matrix on the population level. "
-            "For each post-population / pre-population block, compute mean/std indegree "
-            "across post neurons and mean/std synaptic weight across realized synapses."
+            "For each post-population / pre-population block, compute mean/std/var "
+            "of incoming synapse multiplicity across post neurons and weight "
+            "statistics across realized synapses and matrix entries."
         )
     )
     parser.add_argument(
@@ -153,37 +156,118 @@ def _population_bounds(payload: Dict[str, np.ndarray]) -> Tuple[list[str], np.nd
     return names, starts, ends
 
 
+def _infer_weight_quantum(nonzero_weights: np.ndarray) -> float:
+    """Infer the per-synapse quantum from accumulated matrix entries."""
+    values = np.asarray(nonzero_weights, dtype=float).ravel()
+    values = values[values != 0.0]
+    if values.size == 0:
+        return 0.0
+    if np.any(values < 0.0):
+        return float(values[values < 0.0].max())
+    return float(values[values > 0.0].min())
+
+
+def _weighted_mean_var(values: np.ndarray, weights: np.ndarray) -> Tuple[float, float]:
+    values = np.asarray(values, dtype=float).ravel()
+    weights = np.asarray(weights, dtype=float).ravel()
+    total = float(weights.sum())
+    if values.size == 0 or total <= 0.0:
+        return 0.0, 0.0
+    mean = float(np.sum(values * weights) / total)
+    var = float(np.sum(weights * (values - mean) ** 2) / total)
+    return mean, var
+
+
+def _empty_stat_matrices(pop_count: int) -> Dict[str, np.ndarray]:
+    names = (
+        "mean_indegree",
+        "std_indegree",
+        "var_indegree",
+        "mean_occupied_indegree",
+        "std_occupied_indegree",
+        "var_occupied_indegree",
+        "mean_weight",
+        "std_weight",
+        "var_weight",
+        "mean_entry_weight",
+        "std_entry_weight",
+        "var_entry_weight",
+        "mean_nonzero_entry_weight",
+        "std_nonzero_entry_weight",
+        "var_nonzero_entry_weight",
+        "weight_quantum",
+    )
+    return {name: np.zeros((pop_count, pop_count), dtype=float) for name in names}
+
+
+def _analyze_block(block: np.ndarray) -> Dict[str, float]:
+    if block.size == 0:
+        return {name: 0.0 for name in _empty_stat_matrices(1)}
+
+    block = np.asarray(block, dtype=float)
+    mask = block != 0.0
+    occupied_indegrees = mask.sum(axis=1, dtype=np.int64)
+    nonzero_weights = block[mask]
+    quantum = _infer_weight_quantum(nonzero_weights)
+
+    if quantum != 0.0:
+        multiplicities = np.rint(block / quantum).astype(np.int64, copy=False)
+        multiplicities = np.maximum(multiplicities, 0)
+    else:
+        multiplicities = np.zeros(block.shape, dtype=np.int64)
+    indegrees = multiplicities.sum(axis=1, dtype=np.int64)
+
+    entry_var = float(block.var())
+    occupied_var = float(occupied_indegrees.var())
+    indegree_var = float(indegrees.var())
+
+    nonzero_entry_mean = 0.0
+    nonzero_entry_var = 0.0
+    weight_mean = 0.0
+    weight_var = 0.0
+    if nonzero_weights.size:
+        nonzero_entry_mean = float(nonzero_weights.mean())
+        nonzero_entry_var = float(nonzero_weights.var())
+        nonzero_counts = multiplicities[mask]
+        synaptic_weights = nonzero_weights / nonzero_counts
+        weight_mean, weight_var = _weighted_mean_var(synaptic_weights, nonzero_counts)
+
+    return {
+        "mean_indegree": float(indegrees.mean()),
+        "std_indegree": float(np.sqrt(indegree_var)),
+        "var_indegree": indegree_var,
+        "mean_occupied_indegree": float(occupied_indegrees.mean()),
+        "std_occupied_indegree": float(np.sqrt(occupied_var)),
+        "var_occupied_indegree": occupied_var,
+        "mean_weight": weight_mean,
+        "std_weight": float(np.sqrt(weight_var)),
+        "var_weight": weight_var,
+        "mean_entry_weight": float(block.mean()),
+        "std_entry_weight": float(np.sqrt(entry_var)),
+        "var_entry_weight": entry_var,
+        "mean_nonzero_entry_weight": nonzero_entry_mean,
+        "std_nonzero_entry_weight": float(np.sqrt(nonzero_entry_var)),
+        "var_nonzero_entry_weight": nonzero_entry_var,
+        "weight_quantum": quantum,
+    }
+
+
 def _analyze_dense_blocks(
     weights: np.ndarray,
     starts: np.ndarray,
     ends: np.ndarray,
 ) -> Dict[str, np.ndarray]:
     pop_count = starts.size
-    mean_indegree = np.zeros((pop_count, pop_count), dtype=float)
-    std_indegree = np.zeros((pop_count, pop_count), dtype=float)
-    mean_weight = np.zeros((pop_count, pop_count), dtype=float)
-    std_weight = np.zeros((pop_count, pop_count), dtype=float)
+    stats = _empty_stat_matrices(pop_count)
 
     for post_idx, (post_start, post_end) in enumerate(zip(starts, ends)):
         for pre_idx, (pre_start, pre_end) in enumerate(zip(starts, ends)):
             block = weights[post_start:post_end, pre_start:pre_end]
-            if block.size == 0:
-                continue
-            mask = block != 0
-            indegrees = mask.sum(axis=1, dtype=np.int64)
-            mean_indegree[post_idx, pre_idx] = float(indegrees.mean())
-            std_indegree[post_idx, pre_idx] = float(indegrees.std())
-            block_weights = block[mask]
-            if block_weights.size:
-                mean_weight[post_idx, pre_idx] = float(block_weights.mean())
-                std_weight[post_idx, pre_idx] = float(block_weights.std())
+            block_stats = _analyze_block(block)
+            for name, value in block_stats.items():
+                stats[name][post_idx, pre_idx] = value
 
-    return {
-        "mean_indegree": mean_indegree,
-        "std_indegree": std_indegree,
-        "mean_weight": mean_weight,
-        "std_weight": std_weight,
-    }
+    return stats
 
 
 def _analyze_csr_blocks(
@@ -194,18 +278,17 @@ def _analyze_csr_blocks(
     ends: np.ndarray,
 ) -> Dict[str, np.ndarray]:
     pop_count = starts.size
-    mean_indegree = np.zeros((pop_count, pop_count), dtype=float)
-    std_indegree = np.zeros((pop_count, pop_count), dtype=float)
-    mean_weight = np.zeros((pop_count, pop_count), dtype=float)
-    std_weight = np.zeros((pop_count, pop_count), dtype=float)
+    stats = _empty_stat_matrices(pop_count)
 
     for post_idx, (post_start, post_end) in enumerate(zip(starts, ends)):
         row_count = int(post_end - post_start)
         if row_count <= 0:
             continue
         for pre_idx, (pre_start, pre_end) in enumerate(zip(starts, ends)):
-            indegrees = np.zeros(row_count, dtype=np.int64)
-            nonzero_weights = []
+            col_count = int(pre_end - pre_start)
+            if col_count <= 0:
+                continue
+            block = np.zeros((row_count, col_count), dtype=float)
             for local_row, row in enumerate(range(int(post_start), int(post_end))):
                 row_start = int(indptr[row])
                 row_end = int(indptr[row + 1])
@@ -215,22 +298,13 @@ def _analyze_csr_blocks(
                 # We therefore filter each row to the current pre-population
                 # interval and accumulate per-neuron indegrees plus block weights.
                 mask = (row_indices >= pre_start) & (row_indices < pre_end)
-                indegrees[local_row] = int(np.count_nonzero(mask))
                 if np.any(mask):
-                    nonzero_weights.append(row_data[mask])
-            mean_indegree[post_idx, pre_idx] = float(indegrees.mean())
-            std_indegree[post_idx, pre_idx] = float(indegrees.std())
-            if nonzero_weights:
-                weights_block = np.concatenate(nonzero_weights)
-                mean_weight[post_idx, pre_idx] = float(weights_block.mean())
-                std_weight[post_idx, pre_idx] = float(weights_block.std())
+                    block[local_row, row_indices[mask] - pre_start] = row_data[mask]
+            block_stats = _analyze_block(block)
+            for name, value in block_stats.items():
+                stats[name][post_idx, pre_idx] = value
 
-    return {
-        "mean_indegree": mean_indegree,
-        "std_indegree": std_indegree,
-        "mean_weight": mean_weight,
-        "std_weight": std_weight,
-    }
+    return stats
 
 
 def analyze_weights(path: str) -> Dict[str, Any]:
@@ -298,14 +372,32 @@ def main() -> None:
     print(f"Population count: {len(labels)}")
     print("Matrix convention: rows are post-synaptic populations, columns are pre-synaptic populations.")
     print("Measures:")
-    print("  mean_indegree/std_indegree: statistics of non-zero incoming connection counts per post neuron.")
-    print("  mean_weight/std_weight: statistics of realized non-zero synaptic weights in each population block.")
+    print("  mean_indegree/std_indegree/var_indegree: incoming synapse multiplicity per post neuron.")
+    print("  mean_occupied_indegree/std_occupied_indegree/var_occupied_indegree: non-zero matrix entries per post neuron.")
+    print("  mean_weight/std_weight/var_weight: individual realized synaptic weight quanta.")
+    print("  mean_entry_weight/std_entry_weight/var_entry_weight: accumulated matrix entries, including zeros.")
+    print("  mean_nonzero_entry_weight/std_nonzero_entry_weight/var_nonzero_entry_weight: accumulated non-zero matrix entries.")
 
     if args.print_matrices:
-        _print_matrix("mean_indegree", np.asarray(result["mean_indegree"], dtype=float), labels)
-        _print_matrix("std_indegree", np.asarray(result["std_indegree"], dtype=float), labels)
-        _print_matrix("mean_weight", np.asarray(result["mean_weight"], dtype=float), labels)
-        _print_matrix("std_weight", np.asarray(result["std_weight"], dtype=float), labels)
+        for name in (
+            "mean_indegree",
+            "std_indegree",
+            "var_indegree",
+            "mean_occupied_indegree",
+            "std_occupied_indegree",
+            "var_occupied_indegree",
+            "mean_weight",
+            "std_weight",
+            "var_weight",
+            "mean_entry_weight",
+            "std_entry_weight",
+            "var_entry_weight",
+            "mean_nonzero_entry_weight",
+            "std_nonzero_entry_weight",
+            "var_nonzero_entry_weight",
+            "weight_quantum",
+        ):
+            _print_matrix(name, np.asarray(result[name], dtype=float), labels)
 
 
 if __name__ == "__main__":

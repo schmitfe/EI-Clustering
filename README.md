@@ -42,7 +42,7 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
   `python analyze_weights.py path/to/activity_trace_weights.npz --print-matrices`
   `python analyze_weights.py path/to/activity_trace_weights.npz --output my_block_stats.npz`
 - If you pass a directory, `analyze_weights.py` auto-selects the contained `*_weights.npz` file when there is exactly one match.
-- The analysis output contains one population-by-population matrix each for `mean_indegree`, `std_indegree`, `mean_weight`, and `std_weight`. For `Q=10`, this gives `20 x 20` matrices.
+- The analysis output contains population-by-population matrices for synapse multiplicity (`mean_indegree`, `std_indegree`, `var_indegree`), occupied matrix entries (`mean_occupied_indegree`, `std_occupied_indegree`, `var_occupied_indegree`), individual synaptic weight quanta (`mean_weight`, `std_weight`, `var_weight`), and accumulated matrix-entry weights with zeros included (`mean_entry_weight`, `std_entry_weight`, `var_entry_weight`). For `Q=10`, each matrix is `20 x 20`.
 - Weight exports may be stored in sparse CSR form instead of as a dense matrix. `analyze_weights.py` handles both formats automatically.
 - If you want to inspect a sparse export as a dense matrix, you can reconstruct it with:
 
