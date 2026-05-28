@@ -448,6 +448,20 @@ def run_binary_simulation(
         "trace_path": os.path.join(binary_folder, f"{resolved_output_name}.npz"),
         "summary_path": summary_path,
     }
+    analysis_cfg = dict(parameter.get("analysis") or {})
+    if bool(analysis_cfg.get("enabled", False)):
+        from analysis.pipeline import run_analysis_on_binary_trace
+
+        analysis_result = run_analysis_on_binary_trace(
+            result["trace_path"],
+            parameter=parameter,
+            analysis_cfg=analysis_cfg,
+            base_output_dir=binary_folder,
+        )
+        result["analysis"] = {
+            "output_dir": analysis_result.get("output_dir"),
+            "methods": sorted((analysis_result.get("results") or {}).keys()),
+        }
     del rates
     del neuron_states
     del mean_values

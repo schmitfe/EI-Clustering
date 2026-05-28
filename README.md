@@ -7,8 +7,9 @@ Mean-field solvers, binary-network simulations, figure-generation scripts, and r
 ## Quick Start
 - `python -m pipelines.mean_field` runs the mean-field ERF sweep plus fixpoint analysis using `sim_config/default_simulation.yaml`. See `MeanField/README.md` for the full flag reference, solver details, and data layout.
 - `python -m pipelines.binary` launches the stochastic binary-network simulation with the same default config. See `BinaryNetwork/README.md` for sampling controls and plotting helpers.
+- `python -m pipelines.analysis --folder <run-folder>` runs the integrated population-state analysis on an existing binary or spiking output directory using the same YAML override system.
 - Configuration defaults are defined under `sim_config/`. Always override parameters through the CLI rather than environment variables so runs remain reproducible.
-- Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, and optional binary traces, while plots go to `plots/`.
+- Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, binary or spiking traces, and optional `analysis/<analysis-tag>/` subdirectories, while plots go to `plots/`.
 
 ## Environments
 - Conda environment files for the figure workflows live under [`envs/`](envs/README.md).

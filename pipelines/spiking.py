@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import os
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -21,7 +22,8 @@ from network import ClusteredNetwork
 from network_params import net_dict as DEFAULT_NET
 from sim_params import sim_dict as DEFAULT_SIM
 from stimulus_params import stim_dict as DEFAULT_STIM
-from sim_config import add_override_arguments, deep_update, load_from_args
+from MeanField.rate_system import ensure_output_folder
+from sim_config import add_override_arguments, deep_update, load_from_args, sim_tag_from_cfg, write_yaml_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +35,11 @@ def parse_args() -> argparse.Namespace:
         "--save-spikes",
         type=str,
         help="Optional path to an .npz file storing spike times, rates, and parameters.",
+    )
+    parser.add_argument(
+        "--output-name",
+        type=str,
+        help="Base name for the repository-managed spiking output files.",
     )
     return parser.parse_args()
 
@@ -90,19 +97,98 @@ def _save_npz(path: Path, payload: Dict[str, Any]) -> None:
         e_rate=payload["e_rate"],
         i_rate=payload["i_rate"],
         params=payload["params"],
+        sim_dict=np.array(payload["sim_dict"], dtype=object),
+        net_dict=np.array(payload["net_dict"], dtype=object),
+        stim_dict=np.array(payload["stim_dict"], dtype=object),
     )
+
+
+def _taggable_root_parameter(parameter: Dict[str, Any]) -> Dict[str, Any]:
+    filtered = dict(parameter)
+    for key in ("R_Eplus", "focus_count", "focus_counts"):
+        filtered.pop(key, None)
+    return filtered
+
+
+def _taggable_spiking_config(parameter: Dict[str, Any], payload: Dict[str, Any], output_name: str) -> Dict[str, Any]:
+    return {
+        "parameter": dict(parameter),
+        "spiking": {
+            "sim_dict": dict(payload["sim_dict"]),
+            "net_dict": dict(payload["net_dict"]),
+            "stim_dict": dict(payload["stim_dict"]),
+            "output_name": str(output_name),
+        },
+    }
+
+
+def save_spiking_output(parameter: Dict[str, Any], payload: Dict[str, Any], *, output_name: str | None = None) -> Dict[str, str]:
+    root_tag = sim_tag_from_cfg(_taggable_root_parameter(parameter))
+    folder = ensure_output_folder(parameter, tag=root_tag)
+    spiking_cfg = dict(parameter.get("spiking") or {})
+    resolved_output_name = str(output_name or spiking_cfg.get("output_name") or "spike_trace")
+    spiking_tag = sim_tag_from_cfg(_taggable_spiking_config(parameter, payload, resolved_output_name))
+    spiking_folder = os.path.join(folder, "spiking", spiking_tag)
+    os.makedirs(spiking_folder, exist_ok=True)
+    params_path = os.path.join(folder, "params.yaml")
+    if not os.path.exists(params_path):
+        write_yaml_config(_taggable_root_parameter(parameter), params_path)
+    spiking_params_path = os.path.join(spiking_folder, "params.yaml")
+    if not os.path.exists(spiking_params_path):
+        write_yaml_config(
+            {
+                "parameter": parameter,
+                "resolved_spiking": {
+                    "sim_dict": payload["sim_dict"],
+                    "net_dict": payload["net_dict"],
+                    "stim_dict": payload["stim_dict"],
+                },
+            },
+            spiking_params_path,
+        )
+    trace_path = os.path.join(spiking_folder, f"{resolved_output_name}.npz")
+    _save_npz(Path(trace_path), payload)
+    summary = {
+        "output_name": resolved_output_name,
+        "e_rate": float(payload["e_rate"]),
+        "i_rate": float(payload["i_rate"]),
+        "spike_count": int(np.asarray(payload["spiketimes"]).shape[1]),
+        "simtime_ms": float(payload["sim_dict"].get("simtime", 0.0)),
+        "dt_ms": float(payload["sim_dict"].get("dt", 0.0)),
+    }
+    summary_path = os.path.join(spiking_folder, f"{resolved_output_name}_summary.yaml")
+    write_yaml_config(summary, summary_path)
+    return {
+        "spiking_folder": spiking_folder,
+        "trace_path": trace_path,
+        "summary_path": summary_path,
+        "output_name": resolved_output_name,
+    }
 
 
 def main() -> None:
     args = parse_args()
     parameter = load_from_args(args)
     result = run_spiking_simulation(parameter)
+    saved = save_spiking_output(parameter, result, output_name=args.output_name)
     print(
         f"Simulated clustered spiking network: e_rate={result['e_rate']:.2f} Hz, "
         f"i_rate={result['i_rate']:.2f} Hz"
     )
+    print(f"Stored spiking output at {saved['trace_path']}")
     if args.save_spikes:
         _save_npz(Path(args.save_spikes), result)
+    analysis_cfg = dict(parameter.get("analysis") or {})
+    if bool(analysis_cfg.get("enabled", False)):
+        from analysis.pipeline import run_analysis_on_spiking_payload
+
+        analysis_result = run_analysis_on_spiking_payload(
+            result,
+            parameter=parameter,
+            analysis_cfg=analysis_cfg,
+            base_output_dir=saved["spiking_folder"],
+        )
+        print(f"Stored analysis outputs at {analysis_result['output_dir']}")
 
 
 if __name__ == "__main__":
