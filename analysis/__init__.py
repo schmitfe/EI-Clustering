@@ -1,6 +1,14 @@
 """Population-state analysis tools for binary and spiking simulations."""
 
 from .evaluation import compare_results, evaluate_result
+from .active_set import (
+    active_set_em,
+    active_set_em_multi_init,
+    classify_clusters,
+    detect_population_states,
+    robust_run_scale,
+    simulate_active_set_data,
+)
 from .io import (
     analysis_input_from_binary_trace,
     analysis_input_from_spiking_payload,
@@ -38,6 +46,12 @@ __all__ = [
     "AnalysisInput",
     "StateInferenceResult",
     "run_population_state_analysis",
+    "active_set_em",
+    "active_set_em_multi_init",
+    "classify_clusters",
+    "detect_population_states",
+    "robust_run_scale",
+    "simulate_active_set_data",
     "run_state_count_sweep",
     "load_analysis_input",
     "analysis_input_from_binary_trace",

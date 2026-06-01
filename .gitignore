@@ -25,6 +25,7 @@ wheels/
 venv/
 ENV/
 env/
+.conda/
 
 # IDEs
 pip-wheel-metadata/

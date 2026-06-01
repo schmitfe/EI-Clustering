@@ -106,6 +106,25 @@ analysis:
         start_end_difference: false
         duration: false
       random_state: 0
+    active_set_em:
+      enabled: true
+      source: auto  # auto, rate, counts, binary
+      transform: auto  # auto, identity, sqrt, asinh
+      segmentation: fixed  # fixed, pelt
+      fixed_width: 5
+      pelt_penalty: 10.0
+      pelt_min_size: 3
+      Kmax: null
+      lambda_active: 0.0
+      lambda_comb: 0.1
+      min_separation: 0.05
+      var_floor: 0.0001
+      max_iter: 100
+      tol: 0.000001
+      flat_range_threshold: 0.000000000001
+      low_tol: 0.01
+      high_tol: 0.99
+      min_transitions: 1
     hmm:
       enabled: true
       emission: auto

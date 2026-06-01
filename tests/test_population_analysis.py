@@ -11,7 +11,8 @@ except ModuleNotFoundError:  # pragma: no cover - local smoke fallback
 
     pytest = _PytestShim()
 
-from analysis.methods import run_changepoint_kmeans, run_hmm, run_kmeans_filter, run_threshold_filter
+from analysis.active_set import active_set_em_multi_init, simulate_active_set_data
+from analysis.methods import run_active_set_em, run_changepoint_kmeans, run_hmm, run_kmeans_filter, run_threshold_filter
 from analysis.pipeline import run_population_state_analysis
 from analysis.preprocessing import apply_cluster_selection, apply_population_filter, bin_spikes_by_cluster
 from analysis.types import AnalysisInput, StateInferenceResult
@@ -56,6 +57,16 @@ def _default_analysis_cfg() -> dict:
                 "segment_features": {"mean": True, "max": False, "active_fraction": True, "duration": False},
                 "random_state": 0,
                 "min_dwell_bins": 2,
+            },
+            "active_set_em": {
+                "enabled": True,
+                "source": "auto",
+                "transform": "auto",
+                "segmentation": "fixed",
+                "fixed_width": 5,
+                "lambda_comb": 0.1,
+                "min_separation": 0.05,
+                "var_floor": 1e-4,
             },
             "hmm": {
                 "enabled": True,
@@ -233,6 +244,31 @@ def test_changepoint_pipeline_returns_result() -> None:
     assert result.segments.shape[0] >= 1
 
 
+def test_active_set_em_recovers_synthetic_masks_and_k_dependent_rates() -> None:
+    X, L, true_masks = simulate_active_set_data(M=300, Q=10, noise=0.03, seed=3)
+    result = active_set_em_multi_init(
+        X,
+        L,
+        Kmax=3,
+        lambda_comb=0.1,
+        min_separation=0.05,
+        var_floor=1e-4,
+    )
+    assert np.mean(result.masks == true_masks) > 0.95
+    assert result.mu1[1] > result.mu1[2] > result.mu1[3]
+    assert result.converged
+
+
+def test_active_set_pipeline_returns_result_and_diagnostics() -> None:
+    cfg = _default_analysis_cfg()
+    result = run_active_set_em(_synthetic_binary_input(), cfg["preprocessing"], cfg["methods"]["active_set_em"])
+    assert isinstance(result, StateInferenceResult)
+    assert result.labels.shape[0] == 36
+    assert result.state_templates is not None
+    assert "mu1_by_K" in result.metadata
+    assert "cluster_labels" in result.metadata
+
+
 def test_hmm_pipeline_graceful_if_missing() -> None:
     cfg = _default_analysis_cfg()
     try:
@@ -248,3 +284,4 @@ def test_repository_runner_smoke() -> None:
     output = run_population_state_analysis(_synthetic_snn_input(), cfg)
     assert "kmeans_filter" in output["results"]
     assert "changepoint_kmeans" in output["results"]
+    assert "active_set_em" in output["results"]

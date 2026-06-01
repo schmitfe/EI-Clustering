@@ -16,7 +16,7 @@ from .io import (
     load_analysis_input,
     resolve_analysis_output_dir,
 )
-from .methods import run_changepoint_kmeans, run_hmm, run_kmeans_filter, run_threshold_filter
+from .methods import run_active_set_em, run_changepoint_kmeans, run_hmm, run_kmeans_filter, run_threshold_filter
 from .model_selection import run_state_count_sweep
 from .plotting import plot_method_comparison, save_result_plots
 from .preprocessing import apply_cluster_selection, apply_population_filter, validate_analysis_input
@@ -27,6 +27,7 @@ METHOD_REGISTRY = {
     "threshold_filter": run_threshold_filter,
     "kmeans_filter": run_kmeans_filter,
     "changepoint_kmeans": run_changepoint_kmeans,
+    "active_set_em": run_active_set_em,
     "hmm": run_hmm,
 }
 

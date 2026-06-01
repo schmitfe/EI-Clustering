@@ -92,7 +92,11 @@ def evaluate_result(
         }
     metrics["dwell_times"] = dwell_metrics
     true_transition = compute_transition_matrix(truth)
-    pred_transition = compute_transition_matrix(remapped, n_states=true_transition.shape[0])
+    n_transition_states = int(true_transition.shape[0])
+    if remapped.size:
+        n_transition_states = max(n_transition_states, int(remapped.max()) + 1)
+    true_transition = compute_transition_matrix(truth, n_states=n_transition_states)
+    pred_transition = compute_transition_matrix(remapped, n_states=n_transition_states)
     diff = pred_transition - true_transition
     metrics["transition_matrix"] = {
         "frobenius_error": float(np.linalg.norm(diff)),

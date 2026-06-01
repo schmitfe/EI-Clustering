@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 
+from .active_set import detect_population_states
 from .preprocessing import binarize_activity, build_feature_matrix
 from .types import AnalysisInput, StateInferenceResult
 from .utils import (
@@ -217,48 +218,19 @@ def _segment_feature_matrix(
     return np.vstack(rows) if rows else np.zeros((0, X.shape[1]), dtype=float)
 
 
-def run_changepoint_kmeans(
-    data: AnalysisInput,
-    preprocessing_cfg: Dict[str, Any],
-    method_cfg: Dict[str, Any],
-) -> StateInferenceResult:
-    try:
-        import ruptures as rpt
-    except ModuleNotFoundError as exc:  # pragma: no cover - dependency exercised in integration tests
-        raise ModuleNotFoundError("ruptures is required for changepoint_kmeans.") from exc
-
-    feature_type = str(method_cfg.get("feature_type", "smoothed_rates"))
-    features = build_feature_matrix(data, feature_type, preprocessing_cfg)
-    binary_source = data.X_binary
-    if binary_source is None:
-        binary_source = binarize_activity(
-            _reference_matrix(data),
-            mode=str(preprocessing_cfg.get("binary_threshold_mode", "percentile")),
-            percentile=float(preprocessing_cfg.get("binary_threshold_percentile", 80.0)),
-            hysteresis=preprocessing_cfg.get("hysteresis"),
-        )
-    algorithm = str(method_cfg.get("algorithm", "pelt")).lower()
-    cost = str(method_cfg.get("cost", "rbf")).lower()
-    if algorithm == "pelt":
-        algo = rpt.Pelt(model=cost).fit(features)
-    elif algorithm == "binseg":
-        algo = rpt.Binseg(model=cost).fit(features)
-    elif algorithm == "window":
-        width = int(method_cfg.get("window_width", max(10, features.shape[0] // 20)))
-        algo = rpt.Window(width=width, model=cost).fit(features)
-    else:
-        raise ValueError(f"Unsupported changepoint algorithm '{algorithm}'.")
-    penalty = method_cfg.get("penalty")
-    n_bkps = method_cfg.get("n_bkps")
-    if n_bkps is not None:
-        bkps = algo.predict(n_bkps=int(n_bkps))
-    else:
-        if penalty is None:
-            penalty = np.log(max(features.shape[0], 2)) * max(1, features.shape[1])
-        bkps = algo.predict(pen=float(penalty))
+def _changepoint_bounds(bkps: list[int]) -> list[tuple[int, int]]:
     starts = [0] + [int(value) for value in bkps[:-1]]
     stops = [int(value) for value in bkps]
-    bounds = list(zip(starts, stops))
+    return list(zip(starts, stops))
+
+
+def _fit_segment_kmeans_labels(
+    data: AnalysisInput,
+    features: np.ndarray,
+    binary_source: np.ndarray,
+    bounds: list[tuple[int, int]],
+    method_cfg: Dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, float, int]:
     segment_features = _segment_feature_matrix(
         _reference_matrix(data),
         np.asarray(binary_source, dtype=float),
@@ -283,19 +255,570 @@ def run_changepoint_kmeans(
         features=features,
         state_means=np.asarray(kmeans.cluster_centers_, dtype=float),
     )
+    return labels, np.asarray(kmeans.cluster_centers_, dtype=float), float(kmeans.inertia_), int(n_states)
+
+
+def _segmentation_cost(features: np.ndarray, cost_name: str, bkps: list[int]) -> float:
+    try:
+        import ruptures as rpt
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise ModuleNotFoundError("ruptures is required for changepoint_kmeans.") from exc
+    cost = rpt.costs.cost_factory(cost_name).fit(features)
+    start = 0
+    total = 0.0
+    for stop in bkps:
+        total += float(cost.error(start, int(stop)))
+        start = int(stop)
+    return total
+
+
+def _select_crops_candidate(candidates: list[Dict[str, Any]], method_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    if not candidates:
+        raise RuntimeError("CROPS penalty path did not produce any candidates.")
+    ordered = sorted(candidates, key=lambda item: (int(item["n_changepoints"]), float(item["cost"])))
+    zero_costs = [float(item["cost"]) for item in ordered if int(item["n_changepoints"]) == 0]
+    baseline_cost = zero_costs[0] if zero_costs else max(float(item["cost"]) for item in ordered)
+    if baseline_cost > 0.0:
+        for item in ordered:
+            item["loss_reduction_fraction"] = (baseline_cost - float(item["cost"])) / baseline_cost
+    else:
+        for item in ordered:
+            item["loss_reduction_fraction"] = 0.0
+    min_loss_reduction = method_cfg.get("crops_min_loss_reduction")
+    if min_loss_reduction is not None:
+        threshold = float(min_loss_reduction)
+        viable = [
+            item
+            for item in ordered
+            if int(item["n_changepoints"]) == 0
+            or float(item.get("loss_reduction_fraction", 0.0)) >= threshold
+        ]
+        if viable:
+            ordered = viable
+    min_selected_penalty = method_cfg.get("crops_min_selected_penalty")
+    if min_selected_penalty is not None:
+        threshold = float(min_selected_penalty)
+        viable = [
+            item
+            for item in ordered
+            if int(item["n_changepoints"]) == 0
+            or float(item["penalty"]) >= threshold
+        ]
+        if viable:
+            ordered = viable
+    min_adjacent_distance = method_cfg.get("crops_min_adjacent_distance")
+    if min_adjacent_distance is not None:
+        threshold = float(min_adjacent_distance)
+        viable = [
+            item
+            for item in ordered
+            if int(item["n_changepoints"]) == 0
+            or float(item.get("min_adjacent_distance", -np.inf)) >= threshold
+        ]
+        if viable:
+            ordered = viable
+    target = method_cfg.get("crops_target_segments")
+    if target is not None:
+        target_segments = max(1, int(target))
+        return min(
+            ordered,
+            key=lambda item: (
+                abs(int(item["n_segments"]) - target_segments),
+                -float(item["penalty"]),
+                float(item["cost"]),
+            ),
+        )
+    selection = str(method_cfg.get("crops_selection", "elbow")).lower()
+    if selection == "max_penalty":
+        return max(ordered, key=lambda item: float(item["penalty"]))
+    if selection == "min_penalty":
+        return min(ordered, key=lambda item: float(item["penalty"]))
+    max_cps = method_cfg.get("crops_max_changepoints_for_elbow")
+    elbow_pool = ordered
+    if max_cps is not None:
+        threshold = int(max_cps)
+        elbow_pool = [item for item in ordered if int(item["n_changepoints"]) <= threshold]
+        if len(elbow_pool) < 3:
+            elbow_pool = ordered
+    if len(elbow_pool) < 3:
+        return min(elbow_pool, key=lambda item: (abs(int(item["n_segments"]) - int(method_cfg.get("n_states", 2))), float(item["cost"])))
+    points = np.array([[float(item["n_changepoints"]), float(item["cost"])] for item in elbow_pool], dtype=float)
+    spans = np.ptp(points, axis=0)
+    spans[spans == 0.0] = 1.0
+    scaled = (points - points.min(axis=0, keepdims=True)) / spans[None, :]
+    start = scaled[0]
+    end = scaled[-1]
+    line = end - start
+    norm = float(np.linalg.norm(line))
+    if norm <= 0.0:
+        return elbow_pool[0]
+    distances = np.abs(np.cross(line, scaled - start) / norm)
+    return elbow_pool[int(np.argmax(distances))]
+
+
+def _candidate_adjacent_distances(matrix: np.ndarray, bkps: list[int]) -> tuple[float, float]:
+    bounds = _changepoint_bounds(bkps)
+    if len(bounds) <= 1:
+        return float("inf"), float("inf")
+    arr = np.asarray(matrix, dtype=float)
+    means = []
+    for start, stop in bounds:
+        means.append(arr[int(start) : int(stop)].mean(axis=0))
+    distances = [float(np.linalg.norm(means[idx + 1] - means[idx])) for idx in range(len(means) - 1)]
+    return float(np.min(distances)), float(np.median(distances))
+
+
+def _merge_bounds_by_similarity_and_dwell(
+    bounds: list[tuple[int, int]],
+    matrix: np.ndarray,
+    *,
+    min_distance: float,
+    min_dwell_bins: int,
+) -> tuple[list[tuple[int, int]], Dict[str, Any]]:
+    if len(bounds) <= 1:
+        return bounds, {"merge_count": 0, "merge_reasons": []}
+    arr = np.asarray(matrix, dtype=float)
+    merged = [(int(start), int(stop)) for start, stop in bounds]
+    reasons: list[Dict[str, Any]] = []
+
+    def mean_for(bound: tuple[int, int]) -> np.ndarray:
+        start, stop = bound
+        return arr[start:stop].mean(axis=0)
+
+    changed = True
+    while changed and len(merged) > 1:
+        changed = False
+        best_idx = None
+        best_reason = None
+        best_score = None
+        for idx in range(len(merged) - 1):
+            left = merged[idx]
+            right = merged[idx + 1]
+            left_len = left[1] - left[0]
+            right_len = right[1] - right[0]
+            distance = float(np.linalg.norm(mean_for(left) - mean_for(right)))
+            short = min(left_len, right_len) < int(min_dwell_bins)
+            similar = distance < float(min_distance)
+            if not short and not similar:
+                continue
+            score = distance
+            if best_score is None or score < best_score:
+                best_idx = idx
+                best_score = score
+                best_reason = {
+                    "left": list(left),
+                    "right": list(right),
+                    "distance": distance,
+                    "left_len": int(left_len),
+                    "right_len": int(right_len),
+                    "short": bool(short),
+                    "similar": bool(similar),
+                }
+        if best_idx is not None:
+            left = merged[best_idx]
+            right = merged[best_idx + 1]
+            merged[best_idx : best_idx + 2] = [(left[0], right[1])]
+            reasons.append(dict(best_reason or {}))
+            changed = True
+    return merged, {"merge_count": len(reasons), "merge_reasons": reasons}
+
+
+def _bounds_to_breakpoints(bounds: list[tuple[int, int]]) -> list[int]:
+    return [int(stop) for _, stop in bounds]
+
+
+def _resolve_cluster_indices(data: AnalysisInput, source: str) -> list[int]:
+    label = str(source or "all").lower()
+    if label in {"excitatory", "e"} and data.cluster_names is not None:
+        indices = [idx for idx, name in enumerate(data.cluster_names) if str(name).startswith("E")]
+        if indices:
+            return indices
+    return list(range(data.n_clusters))
+
+
+def _threshold_segment_templates(
+    means: np.ndarray,
+    *,
+    mode: str,
+    percentile: float,
+    fixed_threshold: Optional[float],
+    min_active: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    arr = np.asarray(means, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("Segment template means must be 2D.")
+    if arr.shape[0] == 0:
+        return np.zeros_like(arr, dtype=np.uint8), np.zeros(arr.shape[1], dtype=float)
+    mode = str(mode or "relative").lower()
+    if mode == "fixed":
+        if fixed_threshold is None:
+            raise ValueError("template_threshold_mode='fixed' requires template_fixed_threshold.")
+        thresholds = np.full(arr.shape[1], float(fixed_threshold), dtype=float)
+    elif mode == "percentile":
+        thresholds = np.percentile(arr, float(percentile), axis=0)
+    elif mode == "relative":
+        low = np.percentile(arr, 20.0, axis=0)
+        high = np.percentile(arr, 95.0, axis=0)
+        frac = float(fixed_threshold) if fixed_threshold is not None else 0.35
+        thresholds = low + frac * np.maximum(high - low, 0.0)
+    else:
+        raise ValueError(f"Unsupported template_threshold_mode '{mode}'.")
+    templates = (arr >= thresholds[None, :]).astype(np.uint8)
+    if int(min_active) > 0:
+        for idx in range(templates.shape[0]):
+            if int(templates[idx].sum()) >= int(min_active):
+                continue
+            if arr.shape[1] > 0:
+                top = np.argsort(arr[idx])[-int(min_active) :]
+                templates[idx, top] = 1
+    return templates, thresholds
+
+
+def _merge_bounds_by_template_and_dwell(
+    bounds: list[tuple[int, int]],
+    matrix: np.ndarray,
+    method_cfg: Dict[str, Any],
+) -> tuple[list[tuple[int, int]], Dict[str, Any]]:
+    if len(bounds) <= 1:
+        return bounds, {"template_merge_count": 0, "template_merge_reasons": [], "segment_templates": []}
+    arr = np.asarray(matrix, dtype=float)
+    min_dwell = int(method_cfg.get("template_min_dwell_bins", method_cfg.get("merge_min_dwell_bins", 1)) or 1)
+    threshold_mode = str(method_cfg.get("template_threshold_mode", "relative"))
+    percentile = float(method_cfg.get("template_threshold_percentile", 80.0))
+    fixed = method_cfg.get("template_fixed_threshold")
+    fixed_value = None if fixed is None else float(fixed)
+    min_active = int(method_cfg.get("template_min_active_clusters", 1) or 0)
+    merged = [(int(start), int(stop)) for start, stop in bounds]
+    reasons: list[Dict[str, Any]] = []
+
+    def compute_templates(current_bounds: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        means = np.vstack([arr[start:stop].mean(axis=0) for start, stop in current_bounds])
+        templates, thresholds = _threshold_segment_templates(
+            means,
+            mode=threshold_mode,
+            percentile=percentile,
+            fixed_threshold=fixed_value,
+            min_active=min_active,
+        )
+        return means, templates, thresholds
+
+    thresholds = np.zeros(arr.shape[1], dtype=float)
+    changed = True
+    while changed and len(merged) > 1:
+        changed = False
+        means, templates, thresholds = compute_templates(merged)
+        for idx in range(len(merged) - 1):
+            left = merged[idx]
+            right = merged[idx + 1]
+            left_len = left[1] - left[0]
+            right_len = right[1] - right[0]
+            same_template = bool(np.array_equal(templates[idx], templates[idx + 1]))
+            short = min(left_len, right_len) < min_dwell
+            if not same_template and not short:
+                continue
+            merged[idx : idx + 2] = [(left[0], right[1])]
+            reasons.append(
+                {
+                    "left": list(left),
+                    "right": list(right),
+                    "same_template": same_template,
+                    "short": bool(short),
+                    "left_len": int(left_len),
+                    "right_len": int(right_len),
+                    "left_template": templates[idx].astype(int).tolist(),
+                    "right_template": templates[idx + 1].astype(int).tolist(),
+                }
+            )
+            changed = True
+            break
+    means, templates, thresholds = compute_templates(merged)
+    metadata = {
+        "template_merge_count": len(reasons),
+        "template_merge_reasons": reasons,
+        "template_thresholds": thresholds.tolist(),
+        "segment_templates": templates.astype(int).tolist(),
+        "segment_template_means": means.tolist(),
+    }
+    return merged, metadata
+
+
+def _fit_template_labels(
+    data: AnalysisInput,
+    bounds: list[tuple[int, int]],
+    matrix: np.ndarray,
+    method_cfg: Dict[str, Any],
+) -> tuple[np.ndarray, Dict[str, Any]]:
+    arr = np.asarray(matrix, dtype=float)
+    means = np.vstack([arr[start:stop].mean(axis=0) for start, stop in bounds]) if bounds else np.zeros((0, arr.shape[1]))
+    templates, thresholds = _threshold_segment_templates(
+        means,
+        mode=str(method_cfg.get("template_threshold_mode", "relative")),
+        percentile=float(method_cfg.get("template_threshold_percentile", 80.0)),
+        fixed_threshold=None if method_cfg.get("template_fixed_threshold") is None else float(method_cfg.get("template_fixed_threshold")),
+        min_active=int(method_cfg.get("template_min_active_clusters", 1) or 0),
+    )
+    template_to_state: dict[tuple[int, ...], int] = {}
+    labels = np.zeros(data.n_timepoints, dtype=np.int64)
+    segment_states: list[int] = []
+    for (start, stop), template in zip(bounds, templates):
+        key = tuple(int(value) for value in template.tolist())
+        if key not in template_to_state:
+            template_to_state[key] = len(template_to_state)
+        state = template_to_state[key]
+        labels[start:stop] = state
+        segment_states.append(state)
+    metadata = {
+        "template_thresholds": thresholds.tolist(),
+        "segment_templates": templates.astype(int).tolist(),
+        "segment_template_states": segment_states,
+        "unique_templates": [list(key) for key, _ in sorted(template_to_state.items(), key=lambda item: item[1])],
+    }
+    return labels, metadata
+
+
+def _run_pelt_crops(
+    features: np.ndarray,
+    cost: str,
+    method_cfg: Dict[str, Any],
+    *,
+    quality_matrix: Optional[np.ndarray] = None,
+) -> tuple[list[int], Dict[str, Any]]:
+    try:
+        import ruptures as rpt
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise ModuleNotFoundError("ruptures is required for changepoint_kmeans.") from exc
+    min_penalty = float(method_cfg.get("crops_min_penalty", 0.5))
+    max_penalty = float(method_cfg.get("crops_max_penalty", max(1.0, np.log(max(features.shape[0], 2)) * max(1, features.shape[1]))))
+    n_penalties = max(2, int(method_cfg.get("crops_n_penalties", 40)))
+    if min_penalty <= 0.0 or max_penalty <= 0.0:
+        raise ValueError("CROPS penalty bounds must be positive.")
+    if min_penalty > max_penalty:
+        min_penalty, max_penalty = max_penalty, min_penalty
+    penalties = np.geomspace(min_penalty, max_penalty, n_penalties)
+    seen: set[tuple[int, ...]] = set()
+    candidates: list[Dict[str, Any]] = []
+    for penalty in penalties:
+        bkps = [int(value) for value in rpt.Pelt(model=cost).fit(features).predict(pen=float(penalty))]
+        key = tuple(bkps)
+        if key in seen:
+            continue
+        seen.add(key)
+        min_adjacent, median_adjacent = (float("inf"), float("inf"))
+        if quality_matrix is not None:
+            min_adjacent, median_adjacent = _candidate_adjacent_distances(np.asarray(quality_matrix, dtype=float), bkps)
+        candidates.append(
+            {
+                "penalty": float(penalty),
+                "breakpoints": bkps,
+                "n_changepoints": max(0, len(bkps) - 1),
+                "n_segments": len(bkps),
+                "cost": _segmentation_cost(features, cost, bkps),
+                "min_adjacent_distance": min_adjacent,
+                "median_adjacent_distance": median_adjacent,
+            }
+        )
+    selected = _select_crops_candidate(candidates, method_cfg)
+    metadata = {
+        "crops_penalty_range": [min_penalty, max_penalty],
+        "crops_n_penalties": n_penalties,
+        "crops_selection": str(method_cfg.get("crops_selection", "elbow")),
+        "crops_selected_penalty": float(selected["penalty"]),
+        "crops_selected_cost": float(selected["cost"]),
+        "crops_candidates": candidates,
+    }
+    return [int(value) for value in selected["breakpoints"]], metadata
+
+
+def run_changepoint_kmeans(
+    data: AnalysisInput,
+    preprocessing_cfg: Dict[str, Any],
+    method_cfg: Dict[str, Any],
+) -> StateInferenceResult:
+    try:
+        import ruptures as rpt
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency exercised in integration tests
+        raise ModuleNotFoundError("ruptures is required for changepoint_kmeans.") from exc
+
+    feature_type = str(method_cfg.get("feature_type", "smoothed_rates"))
+    features = build_feature_matrix(data, feature_type, preprocessing_cfg)
+    binary_source = data.X_binary
+    if binary_source is None:
+        binary_source = binarize_activity(
+            _reference_matrix(data),
+            mode=str(preprocessing_cfg.get("binary_threshold_mode", "percentile")),
+            percentile=float(preprocessing_cfg.get("binary_threshold_percentile", 80.0)),
+            hysteresis=preprocessing_cfg.get("hysteresis"),
+        )
+    algorithm = str(method_cfg.get("algorithm", "pelt")).lower()
+    cost = str(method_cfg.get("cost", "rbf")).lower()
+    crops_metadata: Dict[str, Any] = {}
+    if algorithm in {"pelt_crops", "crops"}:
+        quality_source = str(method_cfg.get("crops_quality_source", "all")).lower()
+        quality_matrix = _reference_matrix(data)
+        quality_indices = _resolve_cluster_indices(data, quality_source)
+        quality_matrix = quality_matrix[:, quality_indices]
+        bkps, crops_metadata = _run_pelt_crops(features, cost, method_cfg, quality_matrix=quality_matrix)
+        algo = None
+    elif algorithm == "pelt":
+        algo = rpt.Pelt(model=cost).fit(features)
+    elif algorithm == "binseg":
+        algo = rpt.Binseg(model=cost).fit(features)
+    elif algorithm == "window":
+        width = int(method_cfg.get("window_width", max(10, features.shape[0] // 20)))
+        algo = rpt.Window(width=width, model=cost).fit(features)
+    else:
+        raise ValueError(f"Unsupported changepoint algorithm '{algorithm}'.")
+    if algorithm not in {"pelt_crops", "crops"}:
+        penalty = method_cfg.get("penalty")
+        n_bkps = method_cfg.get("n_bkps")
+        if n_bkps is not None:
+            bkps = algo.predict(n_bkps=int(n_bkps))
+        else:
+            if penalty is None:
+                penalty = np.log(max(features.shape[0], 2)) * max(1, features.shape[1])
+            bkps = algo.predict(pen=float(penalty))
+    bkps = [int(value) for value in bkps]
+    bounds = _changepoint_bounds(bkps)
+    merge_metadata: Dict[str, Any] = {}
+    if bool(method_cfg.get("merge_adjacent_segments", False)):
+        if "quality_matrix" not in locals():
+            quality_matrix = _reference_matrix(data)
+        merge_min_distance = float(method_cfg.get("merge_min_adjacent_distance", method_cfg.get("crops_min_adjacent_distance", 0.0)) or 0.0)
+        merge_min_dwell = int(method_cfg.get("merge_min_dwell_bins", 1) or 1)
+        bounds, merge_metadata = _merge_bounds_by_similarity_and_dwell(
+            bounds,
+            np.asarray(quality_matrix, dtype=float),
+            min_distance=merge_min_distance,
+            min_dwell_bins=merge_min_dwell,
+        )
+        bkps = _bounds_to_breakpoints(bounds)
+    template_metadata: Dict[str, Any] = {}
+    if bool(method_cfg.get("template_state_assignment", False)):
+        template_source = str(method_cfg.get("template_source", "excitatory")).lower()
+        template_indices = _resolve_cluster_indices(data, template_source)
+        template_matrix = _reference_matrix(data)[:, template_indices]
+        if bool(method_cfg.get("template_merge_adjacent", True)):
+            bounds, template_merge_metadata = _merge_bounds_by_template_and_dwell(
+                bounds,
+                template_matrix,
+                method_cfg,
+            )
+            bkps = _bounds_to_breakpoints(bounds)
+            template_metadata.update(template_merge_metadata)
+        labels, template_label_metadata = _fit_template_labels(data, bounds, template_matrix, method_cfg)
+        template_metadata.update(template_label_metadata)
+        kmeans_inertia = 0.0
+        n_states = int(np.unique(labels).size)
+    else:
+        labels, state_means, kmeans_inertia, n_states = _fit_segment_kmeans_labels(
+            data,
+            features,
+            np.asarray(binary_source, dtype=float),
+            bounds,
+            method_cfg,
+        )
+    metadata = {
+        "breakpoints": [int(value) for value in bkps],
+        "feature_type": feature_type,
+        "segment_kmeans_inertia": kmeans_inertia,
+        "segment_count": int(len(bounds)),
+        "n_requested_states": int(method_cfg.get("n_states", n_states)),
+        "n_fitted_states": int(n_states),
+    }
+    metadata.update(crops_metadata)
+    metadata.update(merge_metadata)
+    metadata.update(template_metadata)
     return _finalize_result(
         "changepoint_kmeans",
         labels,
         data,
         method_cfg,
-        metadata={
-            "breakpoints": [int(value) for value in bkps],
-            "feature_type": feature_type,
-            "segment_kmeans_inertia": float(kmeans.inertia_),
-            "segment_count": int(len(bounds)),
-            "n_requested_states": int(method_cfg.get("n_states", n_states)),
-            "n_fitted_states": int(n_states),
-        },
+        metadata=metadata,
+    )
+
+
+def run_active_set_em(
+    data: AnalysisInput,
+    preprocessing_cfg: Dict[str, Any],
+    method_cfg: Dict[str, Any],
+) -> StateInferenceResult:
+    source = str(method_cfg.get("source", "auto")).lower()
+    if source == "auto":
+        if data.X_rate is not None:
+            Y = np.asarray(data.X_rate, dtype=float)
+        elif data.X_counts is not None:
+            Y = np.asarray(data.X_counts, dtype=float)
+        elif data.X_binary is not None:
+            Y = np.asarray(data.X_binary, dtype=float)
+        else:
+            raise ValueError("active_set_em requires X_rate, X_counts, or X_binary.")
+    elif source == "rate":
+        if data.X_rate is None:
+            raise ValueError("active_set_em source='rate' requires X_rate.")
+        Y = np.asarray(data.X_rate, dtype=float)
+    elif source == "counts":
+        if data.X_counts is None:
+            raise ValueError("active_set_em source='counts' requires X_counts.")
+        Y = np.asarray(data.X_counts, dtype=float)
+    elif source == "binary":
+        if data.X_binary is None:
+            raise ValueError("active_set_em source='binary' requires X_binary.")
+        Y = np.asarray(data.X_binary, dtype=float)
+    else:
+        raise ValueError(f"Unsupported active_set_em source '{source}'.")
+    transform = str(method_cfg.get("transform", "identity"))
+    if transform == "auto":
+        transform = "sqrt" if data.source_type == "snn" and source != "binary" else "identity"
+    detection = detect_population_states(
+        Y,
+        transform=transform,
+        segmentation=str(method_cfg.get("segmentation", "fixed")),
+        fixed_width=int(method_cfg.get("fixed_width", 10)),
+        pelt_penalty=float(method_cfg.get("pelt_penalty", 10.0)),
+        pelt_min_size=int(method_cfg.get("pelt_min_size", 5)),
+        Kmax=None if method_cfg.get("Kmax") is None else int(method_cfg.get("Kmax")),
+        lambda_active=float(method_cfg.get("lambda_active", 0.0)),
+        lambda_comb=float(method_cfg.get("lambda_comb", 0.1)),
+        min_separation=float(method_cfg.get("min_separation", 0.05)),
+        var_floor=float(method_cfg.get("var_floor", 1e-4)),
+        max_iter=int(method_cfg.get("max_iter", 100)),
+        tol=float(method_cfg.get("tol", 1e-6)),
+        flat_range_threshold=float(method_cfg.get("flat_range_threshold", 1e-12)),
+        low_tol=float(method_cfg.get("low_tol", 0.01)),
+        high_tol=float(method_cfg.get("high_tol", 0.99)),
+        min_transitions=int(method_cfg.get("min_transitions", 1)),
+    )
+    res = detection.result
+    metadata = {
+        "source": source,
+        "status": detection.status,
+        "preprocessing": detection.preprocessing,
+        "segments": [[int(start), int(stop)] for start, stop in detection.segments],
+        "segment_active_masks": res.masks.astype(int),
+        "segment_K": res.K,
+        "segment_lengths": detection.L,
+        "segment_means_scaled": detection.X,
+        "mu0_by_K": res.mu0,
+        "mu1_by_K": res.mu1,
+        "var0_by_K": res.var0,
+        "var1_by_K": res.var1,
+        "em_objective": float(res.objective),
+        "em_converged": bool(res.converged),
+        "em_n_iter": int(res.n_iter),
+        "em_margin": res.margin,
+        "cluster_labels": detection.cluster_labels,
+        "cluster_occupancy": detection.cluster_occupancy,
+        "episodes": detection.episodes,
+        "diagnostic_note": "Run-level robust scaling only; no per-cluster z-scoring.",
+    }
+    return _finalize_result(
+        "active_set_em",
+        detection.labels,
+        data,
+        method_cfg,
+        log_likelihood=-float(res.objective),
+        metadata=metadata,
+        state_template_source=detection.time_masks.astype(np.uint8),
     )
 
 
