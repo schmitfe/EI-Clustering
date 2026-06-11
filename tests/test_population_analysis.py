@@ -11,7 +11,13 @@ except ModuleNotFoundError:  # pragma: no cover - local smoke fallback
 
     pytest = _PytestShim()
 
-from analysis.active_set import active_set_em_multi_init, simulate_active_set_data
+from analysis.active_set import (
+    build_candidate_sets,
+    merge_identical_adjacent,
+    simulate_active_set_data,
+    smooth_active_set_sequence_dp,
+    active_set_em_multi_init,
+)
 from analysis.methods import run_active_set_em, run_changepoint_kmeans, run_hmm, run_kmeans_filter, run_threshold_filter
 from analysis.pipeline import run_population_state_analysis
 from analysis.preprocessing import apply_cluster_selection, apply_population_filter, bin_spikes_by_cluster
@@ -267,6 +273,57 @@ def test_active_set_pipeline_returns_result_and_diagnostics() -> None:
     assert result.state_templates is not None
     assert "mu1_by_K" in result.metadata
     assert "cluster_labels" in result.metadata
+
+
+def test_active_set_merge_identical_adjacent_segments() -> None:
+    segments = [(0, 5), (5, 10), (10, 15), (15, 20)]
+    masks = np.array(
+        [
+            [True, False, False],
+            [True, False, False],
+            [False, True, False],
+            [False, True, False],
+        ],
+        dtype=bool,
+    )
+    merged_segments, merged_masks = merge_identical_adjacent(segments, masks)
+    assert merged_segments == [(0, 10), (10, 20)]
+    assert np.array_equal(merged_masks, np.array([[True, False, False], [False, True, False]], dtype=bool))
+
+
+def test_active_set_dp_smoothing_removes_weak_identity_flicker() -> None:
+    X = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.95, 0.05, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    params = {
+        "mu0": np.array([0.0, 0.0, 0.0, 0.0]),
+        "mu1": np.array([0.0, 1.0, 1.0, 1.0]),
+        "var0": np.full(4, 0.1),
+        "var1": np.full(4, 0.1),
+    }
+    base_masks = np.array(
+        [
+            [True, False, False],
+            [False, True, False],
+            [True, False, False],
+        ],
+        dtype=bool,
+    )
+    candidates = build_candidate_sets(X, params, Kmax=1, base_masks=base_masks, lambda_comb=0.0)
+    smoothed, _cost, metadata = smooth_active_set_sequence_dp(
+        candidates,
+        L=np.ones(3),
+        gamma_switch=10.0,
+        gamma_hamming=2.0,
+    )
+    assert metadata["gamma_switch"] == 10.0
+    assert np.array_equal(smoothed[0], smoothed[1])
+    assert np.array_equal(smoothed[1], smoothed[2])
 
 
 def test_hmm_pipeline_graceful_if_missing() -> None:

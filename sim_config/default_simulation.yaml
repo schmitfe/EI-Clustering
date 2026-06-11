@@ -114,6 +114,8 @@ analysis:
       fixed_width: 5
       pelt_penalty: 10.0
       pelt_min_size: 3
+      pelt_feature_mode: weighted  # weighted, scaled
+      pelt_smooth_width: 3
       Kmax: null
       lambda_active: 0.0
       lambda_comb: 0.1
@@ -125,6 +127,15 @@ analysis:
       low_tol: 0.01
       high_tol: 0.99
       min_transitions: 1
+      merge_after_em: true
+      beta_merge: 0.0
+      min_flicker_duration: 3
+      flicker_max_hamming: 2
+      merge_max_iter: 100
+      sequence_smoothing: none  # none, dp
+      dp_n_candidates: 5
+      gamma_switch: 5.0
+      gamma_hamming: 1.0
     hmm:
       enabled: true
       emission: auto

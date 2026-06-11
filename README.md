@@ -46,6 +46,10 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
 `python Figure2.py --line-colormap viridis_r --columns 0:1:0.5 --r-eplus 1:20:0.1 --bif-rj 0.5 0.75 0.8 --bif-avg-connectivity 0.01:0.31:0.005 --line-focus-counts 5:1:-1`
 - Figure3:
 `python Figure3.py --jobs 3 -O R_Eplus=7.25 --column-override a:kappa=0 -O R_j=0.75 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5:1:-1 --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2 --column-override a:R_j=0.8`
+
+  Repeated-network dwell-time summary for Figure 3 conditions (10 independently seeded 30 s networks by default):
+  `python scripts/plot_figure3_dwell_times.py -O R_Eplus=7.25 -O R_j=0.75 --column-override a:R_j=0.8 --focus-counts 5:1:-1 --jobs 3`
+  Per-network spike-raster overlays with inferred state intervals are written to `plots/Figure3_dwell_times/inspection/`.
 - Figure4:
 `python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
 - Figure5:

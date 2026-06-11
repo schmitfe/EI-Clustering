@@ -776,6 +776,8 @@ def run_active_set_em(
         fixed_width=int(method_cfg.get("fixed_width", 10)),
         pelt_penalty=float(method_cfg.get("pelt_penalty", 10.0)),
         pelt_min_size=int(method_cfg.get("pelt_min_size", 5)),
+        pelt_feature_mode=str(method_cfg.get("pelt_feature_mode", "weighted")),
+        pelt_smooth_width=int(method_cfg.get("pelt_smooth_width", 3)),
         Kmax=None if method_cfg.get("Kmax") is None else int(method_cfg.get("Kmax")),
         lambda_active=float(method_cfg.get("lambda_active", 0.0)),
         lambda_comb=float(method_cfg.get("lambda_comb", 0.1)),
@@ -787,17 +789,33 @@ def run_active_set_em(
         low_tol=float(method_cfg.get("low_tol", 0.01)),
         high_tol=float(method_cfg.get("high_tol", 0.99)),
         min_transitions=int(method_cfg.get("min_transitions", 1)),
+        merge_after_em=bool(method_cfg.get("merge_after_em", False)),
+        beta_merge=float(method_cfg.get("beta_merge", 0.0)),
+        min_flicker_duration=int(method_cfg.get("min_flicker_duration", 3)),
+        flicker_max_hamming=int(method_cfg.get("flicker_max_hamming", 2)),
+        merge_max_iter=int(method_cfg.get("merge_max_iter", 100)),
+        sequence_smoothing=str(method_cfg.get("sequence_smoothing", "none")),
+        dp_n_candidates=int(method_cfg.get("dp_n_candidates", 5)),
+        gamma_switch=float(method_cfg.get("gamma_switch", 5.0)),
+        gamma_hamming=float(method_cfg.get("gamma_hamming", 1.0)),
     )
     res = detection.result
+    final_masks = np.asarray([episode["mask"] for episode in detection.episodes], dtype=bool) if detection.episodes else np.zeros((0, Y.shape[1]), dtype=bool)
+    final_K = final_masks.sum(axis=1).astype(int) if final_masks.size else np.zeros(0, dtype=int)
     metadata = {
         "source": source,
         "status": detection.status,
         "preprocessing": detection.preprocessing,
         "segments": [[int(start), int(stop)] for start, stop in detection.segments],
-        "segment_active_masks": res.masks.astype(int),
-        "segment_K": res.K,
+        "segment_active_masks": final_masks.astype(int),
+        "segment_K": final_K,
         "segment_lengths": detection.L,
         "segment_means_scaled": detection.X,
+        "atomic_segments": [[int(start), int(stop)] for start, stop in (detection.atomic_segments or [])],
+        "atomic_active_masks": res.masks.astype(int),
+        "atomic_K": res.K,
+        "CP_pelt": max(0, len(detection.atomic_segments or []) - 1),
+        "CP_final": max(0, len(detection.episodes) - 1),
         "mu0_by_K": res.mu0,
         "mu1_by_K": res.mu1,
         "var0_by_K": res.var0,
@@ -809,6 +827,7 @@ def run_active_set_em(
         "cluster_labels": detection.cluster_labels,
         "cluster_occupancy": detection.cluster_occupancy,
         "episodes": detection.episodes,
+        "merge": dict(detection.merge_metadata or {}),
         "diagnostic_note": "Run-level robust scaling only; no per-cluster z-scoring.",
     }
     return _finalize_result(
