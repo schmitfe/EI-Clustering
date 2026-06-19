@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from typing import Any, Dict, Iterable, Optional
+import warnings
 
 import numpy as np
 
@@ -55,20 +56,276 @@ def fixed_segments(T: int, width: int) -> list[tuple[int, int]]:
     return [(idx, min(idx + segment_width, int(T))) for idx in range(0, int(T), segment_width)]
 
 
-def get_segments_pelt(Y_scaled: np.ndarray, penalty: float = 10.0, min_size: int = 5) -> list[tuple[int, int]]:
-    try:
-        import ruptures as rpt
-    except ModuleNotFoundError as exc:  # pragma: no cover - optional runtime path
-        raise ModuleNotFoundError("ruptures is required for active_set_em PELT segmentation.") from exc
+def get_segments_pelt(
+    Y_scaled: np.ndarray,
+    penalty: float = 10.0,
+    min_size: int = 5,
+    jump: int = 5,
+    refine: bool = False,
+    backend: str = "skchange",
+    method: str = "pelt",
+    bandwidth: int = 20,
+    max_interval_length: int = 200,
+    parallel_backend: str = "None",
+    parallel_jobs: int = 1,
+) -> list[tuple[int, int]]:
     arr = np.asarray(Y_scaled, dtype=float)
     if arr.ndim != 2:
         raise ValueError("Y_scaled must be a 2D array.")
     if arr.shape[0] == 0:
         return []
-    bkps = rpt.Pelt(model="l2", min_size=int(min_size)).fit(arr).predict(pen=float(penalty))
+    bkps = detect_changepoints(
+        arr,
+        backend=backend,
+        method=method,
+        penalty=float(penalty),
+        min_segment_length=int(min_size),
+        step_size=int(jump),
+        bandwidth=int(bandwidth),
+        max_interval_length=int(max_interval_length),
+        parallel_backend=str(parallel_backend),
+        parallel_jobs=int(parallel_jobs),
+    )
+    if bool(refine) and int(jump) > 1 and len(bkps) > 1:
+        bkps = refine_changepoints_l2(arr, bkps, radius=int(jump), min_size=int(min_size))
     starts = [0] + [int(value) for value in bkps[:-1]]
     stops = [int(value) for value in bkps]
     return list(zip(starts, stops))
+
+
+def detect_changepoints(
+    X: np.ndarray,
+    *,
+    backend: str = "skchange",
+    method: str = "pelt",
+    penalty: float = 10.0,
+    min_segment_length: int = 1,
+    step_size: int = 1,
+    bandwidth: int = 20,
+    max_interval_length: int = 200,
+    parallel_backend: str = "None",
+    parallel_jobs: int = 1,
+) -> list[int]:
+    """Detect changepoints and return breakpoints including the final sample."""
+
+    arr = np.asarray(X, dtype=float)
+    backend_name = str(backend or "skchange").lower()
+    method_name = str(method or "pelt").lower().replace("-", "_")
+    if backend_name in {"skchange", "sktime"}:
+        try:
+            bkps = _detect_changepoints_sktime_like(
+                arr,
+                backend=backend_name,
+                method=method_name,
+                penalty=penalty,
+                min_segment_length=min_segment_length,
+                step_size=step_size,
+                bandwidth=bandwidth,
+                max_interval_length=max_interval_length,
+                parallel_backend=parallel_backend,
+                parallel_jobs=parallel_jobs,
+            )
+        except ModuleNotFoundError:
+            if backend_name == "skchange":
+                bkps = _detect_changepoints_sktime_like(
+                    arr,
+                    backend="sktime",
+                    method=method_name,
+                    penalty=penalty,
+                    min_segment_length=min_segment_length,
+                    step_size=step_size,
+                    bandwidth=bandwidth,
+                    max_interval_length=max_interval_length,
+                    parallel_backend=parallel_backend,
+                    parallel_jobs=parallel_jobs,
+                )
+            else:
+                bkps = _detect_changepoints_ruptures(
+                    arr,
+                    method=method_name,
+                    penalty=penalty,
+                    min_segment_length=min_segment_length,
+                    step_size=step_size,
+                    bandwidth=bandwidth,
+                )
+    elif backend_name == "ruptures":
+        bkps = _detect_changepoints_ruptures(
+            arr,
+            method=method_name,
+            penalty=penalty,
+            min_segment_length=min_segment_length,
+            step_size=step_size,
+            bandwidth=bandwidth,
+        )
+    else:
+        raise ValueError(f"Unknown changepoint backend: {backend}")
+    cleaned = sorted({int(value) for value in bkps if 0 < int(value) < arr.shape[0]})
+    cleaned.append(int(arr.shape[0]))
+    return cleaned
+
+
+def _detect_changepoints_sktime_like(
+    X: np.ndarray,
+    *,
+    backend: str,
+    method: str,
+    penalty: float,
+    min_segment_length: int,
+    step_size: int,
+    bandwidth: int,
+    max_interval_length: int,
+    parallel_backend: str,
+    parallel_jobs: int,
+) -> list[int]:
+    if backend == "skchange":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            if method == "pelt":
+                from skchange.change_detectors._pelt import PELT
+
+                detector = PELT(
+                    penalty=float(penalty),
+                    min_segment_length=max(1, int(min_segment_length)),
+                    step_size=max(1, int(step_size)),
+                )
+            elif method in {"moving_window", "window"}:
+                from skchange.change_detectors._moving_window import MovingWindow
+
+                detector = MovingWindow(
+                    penalty=float(penalty),
+                    bandwidth=max(2, int(bandwidth)),
+                )
+            elif method in {"seeded_binseg", "seeded_binary_segmentation", "binseg", "binary_segmentation"}:
+                from skchange.change_detectors._seeded_binseg import SeededBinarySegmentation
+
+                detector = SeededBinarySegmentation(
+                    penalty=float(penalty),
+                    max_interval_length=max(2, int(max_interval_length)),
+                )
+            else:
+                raise ValueError(f"Unsupported skchange changepoint method: {method}")
+            _set_detector_parallel_config(detector, parallel_backend, parallel_jobs)
+            detected = detector.fit_predict(X)
+    else:
+        if method == "pelt":
+            from sktime.detection.pelt import PELT
+
+            detector = PELT(
+                penalty=float(penalty),
+                min_segment_length=max(1, int(min_segment_length)),
+                step_size=max(1, int(step_size)),
+            )
+        elif method in {"moving_window", "window"}:
+            from sktime.detection.moving_window import MovingWindow
+
+            detector = MovingWindow(
+                penalty=float(penalty),
+                bandwidth=max(2, int(bandwidth)),
+            )
+        elif method in {"seeded_binseg", "seeded_binary_segmentation", "binseg", "binary_segmentation"}:
+            from sktime.detection.seeded_binseg import SeededBinarySegmentation
+
+            detector = SeededBinarySegmentation(
+                penalty=float(penalty),
+                max_interval_length=max(2, int(max_interval_length)),
+            )
+        else:
+            raise ValueError(f"Unsupported sktime changepoint method: {method}")
+        _set_detector_parallel_config(detector, parallel_backend, parallel_jobs)
+        detected = detector.fit_predict(X)
+    return _extract_ilocs(detected)
+
+
+def _set_detector_parallel_config(detector: Any, backend: str, jobs: int) -> None:
+    label = str(backend or "None")
+    if label.lower() in {"none", "off", "false", "0"}:
+        return
+    if not hasattr(detector, "set_config"):
+        return
+    detector.set_config(
+        **{
+            "backend:parallel": label,
+            "backend:parallel:params": {"n_jobs": int(jobs)},
+        }
+    )
+
+
+def _extract_ilocs(detected: Any) -> list[int]:
+    if hasattr(detected, "columns") and "ilocs" in detected.columns:
+        return [int(value) for value in detected["ilocs"].to_numpy()]
+    if hasattr(detected, "to_numpy"):
+        values = detected.to_numpy()
+    else:
+        values = np.asarray(detected)
+    return [int(value) for value in np.asarray(values).ravel()]
+
+
+def _detect_changepoints_ruptures(
+    X: np.ndarray,
+    *,
+    method: str,
+    penalty: float,
+    min_segment_length: int,
+    step_size: int,
+    bandwidth: int,
+) -> list[int]:
+    try:
+        import ruptures as rpt
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional runtime path
+        raise ModuleNotFoundError("ruptures is required for active_set_em PELT segmentation.") from exc
+    if method == "pelt":
+        return rpt.Pelt(model="l2", min_size=max(1, int(min_segment_length)), jump=max(1, int(step_size))).fit(X).predict(pen=float(penalty))
+    if method in {"moving_window", "window"}:
+        return rpt.Window(width=max(2, int(bandwidth)), model="l2", min_size=max(1, int(min_segment_length)), jump=max(1, int(step_size))).fit(X).predict(pen=float(penalty))
+    if method in {"binseg", "binary_segmentation", "seeded_binseg"}:
+        return rpt.Binseg(model="l2", min_size=max(1, int(min_segment_length)), jump=max(1, int(step_size))).fit(X).predict(pen=float(penalty))
+    raise ValueError(f"Unsupported ruptures changepoint method: {method}")
+
+
+def refine_changepoints_l2(
+    X: np.ndarray,
+    breakpoints: Iterable[int],
+    *,
+    radius: int,
+    min_size: int = 1,
+) -> list[int]:
+    """Refine coarse changepoints at full-bin resolution using local L2 cost."""
+
+    arr = np.asarray(X, dtype=float)
+    bkps = [int(value) for value in breakpoints]
+    if arr.ndim != 2 or not bkps:
+        return bkps
+    T = arr.shape[0]
+    if bkps[-1] != T:
+        bkps.append(T)
+    cumulative = np.vstack([np.zeros((1, arr.shape[1]), dtype=float), np.cumsum(arr, axis=0)])
+    cumulative_sq = np.vstack([np.zeros((1, arr.shape[1]), dtype=float), np.cumsum(arr * arr, axis=0)])
+
+    def interval_cost(start: int, stop: int) -> float:
+        length = int(stop) - int(start)
+        if length <= 0:
+            return float("inf")
+        total = cumulative[stop] - cumulative[start]
+        total_sq = cumulative_sq[stop] - cumulative_sq[start]
+        return float(np.sum(total_sq - total * total / float(length)))
+
+    refined = bkps.copy()
+    width = max(1, int(radius))
+    minimum = max(1, int(min_size))
+    for idx in range(len(refined) - 1):
+        left = 0 if idx == 0 else refined[idx - 1]
+        current = refined[idx]
+        right = refined[idx + 1]
+        lower = max(left + minimum, current - width)
+        upper = min(right - minimum, current + width)
+        if upper < lower:
+            continue
+        refined[idx] = min(
+            range(lower, upper + 1),
+            key=lambda candidate: interval_cost(left, candidate) + interval_cost(candidate, right),
+        )
+    refined[-1] = T
+    return refined
 
 
 def estimate_cluster_weights(Y: np.ndarray, eps: float = 1e-12) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -203,32 +460,25 @@ def estimate_params(
     var0 = np.full(int(Kmax) + 1, np.nan)
     var1 = np.full(int(Kmax) + 1, np.nan)
     for k in range(int(Kmax) + 1):
-        seg_idx = np.where(K == k)[0]
-        active_vals: list[np.ndarray] = []
-        active_w: list[np.ndarray] = []
-        inactive_vals: list[np.ndarray] = []
-        inactive_w: list[np.ndarray] = []
-        for row in seg_idx:
-            active = active_masks[row]
-            inactive = ~active
-            if np.any(active):
-                active_vals.append(arr[row, active])
-                active_w.append(np.full(int(active.sum()), lengths[row]))
-            if np.any(inactive):
-                inactive_vals.append(arr[row, inactive])
-                inactive_w.append(np.full(int(inactive.sum()), lengths[row]))
-        if active_vals:
-            vals = np.concatenate(active_vals)
-            weights = np.concatenate(active_w)
-            mu = float(np.average(vals, weights=weights))
+        selected = K == k
+        if not np.any(selected):
+            continue
+        values = arr[selected]
+        row_weights = lengths[selected, None]
+        active = active_masks[selected]
+        inactive = ~active
+        active_weights = row_weights * active
+        inactive_weights = row_weights * inactive
+        active_total = float(active_weights.sum())
+        inactive_total = float(inactive_weights.sum())
+        if active_total > 0.0:
+            mu = float(np.sum(values * active_weights) / active_total)
             mu1[k] = mu
-            var1[k] = max(float(np.average((vals - mu) ** 2, weights=weights)), float(var_floor))
-        if inactive_vals:
-            vals = np.concatenate(inactive_vals)
-            weights = np.concatenate(inactive_w)
-            mu = float(np.average(vals, weights=weights))
+            var1[k] = max(float(np.sum((values - mu) ** 2 * active_weights) / active_total), float(var_floor))
+        if inactive_total > 0.0:
+            mu = float(np.sum(values * inactive_weights) / inactive_total)
             mu0[k] = mu
-            var0[k] = max(float(np.average((vals - mu) ** 2, weights=weights)), float(var_floor))
+            var0[k] = max(float(np.sum((values - mu) ** 2 * inactive_weights) / inactive_total), float(var_floor))
     global_mu = float(np.nanmean(arr)) if np.isfinite(np.nanmean(arr)) else 0.0
     global_var = max(float(np.nanvar(arr)) if np.isfinite(np.nanvar(arr)) else float(var_floor), float(var_floor))
     for k in range(int(Kmax) + 1):
@@ -265,43 +515,38 @@ def e_step(
     max_active = min(int(Kmax), Q)
     masks = np.zeros((M, Q), dtype=bool)
     K_best = np.zeros(M, dtype=int)
-    margins = np.zeros(M, dtype=float)
-    objective = 0.0
+    best_costs = np.full(M, np.inf, dtype=float)
+    second_costs = np.full(M, np.inf, dtype=float)
     penalties = np.array(
         [float(lambda_active) * k + float(lambda_comb) * log_comb(Q, k) for k in range(max_active + 1)],
         dtype=float,
     )
-    for row in range(M):
-        x = arr[row]
-        costs = np.full(max_active + 1, np.inf)
-        candidate_masks = np.zeros((max_active + 1, Q), dtype=bool)
-        for k in range(max_active + 1):
-            if k == 0:
-                low_loss = gaussian_nll(x, mu0[k], var0[k])
-                costs[k] = float(np.sum(low_loss) + penalties[k])
-            elif k == Q:
-                high_loss = gaussian_nll(x, mu1[k], var1[k])
-                costs[k] = float(np.sum(high_loss) + penalties[k])
-                candidate_masks[k, :] = True
-            else:
-                low_loss = gaussian_nll(x, mu0[k], var0[k])
-                high_loss = gaussian_nll(x, mu1[k], var1[k])
-                delta = high_loss - low_loss
-                active_idx = np.argpartition(delta, k)[:k]
-                mask = np.zeros(Q, dtype=bool)
-                mask[active_idx] = True
-                if float(np.mean(x[mask]) - np.mean(x[~mask])) < float(min_separation):
-                    continue
-                costs[k] = float(np.sum(low_loss) + np.sum(delta[mask]) + penalties[k])
-                candidate_masks[k] = mask
-        order = np.argsort(costs)
-        best = int(order[0])
-        second = int(order[1]) if order.size > 1 else best
-        masks[row] = candidate_masks[best]
-        K_best[row] = best
-        margins[row] = float(costs[second] - costs[best])
-        objective += float(costs[best])
-    return masks, K_best, objective, margins
+    rows = np.arange(M)[:, None]
+    for k in range(max_active + 1):
+        candidate = np.zeros((M, Q), dtype=bool)
+        if k == 0:
+            costs = np.sum(gaussian_nll(arr, mu0[k], var0[k]), axis=1) + penalties[k]
+        elif k == Q:
+            candidate[:, :] = True
+            costs = np.sum(gaussian_nll(arr, mu1[k], var1[k]), axis=1) + penalties[k]
+        else:
+            low_loss = gaussian_nll(arr, mu0[k], var0[k])
+            high_loss = gaussian_nll(arr, mu1[k], var1[k])
+            delta = high_loss - low_loss
+            active_idx = np.argpartition(delta, k, axis=1)[:, :k]
+            candidate[rows, active_idx] = True
+            active_sum = np.sum(arr * candidate, axis=1)
+            inactive_sum = np.sum(arr * (~candidate), axis=1)
+            separation = active_sum / float(k) - inactive_sum / float(Q - k)
+            costs = np.sum(low_loss, axis=1) + np.sum(delta * candidate, axis=1) + penalties[k]
+            costs = np.where(separation >= float(min_separation), costs, np.inf)
+        improves = costs < best_costs
+        second_costs = np.where(improves, best_costs, np.minimum(second_costs, costs))
+        best_costs = np.where(improves, costs, best_costs)
+        K_best = np.where(improves, k, K_best)
+        masks[improves] = candidate[improves]
+    margins = second_costs - best_costs
+    return masks, K_best, float(np.sum(best_costs)), margins
 
 
 def active_set_em(
@@ -1021,6 +1266,14 @@ def detect_population_states(
     fixed_width: int = 10,
     pelt_penalty: float = 10.0,
     pelt_min_size: int = 5,
+    pelt_jump: int = 5,
+    pelt_refine: bool = False,
+    changepoint_backend: str = "skchange",
+    changepoint_method: str = "pelt",
+    changepoint_bandwidth: int = 20,
+    changepoint_max_interval_length: int = 200,
+    changepoint_parallel_backend: str = "None",
+    changepoint_parallel_jobs: int = 1,
     pelt_feature_mode: str = "weighted",
     pelt_smooth_width: int = 3,
     Kmax: Optional[int] = None,
@@ -1067,7 +1320,33 @@ def detect_population_states(
             preprocessing["pelt_feature_mode"] = "scaled"
         else:
             raise ValueError(f"Unknown pelt_feature_mode: {pelt_feature_mode}")
-        segments = get_segments_pelt(pelt_features, penalty=float(pelt_penalty), min_size=int(pelt_min_size))
+        segments = get_segments_pelt(
+            pelt_features,
+            penalty=float(pelt_penalty),
+            min_size=int(pelt_min_size),
+            jump=int(pelt_jump),
+            refine=bool(pelt_refine),
+            backend=str(changepoint_backend),
+            method=str(changepoint_method),
+            bandwidth=int(changepoint_bandwidth),
+            max_interval_length=int(changepoint_max_interval_length),
+            parallel_backend=str(changepoint_parallel_backend),
+            parallel_jobs=int(changepoint_parallel_jobs),
+        )
+        preprocessing.update(
+            {
+                "changepoint_backend": str(changepoint_backend),
+                "changepoint_method": str(changepoint_method),
+                "changepoint_penalty": float(pelt_penalty),
+                "changepoint_min_segment_length": int(pelt_min_size),
+                "changepoint_step_size": int(pelt_jump),
+                "changepoint_refine": bool(pelt_refine),
+                "changepoint_bandwidth": int(changepoint_bandwidth),
+                "changepoint_max_interval_length": int(changepoint_max_interval_length),
+                "changepoint_parallel_backend": str(changepoint_parallel_backend),
+                "changepoint_parallel_jobs": int(changepoint_parallel_jobs),
+            }
+        )
     else:
         raise ValueError(f"Unknown segmentation: {segmentation}")
     atomic_segments = list(segments)

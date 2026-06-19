@@ -50,6 +50,7 @@ Refer to the module-specific READMEs for implementation notes, diagnostics, and 
   Repeated-network dwell-time summary for Figure 3 conditions (10 independently seeded 30 s networks by default):
   `python scripts/plot_figure3_dwell_times.py -O R_Eplus=7.25 -O R_j=0.75 --column-override a:R_j=0.8 --focus-counts 5:1:-1 --jobs 3`
   Per-network spike-raster overlays with inferred state intervals are written to `plots/Figure3_dwell_times/inspection/`.
+  Simulations and state-estimation analyses both use `--jobs` workers; override the latter with `--analysis-jobs`. The default sampling interval provides approximately 10 ms analysis bins. The dwell-time script classifies fixed one-bin atomic segments and analyzes excitatory populations only by default; `--segmentation pelt` and `--population-source all` remain available for comparison.
 - Figure4:
 `python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
 - Figure5:

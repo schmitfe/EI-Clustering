@@ -6,7 +6,7 @@ dependencies:
   - numpy>=1.26,<2
   - pandas>=2.2,<3
   - scipy>=1.13,<1.15
-  - scikit-learn>=1.5,<1.7
+  - scikit-learn>=1.7,<1.8
   - ruptures>=1.1,<2
   - matplotlib>=3.9,<3.11
   - numba>=0.60,<0.62
@@ -22,3 +22,5 @@ dependencies:
       - jaxlib>=0.4.30,<0.5
       - equinox>=0.11.10,<0.12
       - optimistix>=0.0.10,<0.1
+      - skchange>=0.16,<0.17
+      - sktime>=1.0,<1.1

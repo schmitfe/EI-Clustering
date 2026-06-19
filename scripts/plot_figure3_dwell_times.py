@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import multiprocessing as mp
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +31,6 @@ from Figure3 import (  # noqa: E402
     PipelineSweepSettings,
     _build_column_parameter,
     _build_trace_task,
-    _load_trace_payload,
     _normalize_label,
     _parse_column_override_entries,
     _prepare_focus_markers_with_retry,
@@ -42,9 +43,15 @@ from Figure3 import (  # noqa: E402
 )
 from analysis.io import analysis_input_from_binary_trace  # noqa: E402
 from analysis.methods import run_active_set_em  # noqa: E402
+from analysis.preprocessing import subset_analysis_input  # noqa: E402
 from figure_cli import parse_int_values  # noqa: E402
 from plotting import plot_spike_raster  # noqa: E402
 from sim_config import add_override_arguments, load_from_args, write_yaml_config  # noqa: E402
+
+try:
+    from tqdm.auto import tqdm
+except ModuleNotFoundError:  # pragma: no cover - optional progress display
+    tqdm = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,11 +66,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duration", type=float, default=30.0, help="Recorded duration per network in seconds.")
     parser.add_argument("--seed-start", type=int, default=100, help="First network seed.")
     parser.add_argument("--jobs", type=int, default=1, help="Parallel BinaryNetwork simulations.")
+    parser.add_argument(
+        "--analysis-jobs",
+        type=int,
+        help="Parallel state-estimation workers; defaults to --jobs.",
+    )
     parser.add_argument("--erf-jobs", type=int, default=1, help="Parallel workers for mean-field preparation.")
     parser.add_argument("--warmup-steps", type=int, help="Override binary warmup steps.")
-    parser.add_argument("--sample-interval", type=int, help="Override binary sample interval.")
+    parser.add_argument(
+        "--sample-interval",
+        type=int,
+        help="Binary rate/state sampling interval in updates; defaults to approximately 10 ms.",
+    )
     parser.add_argument("--batch-size", type=int, help="Override binary batch size.")
     parser.add_argument("--focus-counts", nargs="+", help="Focus counts, e.g. 5:1:-1.")
+    parser.add_argument(
+        "--columns",
+        nargs="+",
+        choices=[spec.label for spec in COLUMN_SPECS],
+        help="Figure 3 conditions to run; defaults to all columns.",
+    )
     parser.add_argument("--stability-filter", choices=("stable", "unstable", "any"), default="any")
     parser.add_argument("--column-override", action="append", default=[], metavar="label:path=value")
     parser.add_argument("--column-title", action="append", default=[], metavar="label:title")
@@ -71,12 +93,99 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rep-retry-mf", type=int, default=10)
     parser.add_argument("--rep-rng-seed", type=int)
     parser.add_argument("--analysis-only", action="store_true", help="Reuse existing matching traces.")
+    parser.add_argument(
+        "--skip-missing-traces",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip missing traces in analysis-only mode and write missing_traces.csv.",
+    )
     parser.add_argument("--overwrite-simulation", action="store_true")
+    parser.add_argument(
+        "--segmentation",
+        choices=("fixed", "pelt"),
+        default="pelt",
+        help="Atomic segmentation before active-set EM.",
+    )
+    parser.add_argument(
+        "--fixed-width",
+        type=int,
+        default=1,
+        help="Atomic segment width in analysis bins when --segmentation=fixed.",
+    )
     parser.add_argument("--pelt-penalty", type=float, default=10.0)
-    parser.add_argument("--pelt-min-size", type=int, default=3)
-    parser.add_argument("--pelt-smooth-width", type=int, default=3)
+    parser.add_argument(
+        "--changepoint-backend",
+        choices=("skchange", "sktime", "ruptures"),
+        default="skchange",
+        help="Library used for changepoint detection.",
+    )
+    parser.add_argument(
+        "--changepoint-method",
+        choices=("pelt", "moving_window", "seeded_binseg", "binseg"),
+        default="pelt",
+        help="Changepoint estimator. moving_window and seeded_binseg avoid exact PELT scaling.",
+    )
+    parser.add_argument(
+        "--pelt-min-size",
+        type=int,
+        default=1,
+        help="Minimum state duration in analysis bins; one bin is approximately 10 ms by default.",
+    )
+    parser.add_argument(
+        "--pelt-jump",
+        type=int,
+        default=2,
+        help="Evaluate coarse PELT changepoints every N analysis bins.",
+    )
+    parser.add_argument(
+        "--pelt-refine",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Refine coarse PELT boundaries locally at full analysis-bin resolution.",
+    )
+    parser.add_argument("--pelt-smooth-width", type=int, default=1)
+    parser.add_argument("--changepoint-bandwidth", type=int, default=20)
+    parser.add_argument("--changepoint-max-interval-length", type=int, default=200)
+    parser.add_argument(
+        "--changepoint-parallel-backend",
+        choices=("None", "loky", "threading", "multiprocessing"),
+        default="None",
+        help="sktime/skchange estimator-level parallel backend; useful for moving_window, not PELT.",
+    )
+    parser.add_argument("--changepoint-parallel-jobs", type=int, default=1)
+    parser.add_argument("--em-max-iter", type=int, default=30)
+    parser.add_argument("--kmax", type=int, help="Maximum simultaneously active populations considered by EM.")
+    parser.add_argument(
+        "--population-source",
+        choices=("excitatory", "all"),
+        default="excitatory",
+        help="Population rates used for state inference; rasters still show both E and I neurons.",
+    )
     parser.add_argument("--beta-merge", type=float, default=0.0)
-    parser.add_argument("--min-flicker-duration", type=int, default=3)
+    parser.add_argument(
+        "--merge-after-em",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run costly unsupported-boundary merging after EM; disabled to preserve short dwells.",
+    )
+    parser.add_argument(
+        "--min-flicker-duration",
+        type=int,
+        default=0,
+        help="Remove weak A-B-A flickers up to this many bins; zero preserves all short states.",
+    )
+    parser.add_argument(
+        "--flicker-max-hamming",
+        type=int,
+        default=2,
+        help="Maximum active-set identity changes for removing a short A-B-A flicker.",
+    )
+    parser.add_argument(
+        "--merge-max-iter",
+        type=int,
+        default=10,
+        help="Maximum expensive unsupported-boundary merge passes per trace.",
+    )
     parser.add_argument(
         "--inspection-plots",
         action=argparse.BooleanOptionalAction,
@@ -89,6 +198,12 @@ def parse_args() -> argparse.Namespace:
         help="Only show the first N seconds in inspection rasters; defaults to the full run.",
     )
     parser.add_argument("--raster-stride", type=int, default=20, help="Plot every Nth neuron in inspection rasters.")
+    parser.add_argument(
+        "--max-raster-events",
+        type=int,
+        default=2_000_000,
+        help="Maximum events per inspection raster after time/neuron filtering; 0 disables the limit.",
+    )
     parser.add_argument(
         "--exclude-edge-dwells",
         action=argparse.BooleanOptionalAction,
@@ -113,24 +228,33 @@ def _analysis_configs(args: argparse.Namespace, dt_seconds: float) -> tuple[dict
     method = {
         "source": "rate",
         "transform": "auto",
-        "segmentation": "pelt",
+        "segmentation": str(args.segmentation),
+        "fixed_width": int(args.fixed_width),
         "pelt_penalty": float(args.pelt_penalty),
+        "changepoint_backend": str(args.changepoint_backend),
+        "changepoint_method": str(args.changepoint_method),
         "pelt_min_size": int(args.pelt_min_size),
+        "pelt_jump": int(args.pelt_jump),
+        "pelt_refine": bool(args.pelt_refine),
+        "changepoint_bandwidth": int(args.changepoint_bandwidth),
+        "changepoint_max_interval_length": int(args.changepoint_max_interval_length),
+        "changepoint_parallel_backend": str(args.changepoint_parallel_backend),
+        "changepoint_parallel_jobs": int(args.changepoint_parallel_jobs),
         "pelt_feature_mode": "weighted",
         "pelt_smooth_width": int(args.pelt_smooth_width),
-        "Kmax": None,
+        "Kmax": None if args.kmax is None else int(args.kmax),
         "lambda_active": 0.0,
         "lambda_comb": 0.1,
         "min_separation": 0.05,
         "var_floor": 0.0001,
-        "max_iter": 100,
+        "max_iter": int(args.em_max_iter),
         "tol": 1e-6,
         "flat_range_threshold": 1e-12,
-        "merge_after_em": True,
+        "merge_after_em": bool(args.merge_after_em),
         "beta_merge": float(args.beta_merge),
         "min_flicker_duration": int(args.min_flicker_duration),
-        "flicker_max_hamming": 2,
-        "merge_max_iter": 100,
+        "flicker_max_hamming": int(args.flicker_max_hamming),
+        "merge_max_iter": int(args.merge_max_iter),
         "sequence_smoothing": "none",
     }
     return {"dt": float(dt_seconds), **preprocessing}, method
@@ -241,16 +365,26 @@ def _plot_state_raster_overlay(
     output_path: Path,
     duration: float | None,
     raster_stride: int,
+    max_raster_events: int,
     dpi: int,
 ) -> None:
-    payload = _load_trace_payload(str(trace_path))
-    spike_times = np.asarray(payload["spike_times"], dtype=float) / float(updates_per_second)
-    spike_ids = np.asarray(payload["spike_ids"], dtype=np.int64)
+    with np.load(trace_path, allow_pickle=False) as payload:
+        spike_times = np.asarray(payload["spike_times"], dtype=float) / float(updates_per_second)
+        spike_ids = np.asarray(payload["spike_ids"], dtype=np.int64)
     segments = result.segments
     inferred_stop = float(segments["stop_time"].max()) if not segments.empty else 0.0
     t_stop = inferred_stop if duration is None else min(float(duration), inferred_stop)
     if t_stop <= 0.0:
         t_stop = float(duration or 1.0)
+    stride = max(1, int(raster_stride))
+    keep = (spike_times >= 0.0) & (spike_times <= t_stop) & ((spike_ids % stride) == 0)
+    spike_times = spike_times[keep]
+    spike_ids = spike_ids[keep]
+    event_limit = int(max_raster_events)
+    if event_limit > 0 and spike_times.size > event_limit:
+        selected = np.linspace(0, spike_times.size - 1, event_limit, dtype=np.int64)
+        spike_times = spike_times[selected]
+        spike_ids = spike_ids[selected]
     n_exc = int(parameter.get("N_E", 0) or 0)
     n_inh = int(parameter.get("N_I", 0) or 0)
     cmap = plt.get_cmap("tab20")
@@ -280,7 +414,7 @@ def _plot_state_raster_overlay(
         spike_ids,
         n_exc=n_exc,
         n_inh=n_inh,
-        stride=max(1, int(raster_stride)),
+        stride=1,
         t_start=0.0,
         t_end=t_stop,
         marker=".",
@@ -301,6 +435,114 @@ def _plot_state_raster_overlay(
     plt.close(fig)
 
 
+def _analyze_context(task: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    analysis_start = time.perf_counter()
+    context = task["context"]
+    dt_seconds = float(context["binary_cfg"]["sample_interval"]) / float(context["updates_per_second"])
+    preprocessing_cfg, method_cfg = _analysis_configs(task["args"], dt_seconds)
+    data = analysis_input_from_binary_trace(
+        context["trace_path"],
+        parameter=context["parameter"],
+        analysis_cfg={"dt": dt_seconds},
+    )
+    if str(task["args"].population_source) == "excitatory":
+        if data.cluster_cell_types is not None:
+            indices = [
+                idx
+                for idx, cell_type in enumerate(data.cluster_cell_types)
+                if str(cell_type).upper().startswith("E")
+            ]
+        else:
+            indices = [
+                idx
+                for idx, name in enumerate(data.cluster_names or [])
+                if str(name).upper().startswith("E")
+            ]
+        data = subset_analysis_input(data, indices=indices)
+    result = run_active_set_em(data, preprocessing_cfg, method_cfg)
+    inspection_path = Path(task["output_dir"]) / "inspection" / f"{context['condition']}_seed_{context['seed']}.png"
+    if bool(task["args"].inspection_plots):
+        _plot_state_raster_overlay(
+            context["trace_path"],
+            result,
+            parameter=context["parameter"],
+            updates_per_second=float(context["updates_per_second"]),
+            title=f"{context['title']}, seed={context['seed']}",
+            output_path=inspection_path,
+            duration=task["args"].inspection_duration,
+            raster_stride=int(task["args"].raster_stride),
+            max_raster_events=int(task["args"].max_raster_events),
+            dpi=int(task["args"].dpi),
+        )
+    episodes, summary = _episode_rows(
+        result,
+        condition=context["condition"],
+        title=context["title"],
+        seed=context["seed"],
+        exclude_edges=bool(task["args"].exclude_edge_dwells),
+    )
+    summary["trace_path"] = str(context["trace_path"])
+    summary["inspection_plot"] = str(inspection_path) if bool(task["args"].inspection_plots) else ""
+    summary["analysis_seconds"] = float(time.perf_counter() - analysis_start)
+    summary["population_source"] = str(task["args"].population_source)
+    summary["n_analyzed_populations"] = int(data.n_clusters)
+    return episodes, summary
+
+
+def _worker_count(requested: int, total: int, label: str) -> int:
+    workers = min(max(1, int(requested)), max(1, int(total)))
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm_cpus:
+        available = max(1, int(slurm_cpus))
+        if workers > available:
+            print(
+                f"Reducing {label} workers from {workers} to SLURM_CPUS_PER_TASK={available}.",
+                flush=True,
+            )
+            workers = available
+    return workers
+
+
+def _progress(iterable: Any, *, total: int, description: str) -> Any:
+    if tqdm is not None:
+        return tqdm(iterable, total=total, desc=description, unit="run", dynamic_ncols=True)
+
+    def text_progress() -> Any:
+        start = time.perf_counter()
+        width = 24
+        for completed, item in enumerate(iterable, start=1):
+            elapsed = time.perf_counter() - start
+            fraction = completed / max(1, total)
+            filled = min(width, int(round(width * fraction)))
+            rate = completed / elapsed if elapsed > 0.0 else 0.0
+            bar = "#" * filled + "-" * (width - filled)
+            print(
+                f"\r{description}: [{bar}] {completed}/{total} "
+                f"elapsed={elapsed / 60.0:.1f}m rate={rate:.2f}/s",
+                end="\n" if completed == total else "",
+                flush=True,
+            )
+            yield item
+
+    return text_progress()
+
+
+def _write_analysis_checkpoints(
+    output_dir: Path,
+    episode_rows: list[dict[str, Any]],
+    network_rows: list[dict[str, Any]],
+) -> None:
+    pd.DataFrame(episode_rows).to_csv(output_dir / "dwell_episodes.partial.csv", index=False)
+    pd.DataFrame(network_rows).to_csv(output_dir / "network_dwell_summary.partial.csv", index=False)
+
+
+def _pool_context() -> mp.context.BaseContext:
+    try:
+        return mp.get_context("spawn")
+    except ValueError:  # pragma: no cover
+        return mp.get_context()
+
+
 def run(args: argparse.Namespace) -> Path:
     if args.n_simulations <= 0:
         raise ValueError("--n-simulations must be positive.")
@@ -319,13 +561,15 @@ def run(args: argparse.Namespace) -> Path:
     _validate_column_keys(column_overrides, known_labels, "column overrides")
     _validate_column_keys(column_titles, known_labels, "column titles")
     parsed_focus_counts = parse_int_values(args.focus_counts, option_name="--focus-counts")
+    selected_labels = set(args.columns or [spec.label for spec in COLUMN_SPECS])
+    selected_specs = [spec for spec in COLUMN_SPECS if spec.label in selected_labels]
     sweep_cfg = PipelineSweepSettings(jobs=max(1, int(args.erf_jobs)), plot_erfs=False)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     contexts: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
-    for spec in COLUMN_SPECS:
+    for spec in selected_specs:
         parameter = _build_column_parameter(base_parameter, spec, column_override_map=column_overrides)
         title = _resolve_column_title(parameter, spec, title_map=column_titles)
         focus_counts = _resolve_focus_counts(parameter, parsed_focus_counts)
@@ -341,15 +585,26 @@ def run(args: argparse.Namespace) -> Path:
         )
         updates_per_second, _label = _time_axis_scale_from_taus(parameter)
         simulation_steps = max(1, int(round(float(args.duration) * updates_per_second)))
+        sample_interval = (
+            int(args.sample_interval)
+            if args.sample_interval is not None
+            else max(1, int(round(0.010 * updates_per_second)))
+        )
         binary_cfg = _resolve_binary_config(
             parameter,
             BinaryRunSettings(
                 warmup_steps=args.warmup_steps,
                 simulation_steps=simulation_steps,
-                sample_interval=args.sample_interval,
+                sample_interval=sample_interval,
                 batch_size=args.batch_size,
                 output_name=f"figure3_dwell_{spec.label}",
             ),
+        )
+        sample_count = int(np.ceil(simulation_steps / sample_interval))
+        print(
+            f"Condition {spec.label}: {simulation_steps:,} updates, sample_interval={sample_interval:,} "
+            f"({sample_count:,} analysis samples).",
+            flush=True,
         )
         for offset in range(int(args.n_simulations)):
             seed = int(args.seed_start) + offset
@@ -374,56 +629,93 @@ def run(args: argparse.Namespace) -> Path:
                     "updates_per_second": updates_per_second,
                 }
             )
+    trace_rows = [
+        {
+            "condition": context["condition"],
+            "seed": int(context["seed"]),
+            "trace_path": str(context["trace_path"]),
+            "exists": bool(Path(context["trace_path"]).exists()),
+        }
+        for context in contexts
+    ]
+    pd.DataFrame(trace_rows).to_csv(output_dir / "trace_manifest.csv", index=False)
 
     if tasks:
-        workers = min(max(1, int(args.jobs)), len(tasks))
+        workers = _worker_count(int(args.jobs), len(tasks), "simulation")
+        print(f"Running {len(tasks)} binary simulations with {workers} workers.", flush=True)
         if workers > 1:
-            with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
-                list(pool.map(_simulate_binary_task, tasks))
+            with concurrent.futures.ProcessPoolExecutor(max_workers=workers, mp_context=_pool_context()) as pool:
+                futures = [pool.submit(_simulate_binary_task, task) for task in tasks]
+                completed_futures = _progress(
+                    concurrent.futures.as_completed(futures),
+                    total=len(futures),
+                    description="Simulations",
+                )
+                for completed, future in enumerate(completed_futures, start=1):
+                    future.result()
         else:
-            for task in tasks:
+            for completed, task in enumerate(_progress(tasks, total=len(tasks), description="Simulations"), start=1):
                 _simulate_binary_task(task)
+    else:
+        print("All matching binary traces already exist; skipping simulations.", flush=True)
 
     episode_rows: list[dict[str, Any]] = []
     network_rows: list[dict[str, Any]] = []
+    existing_contexts: list[dict[str, Any]] = []
+    missing_rows: list[dict[str, Any]] = []
     for context in contexts:
-        dt_seconds = float(context["binary_cfg"]["sample_interval"]) / float(context["updates_per_second"])
-        preprocessing_cfg, method_cfg = _analysis_configs(args, dt_seconds)
-        data = analysis_input_from_binary_trace(
-            context["trace_path"],
-            parameter=context["parameter"],
-            analysis_cfg={"dt": dt_seconds},
-        )
-        result = run_active_set_em(data, preprocessing_cfg, method_cfg)
-        inspection_path = output_dir / "inspection" / f"{context['condition']}_seed_{context['seed']}.png"
-        if bool(args.inspection_plots):
-            _plot_state_raster_overlay(
-                context["trace_path"],
-                result,
-                parameter=context["parameter"],
-                updates_per_second=float(context["updates_per_second"]),
-                title=f"{context['title']}, seed={context['seed']}",
-                output_path=inspection_path,
-                duration=args.inspection_duration,
-                raster_stride=int(args.raster_stride),
-                dpi=int(args.dpi),
+        if Path(context["trace_path"]).exists():
+            existing_contexts.append(context)
+        else:
+            missing_rows.append(
+                {
+                    "condition": context["condition"],
+                    "seed": int(context["seed"]),
+                    "trace_path": str(context["trace_path"]),
+                }
             )
-        episodes, summary = _episode_rows(
-            result,
-            condition=context["condition"],
-            title=context["title"],
-            seed=context["seed"],
-            exclude_edges=bool(args.exclude_edge_dwells),
-        )
-        summary["trace_path"] = str(context["trace_path"])
-        summary["inspection_plot"] = str(inspection_path) if bool(args.inspection_plots) else ""
-        episode_rows.extend(episodes)
-        network_rows.append(summary)
+    if missing_rows:
+        pd.DataFrame(missing_rows).to_csv(output_dir / "missing_traces.csv", index=False)
+        message = f"{len(missing_rows)} expected trace(s) are missing; see {output_dir / 'missing_traces.csv'}."
+        if bool(args.analysis_only) and bool(args.skip_missing_traces):
+            print(f"{message} Skipping them.", flush=True)
+        else:
+            raise FileNotFoundError(message)
+    if not existing_contexts:
+        raise FileNotFoundError("No existing traces are available for analysis.")
+    analysis_tasks = [{"context": context, "args": args, "output_dir": str(output_dir)} for context in existing_contexts]
+    requested_analysis_jobs = args.analysis_jobs if args.analysis_jobs is not None else args.jobs
+    analysis_workers = _worker_count(int(requested_analysis_jobs), len(analysis_tasks), "analysis")
+    print(f"Running {len(analysis_tasks)} state-estimation analyses with {analysis_workers} workers.", flush=True)
+    if analysis_workers > 1:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=analysis_workers, mp_context=_pool_context()) as pool:
+            futures = [pool.submit(_analyze_context, task) for task in analysis_tasks]
+            completed_futures = _progress(
+                concurrent.futures.as_completed(futures),
+                total=len(futures),
+                description="State analyses",
+            )
+            for completed, future in enumerate(completed_futures, start=1):
+                episodes, summary = future.result()
+                episode_rows.extend(episodes)
+                network_rows.append(summary)
+                _write_analysis_checkpoints(output_dir, episode_rows, network_rows)
+    else:
+        for completed, task in enumerate(
+            _progress(analysis_tasks, total=len(analysis_tasks), description="State analyses"),
+            start=1,
+        ):
+            episodes, summary = _analyze_context(task)
+            episode_rows.extend(episodes)
+            network_rows.append(summary)
+            _write_analysis_checkpoints(output_dir, episode_rows, network_rows)
 
     episodes_df = pd.DataFrame(episode_rows)
     networks_df = pd.DataFrame(network_rows)
     episodes_df.to_csv(output_dir / "dwell_episodes.csv", index=False)
     networks_df.to_csv(output_dir / "network_dwell_summary.csv", index=False)
+    (output_dir / "dwell_episodes.partial.csv").unlink(missing_ok=True)
+    (output_dir / "network_dwell_summary.partial.csv").unlink(missing_ok=True)
     aggregate = (
         networks_df.groupby(["condition", "title"], as_index=False)
         .agg(
@@ -436,7 +728,7 @@ def run(args: argparse.Namespace) -> Path:
     )
     aggregate.to_csv(output_dir / "aggregate_dwell_summary.csv", index=False)
     write_yaml_config(vars(args), output_dir / "run_config.yaml")
-    _plot(networks_df, [spec.label for spec in COLUMN_SPECS], Path(args.output_prefix), int(args.dpi))
+    _plot(networks_df, [spec.label for spec in selected_specs], Path(args.output_prefix), int(args.dpi))
     return output_dir
 
 

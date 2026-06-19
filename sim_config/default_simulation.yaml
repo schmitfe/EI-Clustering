@@ -114,6 +114,12 @@ analysis:
       fixed_width: 5
       pelt_penalty: 10.0
       pelt_min_size: 3
+      pelt_jump: 5
+      pelt_refine: true
+      changepoint_backend: skchange
+      changepoint_method: pelt
+      changepoint_bandwidth: 20
+      changepoint_max_interval_length: 200
       pelt_feature_mode: weighted  # weighted, scaled
       pelt_smooth_width: 3
       Kmax: null

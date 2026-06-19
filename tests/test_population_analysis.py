@@ -14,6 +14,7 @@ except ModuleNotFoundError:  # pragma: no cover - local smoke fallback
 from analysis.active_set import (
     build_candidate_sets,
     merge_identical_adjacent,
+    refine_changepoints_l2,
     simulate_active_set_data,
     smooth_active_set_sequence_dp,
     active_set_em_multi_init,
@@ -324,6 +325,12 @@ def test_active_set_dp_smoothing_removes_weak_identity_flicker() -> None:
     assert metadata["gamma_switch"] == 10.0
     assert np.array_equal(smoothed[0], smoothed[1])
     assert np.array_equal(smoothed[1], smoothed[2])
+
+
+def test_active_set_refines_coarse_changepoint_to_full_bin_resolution() -> None:
+    values = np.vstack([np.zeros((13, 2)), np.ones((17, 2))])
+    refined = refine_changepoints_l2(values, [10, 30], radius=5, min_size=2)
+    assert refined == [13, 30]
 
 
 def test_hmm_pipeline_graceful_if_missing() -> None:
