@@ -33,6 +33,30 @@ Mean-field solvers, binary-network simulations, figure-generation scripts, and r
 
 Refer to the module-specific READMEs for implementation notes, diagnostics, and advanced usage.
 
+## Getting Weight Matrices
+- `Figure3.py` now writes a `*_weights.npz` export for each simulated column and prints the corresponding binary output directory for columns `a`, `b`, and `c`.
+- To analyze one exported matrix on the population level, run:
+  `python analyze_weights.py path/to/binary/output_dir`
+  or pass the file directly:
+  `python analyze_weights.py path/to/activity_trace_seed000123_weights.npz`
+  `python analyze_weights.py path/to/activity_trace_weights.npz --print-matrices`
+  `python analyze_weights.py path/to/activity_trace_weights.npz --output my_block_stats.npz`
+- If you pass a directory, `analyze_weights.py` auto-selects the contained `*_weights.npz` file when there is exactly one match.
+- The analysis output contains population-by-population matrices for synapse multiplicity (`mean_indegree`, `std_indegree`, `var_indegree`), occupied matrix entries (`mean_occupied_indegree`, `std_occupied_indegree`, `var_occupied_indegree`), individual synaptic weight quanta (`mean_weight`, `std_weight`, `var_weight`), and accumulated matrix-entry weights with zeros included (`mean_entry_weight`, `std_entry_weight`, `var_entry_weight`). For `Q=10`, each matrix is `20 x 20`.
+- Weight exports may be stored in sparse CSR form instead of as a dense matrix. `analyze_weights.py` handles both formats automatically.
+- If you want to inspect a sparse export as a dense matrix, you can reconstruct it with:
+
+```python
+import numpy as np
+import scipy.sparse as sp
+
+with np.load("path/to/activity_trace_weights.npz") as z:
+    W = sp.csr_matrix(
+        (z["weights_data"], z["weights_indices"], z["weights_indptr"]),
+        shape=tuple(z["weight_shape"]),
+    ).toarray()
+```
+
 
 
 ### Commands to generate Figures:
