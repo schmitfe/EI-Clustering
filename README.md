@@ -7,8 +7,9 @@ Mean-field solvers, binary-network simulations, figure-generation scripts, and r
 ## Quick Start
 - `python -m pipelines.mean_field` runs the mean-field ERF sweep plus fixpoint analysis using `sim_config/default_simulation.yaml`. See `MeanField/README.md` for the full flag reference, solver details, and data layout.
 - `python -m pipelines.binary` launches the stochastic binary-network simulation with the same default config. See `BinaryNetwork/README.md` for sampling controls and plotting helpers.
+- `python -m pipelines.analysis --folder <run-folder>` runs the integrated population-state analysis on an existing binary or spiking output directory using the same YAML override system.
 - Configuration defaults are defined under `sim_config/`. Always override parameters through the CLI rather than environment variables so runs remain reproducible.
-- Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, and optional binary traces, while plots go to `plots/`.
+- Simulation outputs populate `data/<ConnectionType>/RjXX_XX/<config-tag>/` with `params.yaml` snapshots, ERF `.pkl` bundles, binary or spiking traces, and optional `analysis/<analysis-tag>/` subdirectories, while plots go to `plots/`.
 
 ## Environments
 - Conda environment files for the figure workflows live under [`envs/`](envs/README.md).
@@ -69,6 +70,11 @@ with np.load("path/to/activity_trace_weights.npz") as z:
 `python Figure2.py --line-colormap viridis_r --columns 0:1:0.5 --r-eplus 1:20:0.1 --bif-rj 0.5 0.75 0.8 --bif-avg-connectivity 0.01:0.31:0.005 --line-focus-counts 5:1:-1`
 - Figure3:
 `python Figure3.py --jobs 3 -O R_Eplus=7.25 --column-override a:kappa=0 -O R_j=0.75 --column-override b:kappa=0.5 --column-override c:kappa=1 --stability-filter any --focus-counts 5:1:-1 --warmup-steps 400000 --simulation-steps 6000000 --raster-stride 2 --column-override a:R_j=0.8`
+
+  Repeated-network dwell-time summary for Figure 3 conditions (10 independently seeded 30 s networks by default):
+  `python scripts/plot_figure3_dwell_times.py -O R_Eplus=7.25 -O R_j=0.75 --column-override a:R_j=0.8 --focus-counts 5:1:-1 --jobs 3`
+  Per-network spike-raster overlays with inferred state intervals are written to `plots/Figure3_dwell_times/inspection/`.
+  Simulations and state-estimation analyses both use `--jobs` workers; override the latter with `--analysis-jobs`. The default sampling interval provides approximately 10 ms analysis bins. The dwell-time script classifies fixed one-bin atomic segments and analyzes excitatory populations only by default; `--segmentation pelt` and `--population-source all` remain available for comparison.
 - Figure4:
 `python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
 - Figure5:

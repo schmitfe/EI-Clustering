@@ -30,3 +30,136 @@ binary:
   seed: 3
   output_name: activity_trace
   plot_activity: false
+analysis:
+  enabled: false
+  source_type: auto
+  dt: null
+  bin_size: null
+  cluster_selection:
+    enabled: false
+    mode: all  # all, excitatory, inhibitory, indices, names, group_ids
+    indices: []
+    names: []
+    group_ids: []
+  population_filter:
+    enabled: false
+    source: auto  # auto, rate, counts, binary
+    network_state_method: kmeans2  # kmeans2, percentile
+    smoothing_sigma_bins: 2
+    high_percentile: 75
+    modulation_sign: positive  # positive, negative, either
+    min_mean_delta: 0.01
+    min_effect_size: 0.5
+    min_correlation: 0.1
+    keep_top_k: null
+    min_keep: 1
+  preprocessing:
+    use_counts: true
+    use_rates: false
+    smoothing_sigma_bins: 0
+    sqrt_transform: true
+    zscore: true
+    binary_threshold_mode: percentile
+    binary_threshold_percentile: 80
+    hysteresis:
+      enabled: false
+      low_percentile: 60
+      high_percentile: 80
+    temporal_window_bins: 0
+  methods:
+    threshold_filter:
+      enabled: true
+      threshold_mode: auto
+      threshold_percentile: 80
+      min_active_bins: 2
+      min_inactive_bins: 2
+      min_dwell_bins: 3
+      max_gap_bins: 2
+      median_filter_width: 0
+      force_rethreshold: false
+    kmeans_filter:
+      enabled: true
+      n_states: 8
+      feature_type: sqrt_zscore
+      n_init: 20
+      random_state: 0
+      max_iter: 300
+      min_dwell_bins: 3
+      merge_strategy: previous
+      median_filter_width: 0
+    changepoint_kmeans:
+      enabled: true
+      algorithm: pelt
+      cost: rbf
+      penalty: null
+      n_bkps: null
+      n_states: 8
+      feature_type: smoothed_rates
+      n_init: 20
+      max_iter: 300
+      min_dwell_bins: 3
+      merge_strategy: previous
+      segment_features:
+        mean: true
+        max: false
+        active_fraction: true
+        start_end_difference: false
+        duration: false
+      random_state: 0
+    active_set_em:
+      enabled: true
+      source: auto  # auto, rate, counts, binary
+      transform: auto  # auto, identity, sqrt, asinh
+      segmentation: fixed  # fixed, pelt
+      fixed_width: 5
+      pelt_penalty: 10.0
+      pelt_min_size: 3
+      pelt_jump: 5
+      pelt_refine: true
+      changepoint_backend: skchange
+      changepoint_method: pelt
+      changepoint_bandwidth: 20
+      changepoint_max_interval_length: 200
+      pelt_feature_mode: weighted  # weighted, scaled
+      pelt_smooth_width: 3
+      Kmax: null
+      lambda_active: 0.0
+      lambda_comb: 0.1
+      min_separation: 0.05
+      var_floor: 0.0001
+      max_iter: 100
+      tol: 0.000001
+      flat_range_threshold: 0.000000000001
+      low_tol: 0.01
+      high_tol: 0.99
+      min_transitions: 1
+      merge_after_em: true
+      beta_merge: 0.0
+      min_flicker_duration: 3
+      flicker_max_hamming: 2
+      merge_max_iter: 100
+      sequence_smoothing: none  # none, dp
+      dp_n_candidates: 5
+      gamma_switch: 5.0
+      gamma_hamming: 1.0
+    hmm:
+      enabled: true
+      emission: auto
+      n_states: 8
+      num_iters: 100
+      num_seeds: 5
+      random_state: 0
+      feature_type: zscore_rates
+  evaluation:
+    compute_ground_truth_metrics: true
+    boundary_tolerance_bins: [1, 2, 5]
+    compute_method_agreement: true
+  plotting:
+    enabled: true
+    save_format: png
+    dpi: 150
+  state_count_sweep:
+    enabled: false
+    methods: [kmeans_filter, changepoint_kmeans, hmm]
+    smoothing_sigma_bins: [0, 1, 2, 4, 8]
+    n_states: [2, 3, 4, 5, 6, 8]
