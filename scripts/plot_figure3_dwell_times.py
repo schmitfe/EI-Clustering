@@ -10,6 +10,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
@@ -44,6 +45,7 @@ from Figure3 import (  # noqa: E402
 from analysis.io import analysis_input_from_binary_trace  # noqa: E402
 from analysis.methods import run_active_set_em  # noqa: E402
 from analysis.preprocessing import subset_analysis_input  # noqa: E402
+from analysis.utils import extract_segments  # noqa: E402
 from figure_cli import parse_int_values  # noqa: E402
 from plotting import plot_spike_raster  # noqa: E402
 from sim_config import add_override_arguments, load_from_args, write_yaml_config  # noqa: E402
@@ -160,6 +162,36 @@ def parse_args() -> argparse.Namespace:
         choices=("excitatory", "all"),
         default="excitatory",
         help="Population rates used for state inference; rasters still show both E and I neurons.",
+    )
+    parser.add_argument(
+        "--state-canonicalization",
+        choices=("none", "active_set"),
+        default="active_set",
+        help="Merge EM episodes that have the same inferred active population set.",
+    )
+    parser.add_argument(
+        "--canonical-kmax",
+        type=int,
+        default=2,
+        help="Maximum active populations kept in a canonical state key; larger EM masks are truncated to top rates.",
+    )
+    parser.add_argument(
+        "--canonical-z-threshold",
+        type=float,
+        default=3.0,
+        help="Retain active clusters only if they exceed the inactive-cluster baseline by this many robust SDs.",
+    )
+    parser.add_argument(
+        "--canonical-similarity",
+        type=float,
+        default=0.5,
+        help="Retain secondary active clusters only if their rate is at least this fraction of the dominant active rate.",
+    )
+    parser.add_argument(
+        "--canonical-noise-floor",
+        type=float,
+        default=1e-6,
+        help="Lower bound for the robust inactive-cluster SD used by canonical pruning.",
     )
     parser.add_argument("--beta-merge", type=float, default=0.0)
     parser.add_argument(
@@ -285,6 +317,9 @@ def _episode_rows(
                 "seed": int(seed),
                 "episode": int(episode_index),
                 "state": int(row["state"]),
+                "state_key": str(row.get("state_key", row["state"])),
+                "K": int(row.get("K", -1)) if pd.notna(row.get("K", -1)) else -1,
+                "clusters": str(row.get("clusters", "")),
                 "start_time_s": float(row["start_time"]),
                 "stop_time_s": float(row["stop_time"]),
                 "dwell_time_s": float(row["duration_time"]),
@@ -307,6 +342,257 @@ def _episode_rows(
         "cp_final": int(result.metadata.get("CP_final", 0)),
     }
     return rows, summary
+
+
+def _cluster_names(data: Any) -> list[str]:
+    names = list(data.cluster_names or [])
+    if len(names) == data.n_clusters:
+        return [str(name) for name in names]
+    return [f"C{idx + 1}" for idx in range(int(data.n_clusters))]
+
+
+def _robust_baseline(values: np.ndarray, floor: float) -> tuple[float, float]:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return 0.0, max(float(floor), 1e-12)
+    center = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - center))) if arr.size > 1 else 0.0
+    sigma = max(1.4826 * mad, float(floor), 1e-12)
+    return center, sigma
+
+
+def _canonical_state_key(
+    mask: np.ndarray,
+    rates: np.ndarray,
+    names: list[str],
+    *,
+    kmax: int,
+    z_threshold: float,
+    similarity: float,
+    noise_floor: float,
+) -> tuple[str, tuple[int, ...], dict[str, Any]]:
+    active = np.flatnonzero(np.asarray(mask, dtype=bool))
+    diagnostics = {
+        "truncated": False,
+        "pruned": False,
+        "n_proposed": int(active.size),
+        "n_retained": 0,
+        "inactive_baseline": np.nan,
+        "inactive_sigma": np.nan,
+    }
+    rate_arr = np.asarray(rates, dtype=float)
+    inactive = np.setdiff1d(np.arange(rate_arr.size), active, assume_unique=False)
+    baseline_values = rate_arr[inactive] if inactive.size else rate_arr
+    baseline, sigma = _robust_baseline(baseline_values, floor=float(noise_floor))
+    diagnostics["inactive_baseline"] = float(baseline)
+    diagnostics["inactive_sigma"] = float(sigma)
+
+    if active.size:
+        active = active[np.argsort(rate_arr[active])[::-1]]
+        strongest_rate = float(rate_arr[active[0]])
+        threshold = float(baseline) + float(z_threshold) * float(sigma)
+        retained: list[int] = []
+        for rank, idx in enumerate(active.tolist()):
+            rate = float(rate_arr[int(idx)])
+            above_background = rate >= threshold
+            similar_to_primary = rank == 0 or rate >= float(similarity) * strongest_rate
+            if above_background and similar_to_primary:
+                retained.append(int(idx))
+        diagnostics["pruned"] = len(retained) != int(active.size)
+        active = np.asarray(retained, dtype=int)
+    if active.size > max(0, int(kmax)):
+        order = active[np.argsort(rate_arr[active])[::-1]]
+        active = np.sort(order[: max(0, int(kmax))])
+        diagnostics["truncated"] = True
+    else:
+        active = np.sort(active)
+    diagnostics["n_retained"] = int(active.size)
+    active_tuple = tuple(int(idx) for idx in active.tolist())
+    if not active_tuple:
+        return "LOW", active_tuple, diagnostics
+    return "+".join(names[idx] for idx in active_tuple), active_tuple, diagnostics
+
+
+def _make_canonical_result(
+    result: Any,
+    data: Any,
+    full_data: Any,
+    *,
+    condition: str,
+    title: str,
+    seed: int,
+    exclude_edges: bool,
+    kmax: int,
+    z_threshold: float,
+    similarity: float,
+    noise_floor: float,
+) -> tuple[Any, list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    episodes_meta = list(result.metadata.get("episodes", []))
+    if not episodes_meta:
+        rows, summary = _episode_rows(
+            result,
+            condition=condition,
+            title=title,
+            seed=seed,
+            exclude_edges=exclude_edges,
+        )
+        return result, rows, summary, [], []
+
+    names = _cluster_names(data)
+    full_names = _cluster_names(full_data)
+    labels = np.zeros(int(data.n_timepoints), dtype=np.int64)
+    episode_keys: list[str] = []
+    episode_active: list[tuple[int, ...]] = []
+    episode_diagnostics: list[dict[str, Any]] = []
+    for episode in episodes_meta:
+        start = int(episode["start"])
+        stop = int(episode["stop"])
+        mean_rates = np.nanmean(np.asarray(data.X_rate, dtype=float)[start:stop], axis=0)
+        key, active, diagnostics = _canonical_state_key(
+            np.asarray(episode["mask"], dtype=bool),
+            mean_rates,
+            names,
+            kmax=int(kmax),
+            z_threshold=float(z_threshold),
+            similarity=float(similarity),
+            noise_floor=float(noise_floor),
+        )
+        episode_keys.append(key)
+        episode_active.append(active)
+        episode_diagnostics.append(diagnostics)
+
+    ordered_keys = sorted(set(episode_keys), key=lambda item: (0 if item == "LOW" else item.count("+") + 1, item))
+    key_to_id = {key: idx for idx, key in enumerate(ordered_keys)}
+    for episode, key in zip(episodes_meta, episode_keys):
+        labels[int(episode["start"]) : int(episode["stop"])] = int(key_to_id[key])
+
+    segments = extract_segments(labels, data.dt)
+    id_to_key = {idx: key for key, idx in key_to_id.items()}
+    key_to_active = {
+        key: episode_active[episode_keys.index(key)]
+        for key in ordered_keys
+    }
+    if not segments.empty:
+        segments["state_key"] = [id_to_key[int(state)] for state in segments["state"]]
+        segments["K"] = [len(key_to_active[str(key)]) for key in segments["state_key"]]
+        segments["clusters"] = [
+            ",".join(names[idx] for idx in key_to_active[str(key)]) for key in segments["state_key"]
+        ]
+
+    state_means = np.zeros((len(ordered_keys), data.n_clusters), dtype=float)
+    full_state_means = np.zeros((len(ordered_keys), full_data.n_clusters), dtype=float)
+    occupancy: dict[int, float] = {}
+    for state_id, key in enumerate(ordered_keys):
+        selected = labels == state_id
+        occupancy[state_id] = float(np.mean(selected)) if labels.size else 0.0
+        if np.any(selected):
+            state_means[state_id] = np.nanmean(np.asarray(data.X_rate, dtype=float)[selected], axis=0)
+            full_state_means[state_id] = np.nanmean(np.asarray(full_data.X_rate, dtype=float)[selected], axis=0)
+    canonical = SimpleNamespace(
+        method="active_set_em_canonical",
+        labels=labels,
+        segments=segments,
+        n_states=len(ordered_keys),
+        state_means=state_means,
+        state_occupancy=occupancy,
+        metadata={
+            **dict(result.metadata),
+            "status": str(result.metadata.get("status", "ok")),
+            "canonical_state_keys": ordered_keys,
+            "canonical_cluster_names": names,
+            "canonical_kmax": int(kmax),
+            "canonical_z_threshold": float(z_threshold),
+            "canonical_similarity": float(similarity),
+            "canonical_noise_floor": float(noise_floor),
+            "raw_n_states": int(result.n_states),
+            "raw_n_episodes": int(len(result.segments)),
+            "canonical_pruned_episodes": int(sum(bool(item["pruned"]) for item in episode_diagnostics)),
+            "canonical_truncated_episodes": int(sum(bool(item["truncated"]) for item in episode_diagnostics)),
+        },
+    )
+    rows, summary = _episode_rows(
+        canonical,
+        condition=condition,
+        title=title,
+        seed=seed,
+        exclude_edges=exclude_edges,
+    )
+    summary["raw_n_states"] = int(result.n_states)
+    summary["raw_n_episodes"] = int(len(result.segments))
+    summary["canonical_pruned_episodes"] = int(sum(bool(item["pruned"]) for item in episode_diagnostics))
+    summary["canonical_truncated_episodes"] = int(sum(bool(item["truncated"]) for item in episode_diagnostics))
+    summary["canonical_z_threshold"] = float(z_threshold)
+    summary["canonical_similarity"] = float(similarity)
+
+    inventory_rows: list[dict[str, Any]] = []
+    for state_id, key in enumerate(ordered_keys):
+        selected_segments = segments.loc[segments["state"] == state_id] if not segments.empty else pd.DataFrame()
+        dwell = selected_segments["duration_time"].to_numpy(dtype=float) if not selected_segments.empty else np.zeros(0)
+        active = key_to_active[key]
+        inventory_rows.append(
+            {
+                "condition": condition,
+                "title": title,
+                "seed": int(seed),
+                "state": int(state_id),
+                "state_key": key,
+                "K": int(len(active)),
+                "clusters": ",".join(names[idx] for idx in active),
+                "visits": int(dwell.size),
+                "occupancy_time_s": float(np.sum(labels == state_id) * data.dt),
+                "occupancy_fraction": float(occupancy[state_id]),
+                "mean_dwell_time_s": float(np.mean(dwell)) if dwell.size else np.nan,
+                "std_dwell_time_s": float(np.std(dwell, ddof=1)) if dwell.size > 1 else 0.0 if dwell.size else np.nan,
+                "median_dwell_time_s": float(np.median(dwell)) if dwell.size else np.nan,
+                "first_seen_s": float(selected_segments["start_time"].min()) if not selected_segments.empty else np.nan,
+            }
+        )
+
+    emission_rows: list[dict[str, Any]] = []
+    for state_id, key in enumerate(ordered_keys):
+        row = {
+            "condition": condition,
+            "title": title,
+            "seed": int(seed),
+            "state": int(state_id),
+            "state_key": key,
+            "K": int(len(key_to_active[key])),
+        }
+        for cluster_name, value in zip(full_names, full_state_means[state_id]):
+            row[f"rate_{cluster_name}"] = float(value)
+        emission_rows.append(row)
+    canonical.metadata["canonical_full_cluster_names"] = full_names
+    canonical.metadata["canonical_full_state_means"] = full_state_means
+    return canonical, rows, summary, inventory_rows, emission_rows
+
+
+def _save_canonical_artifacts(
+    output_dir: Path,
+    canonical: Any,
+    inventory_rows: list[dict[str, Any]],
+    emission_rows: list[dict[str, Any]],
+    *,
+    condition: str,
+    seed: int,
+) -> None:
+    target_dir = output_dir / "canonical"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{condition}_seed_{int(seed)}"
+    canonical.segments.to_csv(target_dir / f"{prefix}_segments.csv", index=False)
+    pd.DataFrame(inventory_rows).to_csv(target_dir / f"{prefix}_state_inventory.csv", index=False)
+    pd.DataFrame(emission_rows).to_csv(target_dir / f"{prefix}_state_emissions.csv", index=False)
+    np.save(target_dir / f"{prefix}_state_sequence.npy", np.asarray(canonical.labels, dtype=np.int64))
+    np.savez_compressed(
+        target_dir / f"{prefix}_state_emissions.npz",
+        state_ids=np.arange(int(canonical.n_states), dtype=np.int64),
+        state_keys=np.asarray(canonical.metadata.get("canonical_state_keys", []), dtype=str),
+        analyzed_cluster_names=np.asarray(canonical.metadata.get("canonical_cluster_names", []), dtype=str),
+        full_cluster_names=np.asarray(canonical.metadata.get("canonical_full_cluster_names", []), dtype=str),
+        analyzed_state_means=np.asarray(canonical.state_means, dtype=float),
+        full_state_means=np.asarray(canonical.metadata.get("canonical_full_state_means", []), dtype=float),
+        labels=np.asarray(canonical.labels, dtype=np.int64),
+    )
 
 
 def _plot(summary: pd.DataFrame, condition_order: list[str], output_prefix: Path, dpi: int) -> None:
@@ -402,12 +688,13 @@ def _plot_state_raster_overlay(
         if stop <= start:
             continue
         state = int(segment["state"])
+        key = str(segment.get("state_key", state))
         color = cmap(state % cmap.N)
         ax_raster.axvspan(start, stop, color=color, alpha=0.12, linewidth=0)
         ax_state.axvspan(start, stop, color=color, alpha=0.9, linewidth=0)
         ax_raster.axvline(start, color=color, alpha=0.6, linewidth=0.6)
         if stop - start >= 0.03 * t_stop:
-            ax_state.text((start + stop) / 2.0, 0.5, str(state), ha="center", va="center", fontsize=7)
+            ax_state.text((start + stop) / 2.0, 0.5, key, ha="center", va="center", fontsize=7)
     plot_spike_raster(
         ax_raster,
         spike_times,
@@ -435,16 +722,102 @@ def _plot_state_raster_overlay(
     plt.close(fig)
 
 
-def _analyze_context(task: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _plot_cluster_activity_overlay(
+    data: Any,
+    result: Any,
+    *,
+    title: str,
+    output_path: Path,
+    duration: float | None,
+    dpi: int,
+) -> None:
+    rates = np.asarray(data.X_rate, dtype=float)
+    if rates.ndim != 2 or rates.shape[0] == 0:
+        return
+    segments = result.segments
+    inferred_stop = float(segments["stop_time"].max()) if not segments.empty else float(rates.shape[0] * data.dt)
+    t_stop = inferred_stop if duration is None else min(float(duration), inferred_stop)
+    stop_bin = max(1, min(rates.shape[0], int(np.ceil(t_stop / float(data.dt)))))
+    shown = rates[:stop_bin]
+    t_stop = min(t_stop, stop_bin * float(data.dt))
+    vmax = float(np.nanquantile(shown, 0.99)) if shown.size else 1.0
+    if not np.isfinite(vmax) or vmax <= 0.0:
+        vmax = None
+    names = _cluster_names(data)
+    cmap = plt.get_cmap("tab20")
+
+    fig = plt.figure(figsize=(12, 6))
+    grid = fig.add_gridspec(
+        2,
+        2,
+        width_ratios=[1.0, 0.025],
+        height_ratios=[5, 0.55],
+        hspace=0.06,
+        wspace=0.04,
+    )
+    ax_heat = fig.add_subplot(grid[0, 0])
+    ax_state = fig.add_subplot(grid[1, 0], sharex=ax_heat)
+    cax = fig.add_subplot(grid[0, 1])
+    spacer_ax = fig.add_subplot(grid[1, 1])
+    spacer_ax.axis("off")
+    image = ax_heat.imshow(
+        shown.T,
+        aspect="auto",
+        interpolation="nearest",
+        origin="lower",
+        extent=(0.0, t_stop, -0.5, shown.shape[1] - 0.5),
+        cmap="viridis",
+        vmin=0.0,
+        vmax=vmax,
+    )
+    for _, segment in segments.iterrows():
+        start = max(0.0, float(segment["start_time"]))
+        stop = min(t_stop, float(segment["stop_time"]))
+        if stop <= start:
+            continue
+        state = int(segment["state"])
+        key = str(segment.get("state_key", state))
+        color = cmap(state % cmap.N)
+        ax_heat.axvline(start, color=color, alpha=0.75, linewidth=0.65)
+        ax_state.axvspan(start, stop, color=color, alpha=0.9, linewidth=0)
+        if stop - start >= 0.03 * t_stop:
+            ax_state.text((start + stop) / 2.0, 0.5, key, ha="center", va="center", fontsize=6)
+    ax_heat.set_ylabel("Cluster")
+    ax_heat.set_title(title)
+    if shown.shape[1] <= 50:
+        ax_heat.set_yticks(np.arange(shown.shape[1]))
+        ax_heat.set_yticklabels(names[: shown.shape[1]], fontsize=7)
+    else:
+        ax_heat.set_yticks([])
+    cbar = fig.colorbar(image, cax=cax)
+    cbar.set_label("Population rate")
+    ax_heat.tick_params(axis="x", labelbottom=False)
+    ax_state.set_xlim(0.0, t_stop)
+    ax_state.set_ylim(0.0, 1.0)
+    ax_state.set_yticks([])
+    ax_state.set_ylabel("State", rotation=0, ha="right", va="center")
+    ax_state.set_xlabel("Time [s]")
+    for ax in (ax_heat, ax_state):
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _analyze_context(
+    task: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     analysis_start = time.perf_counter()
     context = task["context"]
     dt_seconds = float(context["binary_cfg"]["sample_interval"]) / float(context["updates_per_second"])
     preprocessing_cfg, method_cfg = _analysis_configs(task["args"], dt_seconds)
-    data = analysis_input_from_binary_trace(
+    full_data = analysis_input_from_binary_trace(
         context["trace_path"],
         parameter=context["parameter"],
         analysis_cfg={"dt": dt_seconds},
     )
+    data = full_data
     if str(task["args"].population_source) == "excitatory":
         if data.cluster_cell_types is not None:
             indices = [
@@ -460,11 +833,51 @@ def _analyze_context(task: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[s
             ]
         data = subset_analysis_input(data, indices=indices)
     result = run_active_set_em(data, preprocessing_cfg, method_cfg)
+    if str(task["args"].state_canonicalization) == "active_set":
+        analysis_result, episodes, summary, inventory_rows, emission_rows = _make_canonical_result(
+            result,
+            data,
+            full_data,
+            condition=context["condition"],
+            title=context["title"],
+            seed=context["seed"],
+            exclude_edges=bool(task["args"].exclude_edge_dwells),
+            kmax=int(task["args"].canonical_kmax),
+            z_threshold=float(task["args"].canonical_z_threshold),
+            similarity=float(task["args"].canonical_similarity),
+            noise_floor=float(task["args"].canonical_noise_floor),
+        )
+    else:
+        analysis_result = result
+        episodes, summary = _episode_rows(
+            result,
+            condition=context["condition"],
+            title=context["title"],
+            seed=context["seed"],
+            exclude_edges=bool(task["args"].exclude_edge_dwells),
+        )
+        inventory_rows = []
+        emission_rows = []
+    if inventory_rows or emission_rows:
+        _save_canonical_artifacts(
+            Path(task["output_dir"]),
+            analysis_result,
+            inventory_rows,
+            emission_rows,
+            condition=context["condition"],
+            seed=context["seed"],
+        )
     inspection_path = Path(task["output_dir"]) / "inspection" / f"{context['condition']}_seed_{context['seed']}.png"
+    activity_inspection_path = (
+        Path(task["output_dir"])
+        / "inspection"
+        / "cluster_activity"
+        / f"{context['condition']}_seed_{context['seed']}.png"
+    )
     if bool(task["args"].inspection_plots):
         _plot_state_raster_overlay(
             context["trace_path"],
-            result,
+            analysis_result,
             parameter=context["parameter"],
             updates_per_second=float(context["updates_per_second"]),
             title=f"{context['title']}, seed={context['seed']}",
@@ -474,19 +887,24 @@ def _analyze_context(task: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[s
             max_raster_events=int(task["args"].max_raster_events),
             dpi=int(task["args"].dpi),
         )
-    episodes, summary = _episode_rows(
-        result,
-        condition=context["condition"],
-        title=context["title"],
-        seed=context["seed"],
-        exclude_edges=bool(task["args"].exclude_edge_dwells),
-    )
+        _plot_cluster_activity_overlay(
+            full_data,
+            analysis_result,
+            title=f"{context['title']}, seed={context['seed']}",
+            output_path=activity_inspection_path,
+            duration=task["args"].inspection_duration,
+            dpi=int(task["args"].dpi),
+        )
     summary["trace_path"] = str(context["trace_path"])
     summary["inspection_plot"] = str(inspection_path) if bool(task["args"].inspection_plots) else ""
+    summary["activity_inspection_plot"] = (
+        str(activity_inspection_path) if bool(task["args"].inspection_plots) else ""
+    )
     summary["analysis_seconds"] = float(time.perf_counter() - analysis_start)
     summary["population_source"] = str(task["args"].population_source)
     summary["n_analyzed_populations"] = int(data.n_clusters)
-    return episodes, summary
+    summary["state_canonicalization"] = str(task["args"].state_canonicalization)
+    return episodes, summary, inventory_rows, emission_rows
 
 
 def _worker_count(requested: int, total: int, label: str) -> int:
@@ -531,9 +949,13 @@ def _write_analysis_checkpoints(
     output_dir: Path,
     episode_rows: list[dict[str, Any]],
     network_rows: list[dict[str, Any]],
+    inventory_rows: list[dict[str, Any]],
+    emission_rows: list[dict[str, Any]],
 ) -> None:
     pd.DataFrame(episode_rows).to_csv(output_dir / "dwell_episodes.partial.csv", index=False)
     pd.DataFrame(network_rows).to_csv(output_dir / "network_dwell_summary.partial.csv", index=False)
+    pd.DataFrame(inventory_rows).to_csv(output_dir / "state_inventory.partial.csv", index=False)
+    pd.DataFrame(emission_rows).to_csv(output_dir / "state_emissions.partial.csv", index=False)
 
 
 def _pool_context() -> mp.context.BaseContext:
@@ -661,6 +1083,8 @@ def run(args: argparse.Namespace) -> Path:
 
     episode_rows: list[dict[str, Any]] = []
     network_rows: list[dict[str, Any]] = []
+    inventory_rows: list[dict[str, Any]] = []
+    emission_rows: list[dict[str, Any]] = []
     existing_contexts: list[dict[str, Any]] = []
     missing_rows: list[dict[str, Any]] = []
     for context in contexts:
@@ -696,26 +1120,36 @@ def run(args: argparse.Namespace) -> Path:
                 description="State analyses",
             )
             for completed, future in enumerate(completed_futures, start=1):
-                episodes, summary = future.result()
+                episodes, summary, inventory, emissions = future.result()
                 episode_rows.extend(episodes)
                 network_rows.append(summary)
-                _write_analysis_checkpoints(output_dir, episode_rows, network_rows)
+                inventory_rows.extend(inventory)
+                emission_rows.extend(emissions)
+                _write_analysis_checkpoints(output_dir, episode_rows, network_rows, inventory_rows, emission_rows)
     else:
         for completed, task in enumerate(
             _progress(analysis_tasks, total=len(analysis_tasks), description="State analyses"),
             start=1,
         ):
-            episodes, summary = _analyze_context(task)
+            episodes, summary, inventory, emissions = _analyze_context(task)
             episode_rows.extend(episodes)
             network_rows.append(summary)
-            _write_analysis_checkpoints(output_dir, episode_rows, network_rows)
+            inventory_rows.extend(inventory)
+            emission_rows.extend(emissions)
+            _write_analysis_checkpoints(output_dir, episode_rows, network_rows, inventory_rows, emission_rows)
 
     episodes_df = pd.DataFrame(episode_rows)
     networks_df = pd.DataFrame(network_rows)
+    inventory_df = pd.DataFrame(inventory_rows)
+    emissions_df = pd.DataFrame(emission_rows)
     episodes_df.to_csv(output_dir / "dwell_episodes.csv", index=False)
     networks_df.to_csv(output_dir / "network_dwell_summary.csv", index=False)
+    inventory_df.to_csv(output_dir / "state_inventory.csv", index=False)
+    emissions_df.to_csv(output_dir / "state_emissions.csv", index=False)
     (output_dir / "dwell_episodes.partial.csv").unlink(missing_ok=True)
     (output_dir / "network_dwell_summary.partial.csv").unlink(missing_ok=True)
+    (output_dir / "state_inventory.partial.csv").unlink(missing_ok=True)
+    (output_dir / "state_emissions.partial.csv").unlink(missing_ok=True)
     aggregate = (
         networks_df.groupby(["condition", "title"], as_index=False)
         .agg(
