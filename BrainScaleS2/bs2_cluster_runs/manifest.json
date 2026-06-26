@@ -1,0 +1,50 @@
+[
+  {
+    "identifier": "bs2_cluster_kappa_0p00",
+    "kappa": 0.0,
+    "pickle_file": "bs2_cluster_runs/bs2_cluster_kappa_0p00.pkl",
+    "raster_file": "bs2_cluster_runs/bs2_cluster_kappa_0p00_raster.png",
+    "e_rate_hz": 16954.333333333336,
+    "i_rate_hz": 36879.333333333336,
+    "utc_start": "2026-06-26T10:51:53.041002+00:00",
+    "utc_end": "2026-06-26T10:51:58.308828+00:00",
+    "elapsed_seconds": 8.578558683395386,
+    "randseed": 1,
+    "chip_unique_identifier": [
+      "hxcube7fpga0chip57_1"
+    ],
+    "n_projections": 84
+  },
+  {
+    "identifier": "bs2_cluster_kappa_0p50",
+    "kappa": 0.5,
+    "pickle_file": "bs2_cluster_runs/bs2_cluster_kappa_0p50.pkl",
+    "raster_file": "bs2_cluster_runs/bs2_cluster_kappa_0p50_raster.png",
+    "e_rate_hz": 15466.0,
+    "i_rate_hz": 22432.833333333336,
+    "utc_start": "2026-06-26T10:52:01.991595+00:00",
+    "utc_end": "2026-06-26T10:52:06.934213+00:00",
+    "elapsed_seconds": 8.21646761894226,
+    "randseed": 1,
+    "chip_unique_identifier": [
+      "hxcube7fpga0chip57_1"
+    ],
+    "n_projections": 144
+  },
+  {
+    "identifier": "bs2_cluster_kappa_1p00",
+    "kappa": 1.0,
+    "pickle_file": "bs2_cluster_runs/bs2_cluster_kappa_1p00.pkl",
+    "raster_file": "bs2_cluster_runs/bs2_cluster_kappa_1p00_raster.png",
+    "e_rate_hz": 13352.166666666668,
+    "i_rate_hz": 26646.5,
+    "utc_start": "2026-06-26T10:52:10.591373+00:00",
+    "utc_end": "2026-06-26T10:52:15.934036+00:00",
+    "elapsed_seconds": 8.260525465011597,
+    "randseed": 1,
+    "chip_unique_identifier": [
+      "hxcube7fpga0chip57_1"
+    ],
+    "n_projections": 144
+  }
+]
