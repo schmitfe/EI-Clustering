@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import multiprocessing as mp
 import os
 import sys
@@ -46,6 +47,7 @@ from analysis.io import analysis_input_from_binary_trace  # noqa: E402
 from analysis.methods import run_active_set_em  # noqa: E402
 from analysis.preprocessing import subset_analysis_input  # noqa: E402
 from analysis.utils import extract_segments  # noqa: E402
+from analyze_weights import analyze_weights  # noqa: E402
 from figure_cli import parse_int_values  # noqa: E402
 from plotting import plot_spike_raster  # noqa: E402
 from sim_config import add_override_arguments, load_from_args, write_yaml_config  # noqa: E402
@@ -244,6 +246,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", default="plots/Figure3_dwell_times")
     parser.add_argument("--output-prefix", default="Figures/Figure3_dwell_times")
+    parser.add_argument(
+        "--simulation-collection",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Store per-network matrix/state/emission collection files in output_dir/SimulationCollection.",
+    )
+    parser.add_argument(
+        "--collection-include-weights",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Embed the actual dense or CSR weight matrix arrays in each SimulationCollection npz.",
+    )
     parser.add_argument("--dpi", type=int, default=300)
     return parser.parse_args()
 
@@ -595,6 +609,138 @@ def _save_canonical_artifacts(
     )
 
 
+def _json_default(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_default(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_default(item) for item in value]
+    return value
+
+
+def _matching_weights_path(trace_path: str | Path) -> Path:
+    path = Path(trace_path)
+    return path.with_name(f"{path.stem}_weights.npz")
+
+
+def _load_weight_arrays(weights_path: Path) -> dict[str, np.ndarray]:
+    arrays: dict[str, np.ndarray] = {}
+    with np.load(weights_path, allow_pickle=True) as payload:
+        for key in (
+            "weight_format",
+            "weight_mode",
+            "weight_dtype",
+            "weight_shape",
+            "weights",
+            "weights_data",
+            "weights_indices",
+            "weights_indptr",
+            "population_names",
+            "population_start_ids",
+            "population_end_ids",
+            "population_sizes",
+            "population_cell_types",
+            "population_cluster_indices",
+        ):
+            if key in payload:
+                arrays[f"weight_{key}"] = payload[key]
+    return arrays
+
+
+def _state_count_summary(inventory_rows: list[dict[str, Any]]) -> dict[str, int]:
+    n_states = len(inventory_rows)
+    one_cluster = sum(1 for row in inventory_rows if int(row.get("K", 0) or 0) == 1)
+    multi_cluster = sum(1 for row in inventory_rows if int(row.get("K", 0) or 0) > 1)
+    low = sum(1 for row in inventory_rows if int(row.get("K", 0) or 0) == 0)
+    return {
+        "n_states": int(n_states),
+        "n_low_states": int(low),
+        "n_one_cluster_states": int(one_cluster),
+        "n_multi_cluster_states": int(multi_cluster),
+    }
+
+
+def _save_simulation_collection(
+    output_dir: Path,
+    *,
+    context: dict[str, Any],
+    args: argparse.Namespace,
+    result: Any,
+    full_data: Any,
+    summary: dict[str, Any],
+    inventory_rows: list[dict[str, Any]],
+    emission_rows: list[dict[str, Any]],
+    include_weights: bool,
+) -> str:
+    collection_dir = output_dir / "SimulationCollection"
+    collection_dir.mkdir(parents=True, exist_ok=True)
+    condition = str(context["condition"])
+    seed = int(context["seed"])
+    collection_path = collection_dir / f"{condition}_seed{seed:06d}.npz"
+    weights_path = _matching_weights_path(context["trace_path"])
+
+    payload: dict[str, Any] = {
+        "condition": np.array(condition),
+        "title": np.array(str(context["title"])),
+        "seed": np.array(seed, dtype=np.int64),
+        "trace_path": np.array(str(context["trace_path"])),
+        "weights_path": np.array(str(weights_path)),
+        "weights_available": np.array(bool(weights_path.exists())),
+        "state_sequence": np.asarray(result.labels, dtype=np.int64),
+        "state_segments_start_bin": result.segments["start_bin"].to_numpy(dtype=np.int64)
+        if not result.segments.empty
+        else np.zeros(0, dtype=np.int64),
+        "state_segments_stop_bin": result.segments["stop_bin"].to_numpy(dtype=np.int64)
+        if not result.segments.empty
+        else np.zeros(0, dtype=np.int64),
+        "state_segments_start_time_s": result.segments["start_time"].to_numpy(dtype=float)
+        if not result.segments.empty
+        else np.zeros(0, dtype=float),
+        "state_segments_stop_time_s": result.segments["stop_time"].to_numpy(dtype=float)
+        if not result.segments.empty
+        else np.zeros(0, dtype=float),
+        "state_segments_duration_s": result.segments["duration_time"].to_numpy(dtype=float)
+        if not result.segments.empty
+        else np.zeros(0, dtype=float),
+        "state_segments_state": result.segments["state"].to_numpy(dtype=np.int64)
+        if not result.segments.empty
+        else np.zeros(0, dtype=np.int64),
+        "state_segments_state_key": result.segments["state_key"].to_numpy(dtype=str)
+        if "state_key" in result.segments
+        else np.asarray([], dtype=str),
+        "state_keys": np.asarray(result.metadata.get("canonical_state_keys", []), dtype=str),
+        "analyzed_cluster_names": np.asarray(result.metadata.get("canonical_cluster_names", []), dtype=str),
+        "full_cluster_names": np.asarray(result.metadata.get("canonical_full_cluster_names", _cluster_names(full_data)), dtype=str),
+        "state_emissions_analyzed": np.asarray(result.state_means, dtype=float),
+        "state_emissions_full": np.asarray(result.metadata.get("canonical_full_state_means", np.zeros((0, 0))), dtype=float),
+        "state_inventory_json": np.array(json.dumps(_json_default(inventory_rows), sort_keys=True)),
+        "state_emissions_json": np.array(json.dumps(_json_default(emission_rows), sort_keys=True)),
+        "network_summary_json": np.array(json.dumps(_json_default(summary), sort_keys=True)),
+        "simulation_parameter_json": np.array(json.dumps(_json_default(context["parameter"]), sort_keys=True)),
+        "binary_config_json": np.array(json.dumps(_json_default(context["binary_cfg"]), sort_keys=True)),
+        "run_args_json": np.array(json.dumps(_json_default(vars(args)), sort_keys=True)),
+        "sample_dt_seconds": np.array(float(full_data.dt)),
+    }
+    count_summary = _state_count_summary(inventory_rows)
+    for key, value in count_summary.items():
+        payload[key] = np.array(int(value), dtype=np.int64)
+
+    if weights_path.exists():
+        weight_analysis = analyze_weights(str(weights_path))
+        for key, value in weight_analysis.items():
+            payload[f"matrix_analysis_{key}"] = np.asarray(value)
+        if include_weights:
+            payload.update(_load_weight_arrays(weights_path))
+
+    np.savez_compressed(collection_path, **payload)
+    return str(collection_path)
+
+
 def _plot(summary: pd.DataFrame, condition_order: list[str], output_prefix: Path, dpi: int) -> None:
     fig, axes = plt.subplots(1, len(condition_order), figsize=(4.0 * len(condition_order), 4.2), sharey=True)
     axes_arr = np.atleast_1d(axes)
@@ -904,6 +1050,21 @@ def _analyze_context(
     summary["population_source"] = str(task["args"].population_source)
     summary["n_analyzed_populations"] = int(data.n_clusters)
     summary["state_canonicalization"] = str(task["args"].state_canonicalization)
+    if bool(task["args"].simulation_collection):
+        collection_path = _save_simulation_collection(
+            Path(task["output_dir"]),
+            context=context,
+            args=task["args"],
+            result=analysis_result,
+            full_data=full_data,
+            summary=summary,
+            inventory_rows=inventory_rows,
+            emission_rows=emission_rows,
+            include_weights=bool(task["args"].collection_include_weights),
+        )
+        summary["simulation_collection"] = collection_path
+    else:
+        summary["simulation_collection"] = ""
     return episodes, summary, inventory_rows, emission_rows
 
 
