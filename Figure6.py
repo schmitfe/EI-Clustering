@@ -38,7 +38,8 @@ EXPECTED_PICKLES = (
     "bs2_cluster_kappa_1p00.pkl",
 )
 MISSING_RUNS_ERROR = "No saved network runs from BrainScaleS2 found."
-KERNEL_SIGMA_MS = 0.075
+RATE_DT_MS = 0.001
+KERNEL_SIGMA_MS = 0.1
 DISPLAY_DURATION_MS = 6.0
 
 
@@ -83,6 +84,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=KERNEL_SIGMA_MS,
         help="Gaussian rate-kernel width in ms (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--rate-dt-ms",
+        type=float,
+        default=RATE_DT_MS,
+        help="Time step of the rate-estimation grid in ms (default: %(default)s).",
     )
     parser.add_argument(
         "--neuron-stride",
@@ -152,16 +159,20 @@ def _exc_cluster_spikes(spiketimes: np.ndarray, net_cfg: dict[str, object]) -> t
 def compute_cluster_rates(
     spiketimes: np.ndarray,
     net_cfg: dict[str, object],
-    sim_cfg: dict[str, object],
     *,
     duration_ms: float,
     kernel_sigma_ms: float,
+    rate_dt_ms: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     exc_spikes, cluster_size, cluster_count = _exc_cluster_spikes(spiketimes, net_cfg)
     exc_spikes = _ensure_trial_entries(exc_spikes, cluster_count)
     if cluster_count <= 0:
         return np.zeros(0, dtype=float), np.zeros((0, 0), dtype=float)
-    dt = float(sim_cfg.get("dt", 0.1))
+    dt = float(rate_dt_ms)
+    if dt <= 0.0:
+        raise ValueError(f"Rate-estimation dt must be positive (got {dt} ms).")
+    if kernel_sigma_ms <= 0.0:
+        raise ValueError(f"Kernel sigma must be positive (got {kernel_sigma_ms} ms).")
     kernel = gaussian_kernel(float(kernel_sigma_ms), dt=dt)
     pad_steps = len(kernel) // 2
     pad_time = pad_steps * dt
@@ -329,9 +340,9 @@ def main() -> None:
         rate_time, cluster_rates = compute_cluster_rates(
             run["spiketimes"],
             run["net_dict"],
-            run["sim_dict"],
             duration_ms=args.duration_ms,
             kernel_sigma_ms=args.kernel_sigma_ms,
+            rate_dt_ms=args.rate_dt_ms,
         )
         ylabel = r"$\lambda_C$ [Spikes/ms]" if col_idx == 0 else None
         plot_rate_traces(rate_ax, rate_time, cluster_rates, duration_ms=args.duration_ms, ylabel=ylabel)
