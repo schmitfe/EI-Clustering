@@ -123,7 +123,23 @@ def gaussian_kernel(sigma, dt=1.0, nstd=3.0):
     >>> round(kernel.sum(), 3)
     1.0
     """
-    t = pylab.arange(-nstd * sigma, nstd * sigma + dt, dt)
+    sigma = float(sigma)
+    dt = float(dt)
+    nstd = float(nstd)
+    if sigma <= 0.0:
+        raise ValueError("sigma must be positive")
+    if dt <= 0.0:
+        raise ValueError("dt must be positive")
+    if nstd <= 0.0:
+        raise ValueError("nstd must be positive")
+
+    support_in_steps = nstd * sigma / dt
+    nearest_step = round(support_in_steps)
+    if np.isclose(support_in_steps, nearest_step, rtol=1e-12, atol=1e-12):
+        half_width_steps = int(nearest_step)
+    else:
+        half_width_steps = int(np.ceil(support_in_steps))
+    t = pylab.arange(-half_width_steps, half_width_steps + 1, dtype=float) * dt
     gauss = pylab.exp(-t ** 2 / sigma ** 2)
     gauss /= gauss.sum() * dt
     return gauss
