@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import math
 import os
 import pickle
@@ -11,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Sequence, Tuple
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import matplotlib
 
@@ -118,6 +121,13 @@ def parse_args() -> argparse.Namespace:
         metavar="label:title",
         help="Override the column title text (e.g., a:R_j=1.1).",
     )
+    parser.add_argument(
+        "--column-seed",
+        action="append",
+        default=[],
+        metavar="label:seed",
+        help="Column-specific BinaryNetwork seed (e.g., a:111). Overrides --seed for that column.",
+    )
     parser.add_argument("--warmup-steps", type=int, help="Override binary.warmup_steps.")
     parser.add_argument("--simulation-steps", type=int, help="Override binary.simulation_steps.")
     parser.add_argument("--sample-interval", type=int, help="Override binary.sample_interval.")
@@ -155,6 +165,30 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="Figures/Figure3",
         help="Prefix for the saved figure files (default: %(default)s.{png,pdf}).",
+    )
+    parser.add_argument(
+        "--save-displayed-activities",
+        action="store_true",
+        help="Save the displayed population activity window for each column as 40xT matrices.",
+    )
+    parser.add_argument(
+        "--activity-output-dir",
+        type=str,
+        help="Directory for --save-displayed-activities outputs. Defaults next to --output-prefix.",
+    )
+    parser.add_argument(
+        "--state-sequence-overlay",
+        action="store_true",
+        help="Add a third row per column with inferred canonical states from SimulationCollection files.",
+    )
+    parser.add_argument(
+        "--state-analysis-dir",
+        action="append",
+        default=[],
+        help=(
+            "Directory containing SimulationCollection, or the SimulationCollection directory itself. "
+            "Can be passed multiple times. If omitted, plots/*/SimulationCollection is searched."
+        ),
     )
     return parser.parse_args()
 
@@ -298,6 +332,20 @@ def _parse_column_title_entries(entries: Sequence[str]) -> Dict[str, str]:
         label, title = raw.split(":", 1)
         key = _normalize_label(label)
         mapping[key] = title.strip()
+    return mapping
+
+
+def _parse_column_seed_entries(entries: Sequence[str]) -> Dict[str, int]:
+    mapping: Dict[str, int] = {}
+    for raw in entries:
+        if ":" not in raw:
+            raise ValueError(f"Column seed '{raw}' is missing ':' between label and seed.")
+        label, seed_text = raw.split(":", 1)
+        key = _normalize_label(label)
+        try:
+            mapping[key] = int(seed_text)
+        except ValueError as exc:
+            raise ValueError(f"Column seed '{raw}' has invalid integer seed.") from exc
     return mapping
 
 
@@ -1120,6 +1168,187 @@ def _save_figure(fig: plt.Figure, output_prefix: str, r_value: float) -> None:
     print(f"Stored Figure 3 panel at {png_path} and {pdf_path}")
 
 
+def _activity_export_dir(args: argparse.Namespace) -> Path:
+    if args.activity_output_dir:
+        return Path(args.activity_output_dir)
+    prefix = Path(args.output_prefix)
+    return prefix.with_name(f"{prefix.name}_displayed_activities")
+
+
+def _displayed_activity_window(
+    payload: Dict[str, Any],
+    parameter: Dict[str, Any],
+    *,
+    duration: float | None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    rates = np.asarray(payload.get("rates"), dtype=float)
+    names = np.asarray(payload.get("names", []), dtype=str)
+    if rates.ndim != 2:
+        raise ValueError("Trace payload does not contain a 2D rates matrix.")
+    times_raw = payload.get("times")
+    sample_interval = max(1, int(payload.get("sample_interval", 1) or 1))
+    if times_raw is not None and np.asarray(times_raw).size == rates.shape[0]:
+        times_updates = np.asarray(times_raw, dtype=float)
+    else:
+        times_updates = np.arange(rates.shape[0], dtype=float) * float(sample_interval)
+    time_scale, _label = _time_axis_scale_from_taus(parameter)
+    safe_scale = time_scale if time_scale > 0 else 1.0
+    times_seconds = times_updates / safe_scale
+    keep = np.isfinite(times_seconds)
+    if duration is not None and duration > 0:
+        keep &= times_seconds <= float(duration)
+    return rates[keep].T, times_seconds[keep], names
+
+
+def _save_displayed_activities(
+    column_contexts: Sequence[ColumnContext],
+    payloads: Dict[str, Dict[str, Any]],
+    args: argparse.Namespace,
+) -> None:
+    output_dir = _activity_export_dir(args)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    duration = args.rates_duration if args.rates_duration is not None else args.raster_duration
+    combined: Dict[str, np.ndarray] = {}
+    for context in column_contexts:
+        label = str(context.spec.label)
+        activity, times_seconds, names = _displayed_activity_window(
+            payloads[label],
+            context.parameter,
+            duration=duration,
+        )
+        path = output_dir / f"{label}_seed{int(context.seed):06d}_activity_40xT.npz"
+        np.savez_compressed(
+            path,
+            activity=activity,
+            times_seconds=times_seconds,
+            population_names=names,
+            condition=np.array(label),
+            seed=np.array(int(context.seed), dtype=np.int64),
+            R_Eplus=np.array(float(context.parameter.get("R_Eplus", np.nan))),
+            R_j=np.array(float(context.parameter.get("R_j", np.nan))),
+            kappa=np.array(float(context.parameter.get("kappa", np.nan))),
+        )
+        combined[f"{label}_activity"] = activity
+        combined[f"{label}_times_seconds"] = times_seconds
+        combined[f"{label}_population_names"] = names
+        combined[f"{label}_seed"] = np.array(int(context.seed), dtype=np.int64)
+        print(f"Stored displayed activity matrix for column {label} at {path}")
+    if combined:
+        np.savez_compressed(output_dir / "Figure3_displayed_activities_40xT.npz", **combined)
+
+
+def _state_collection_dirs(args: argparse.Namespace) -> List[Path]:
+    if args.state_analysis_dir:
+        dirs: List[Path] = []
+        for raw in args.state_analysis_dir:
+            path = Path(raw)
+            if path.name == "SimulationCollection":
+                dirs.append(path)
+            else:
+                dirs.append(path / "SimulationCollection")
+        return dirs
+    return sorted(Path("plots").glob("*/SimulationCollection"))
+
+
+def _float_matches(left: Any, right: Any, tol: float = 1e-9) -> bool:
+    try:
+        return abs(float(left) - float(right)) <= float(tol)
+    except (TypeError, ValueError):
+        return False
+
+
+def _state_collection_matches(path: Path, context: ColumnContext) -> bool:
+    try:
+        with np.load(path, allow_pickle=True) as payload:
+            condition = str(np.asarray(payload.get("condition", "")).item())
+            seed = int(np.asarray(payload.get("seed", -1)).item())
+            params = json.loads(str(np.asarray(payload.get("simulation_parameter_json", "{}")).item()))
+    except Exception:
+        return False
+    if condition != str(context.spec.label) or seed != int(context.seed):
+        return False
+    checks = ("R_Eplus", "R_j", "kappa", "connection_type")
+    for key in checks:
+        expected = context.parameter.get(key)
+        observed = params.get(key)
+        if expected is None or observed is None:
+            continue
+        if isinstance(expected, str) or isinstance(observed, str):
+            if str(expected).lower() != str(observed).lower():
+                return False
+        elif not _float_matches(observed, expected):
+            return False
+    return True
+
+
+def _find_state_collection(context: ColumnContext, args: argparse.Namespace) -> Path | None:
+    name = f"{context.spec.label}_seed{int(context.seed):06d}.npz"
+    candidates = [directory / name for directory in _state_collection_dirs(args)]
+    existing = [path for path in candidates if path.exists()]
+    matching = [path for path in existing if _state_collection_matches(path, context)]
+    if matching:
+        return matching[0]
+    if existing:
+        print(
+            f"State overlay: found {len(existing)} file(s) named {name}, but none matched "
+            f"the current condition parameters. Pass --state-analysis-dir explicitly if needed.",
+            flush=True,
+        )
+    else:
+        print(f"State overlay: no SimulationCollection file found for {name}.", flush=True)
+    return None
+
+
+def _load_state_overlay(context: ColumnContext, args: argparse.Namespace) -> Dict[str, Any] | None:
+    path = _find_state_collection(context, args)
+    if path is None:
+        return None
+    with np.load(path, allow_pickle=True) as payload:
+        return {
+            "path": str(path),
+            "start": np.asarray(payload["state_segments_start_time_s"], dtype=float),
+            "stop": np.asarray(payload["state_segments_stop_time_s"], dtype=float),
+            "state": np.asarray(payload["state_segments_state"], dtype=np.int64),
+            "key": np.asarray(payload["state_segments_state_key"], dtype=str),
+        }
+
+
+def _plot_state_sequence_overlay(
+    ax: plt.Axes,
+    overlay: Dict[str, Any] | None,
+    *,
+    x_start: float,
+    x_end: float,
+) -> None:
+    ax.set_xlim(float(x_start), float(x_end))
+    ax.set_ylim(0.0, 1.0)
+    ax.set_yticks([])
+    ax.set_ylabel("State")
+    ax.set_xlabel("Time [s]")
+    if overlay is None:
+        ax.text(0.5, 0.5, "No state estimate", ha="center", va="center", transform=ax.transAxes)
+        return
+    cmap = plt.get_cmap("tab20")
+    span_total = max(float(x_end) - float(x_start), 1e-12)
+    for start, stop, state, key in zip(
+        overlay["start"],
+        overlay["stop"],
+        overlay["state"],
+        overlay["key"],
+    ):
+        left = max(float(start), float(x_start))
+        right = min(float(stop), float(x_end))
+        if right <= left:
+            continue
+        color = cmap(int(state) % cmap.N)
+        ax.axvspan(left, right, color=color, alpha=0.9, linewidth=0)
+        ax.axvline(left, color=color, alpha=0.7, linewidth=0.5)
+        if right - left >= 0.08 * span_total:
+            ax.text((left + right) / 2.0, 0.5, str(key), ha="center", va="center", fontsize=7)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
 def _print_column_output_paths(column_contexts: Sequence[ColumnContext]) -> None:
     print("Figure 3 column output mapping:")
     for context in column_contexts:
@@ -1134,9 +1363,11 @@ def main() -> None:
     parsed_focus_counts = parse_int_values(args.focus_counts, option_name="--focus-counts")
     column_override_map = _parse_column_override_entries(args.column_override)
     column_title_map = _parse_column_title_entries(args.column_title)
+    column_seed_map = _parse_column_seed_entries(args.column_seed)
     known_labels = {_normalize_label(spec.label) for spec in COLUMN_SPECS}
     _validate_column_keys(column_override_map, known_labels, "column overrides")
     _validate_column_keys(column_title_map, known_labels, "column titles")
+    _validate_column_keys(column_seed_map, known_labels, "column seeds")
     font_cfg = FontCfg(base=12, scale=1.3).resolve()
     v_start, v_stop, v_steps = resolve_v_sweep(args)
     sweep_cfg = PipelineSweepSettings(
@@ -1174,6 +1405,9 @@ def main() -> None:
             focus_union.update(int(value) for value in focus_counts)
             column_param["R_Eplus"] = float(column_param.get("R_Eplus", r_value) or r_value)
             binary_cfg = _resolve_binary_config(column_param, binary_overrides)
+            label_key = _normalize_label(spec.label)
+            if label_key in column_seed_map:
+                binary_cfg["seed"] = int(column_seed_map[label_key])
             seed = int(binary_cfg.get("seed", 0) or 0)
             focus_markers, candidates, folder, bundle_path = _prepare_focus_markers_with_retry(
                 column_param,
@@ -1237,7 +1471,8 @@ def main() -> None:
                     _simulate_binary_task(task)
         _print_column_output_paths(column_contexts)
         n_cols = len(column_contexts)
-        fig = plt.figure(figsize=(4.2 * n_cols + 1.4, 5))
+        fig_height = 5.8 if bool(args.state_sequence_overlay) else 5.0
+        fig = plt.figure(figsize=(4.2 * n_cols + 1.4, fig_height))
         outer = fig.add_gridspec(
             1,
             n_cols + 2,
@@ -1246,10 +1481,15 @@ def main() -> None:
             left=0.06,
             right=0.99,
             top=0.92,
-            bottom=0.12,
+            bottom=0.10,
         )
         colorbar_ax = fig.add_subplot(outer[0, -2])
         rate_axes: List[plt.Axes] = []
+        loaded_payloads: Dict[str, Dict[str, Any]] = {}
+        state_overlays: Dict[str, Dict[str, Any] | None] = {}
+        if bool(args.state_sequence_overlay):
+            for context in column_contexts:
+                state_overlays[str(context.spec.label)] = _load_state_overlay(context, args)
         for idx, context in enumerate(column_contexts):
             param_copy = context.parameter
             try:
@@ -1258,12 +1498,22 @@ def main() -> None:
                 raise RuntimeError(
                     f"Failed to load trace for column {context.spec.label}: {exc}"
                 ) from exc
-            column_grid = outer[0, idx].subgridspec(2, 1, height_ratios=[1.0, 0.6], hspace=0.08)
+            loaded_payloads[str(context.spec.label)] = payload
+            if bool(args.state_sequence_overlay):
+                column_grid = outer[0, idx].subgridspec(
+                    3,
+                    1,
+                    height_ratios=[1.0, 0.6, 0.22],
+                    hspace=0.08,
+                )
+            else:
+                column_grid = outer[0, idx].subgridspec(2, 1, height_ratios=[1.0, 0.6], hspace=0.08)
             ax_raster = fig.add_subplot(column_grid[0, 0])
             if rate_axes:
                 ax_rates = fig.add_subplot(column_grid[1, 0], sharex=ax_raster, sharey=rate_axes[0])
             else:
                 ax_rates = fig.add_subplot(column_grid[1, 0], sharex=ax_raster)
+            ax_state = fig.add_subplot(column_grid[2, 0], sharex=ax_raster) if bool(args.state_sequence_overlay) else None
             _plot_example_traces(
                 ax_raster,
                 ax_rates,
@@ -1282,6 +1532,18 @@ def main() -> None:
             panel_prefix = context.spec.label.strip()
             add_panel_label(ax_raster, f"{panel_prefix}1", font_cfg, x=-0.15, y=1.04)
             add_panel_label(ax_rates, f"{panel_prefix}2", font_cfg, x=-0.15, y=1.06)
+            if ax_state is not None:
+                x_start, x_end = ax_rates.get_xlim()
+                ax_rates.set_xlabel("")
+                ax_rates.tick_params(axis="x", labelbottom=False)
+                _plot_state_sequence_overlay(
+                    ax_state,
+                    state_overlays.get(str(context.spec.label)),
+                    x_start=float(x_start),
+                    x_end=float(x_end),
+                )
+                style_axes(ax_state, font_cfg)
+                add_panel_label(ax_state, f"{panel_prefix}3", font_cfg, x=-0.15, y=1.10)
             rate_axes.append(ax_rates)
         if rate_axes:
             for idx, ax in enumerate(rate_axes):
@@ -1293,7 +1555,8 @@ def main() -> None:
                 else:
                     ax.set_ylabel("")
                     ax.tick_params(axis="y", labelleft=False)
-                ax.set_xlim(0,5)
+        if args.save_displayed_activities:
+            _save_displayed_activities(column_contexts, loaded_payloads, args)
         colorbar = draw_listed_colorbar(
             fig,
             colorbar_ax,
