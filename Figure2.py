@@ -17,6 +17,7 @@ import numpy as np
 
 from figure_cli import add_v_sweep_arguments, parse_int_values, resolve_float_values, resolve_v_sweep
 from MeanField.ei_cluster_network import EIClusterNetwork
+from MeanField.rate_system import get_data_root
 from plotting import (
     FontCfg,
     DEFAULT_LINE_COLOR,
@@ -520,7 +521,7 @@ def _summary_path(parameter: Mapping[str, float]) -> str:
     conn_label = str(parameter.get("connection_type", "bernoulli")).lower().replace(" ", "_")
     encoded_kappa = f"{float(parameter.get('kappa', 0.0)):.2f}".replace(".", "_")
     return os.path.join(
-        "data",
+        get_data_root(),
         f"all_fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter.get('R_j', 0.0)}_{analysis_tag}.pkl",
     )
 

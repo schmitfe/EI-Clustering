@@ -14,6 +14,7 @@ from MeanField.rate_system import (
     ERFResult,
     aggregate_data,
     ensure_output_folder,
+    get_data_root,
     serialize_erf,
 )
 from sim_config import add_override_arguments, load_from_args, sim_tag_from_cfg, write_yaml_config
@@ -591,11 +592,12 @@ def run_analysis(folder: str, parameter: Dict, focus_counts: Sequence[int], *, p
         connection_type=connection_type,
         tag=analysis_tag,
     )
-    os.makedirs("data", exist_ok=True)
+    data_root = get_data_root()
+    os.makedirs(data_root, exist_ok=True)
     conn_label = str(connection_type).lower().replace(" ", "_")
     encoded_kappa = f"{float(kappa):.2f}".replace(".", "_")
     output_path = os.path.join(
-        "data",
+        data_root,
         f"all_fixpoints_{conn_label}_kappa{encoded_kappa}_Rj{parameter['R_j']}_{analysis_tag}.pkl",
     )
     params_path = os.path.join(folder, "params.yaml")

@@ -76,9 +76,11 @@ with np.load("path/to/activity_trace_weights.npz") as z:
   Per-network spike-raster overlays with inferred state intervals are written to `plots/Figure3_dwell_times/inspection/`.
   Simulations and state-estimation analyses both use `--jobs` workers; override the latter with `--analysis-jobs`. The default sampling interval provides approximately 10 ms analysis bins. The dwell-time script classifies fixed one-bin atomic segments and analyzes excitatory populations only by default; `--segmentation pelt` and `--population-source all` remain available for comparison.
 - Figure4:
-`python Figure4.py --kappas 0:1:0.125 --mean-connectivity 0.2:0.3:0.05 --focus-counts 1:5:1 -O R_Eplus=8 -O R_j=0.8 --jobs 120 --simulation-steps 12000000 --sample-interval 12000 --no-std-shading`
+`python scripts/submit_figure4_slurm.py     --kappas 0:1:0.125     --mean-connectivity 0.2:0.3:0.05     --focus-counts 1:5:1     --n-networks 45     --seed-network 100     -O R_Eplus=7.25     -O R_j=0.79     --simulation-steps 12000000     --sample-interval 12000     --no-std-shading     --slurm-nodelist agmn-srv-5     --slurm-cpus-per-task 6     --slurm-mem 16G --slurm-time 8:00:00`
 - Figure5:
 `python Figure5.py -O spiking.net.rep=5.0 -O spiking.sim.randseed=3 --column-override 0:spiking.sim.randseed=2`
+- Fugure6: after running the emulations via BrainScaleS2/Simulae_kappa.ipynb though the EBRAINS infrastrucutre
+`python Figure6.py`
 #### Supplements:
 - Figure S1 (Eigenvalues):
 `python FigureS1.py -O R_Eplus=7.25 -O R_j=0.8`
