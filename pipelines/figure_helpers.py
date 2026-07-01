@@ -16,7 +16,7 @@ import numpy as np
 
 from BinaryNetwork.BinaryNetwork import warm_numba_caches
 from BinaryNetwork.ClusteredEI_network import ClusteredEI_network
-from MeanField.rate_system import ensure_output_folder
+from MeanField.rate_system import ensure_output_folder, get_data_root
 from pipelines.binary import (
     finalize_binary_config,
     run_binary_simulation,
@@ -155,7 +155,7 @@ def compute_fixpoint_bundle_path(parameter: Dict[str, Any]) -> str:
     conn = str(parameter.get("connection_type", "bernoulli")).lower().replace(" ", "_")
     encoded_kappa = f"{kappa:.2f}".replace(".", "_")
     r_j = parameter.get("R_j", 0.0)
-    return os.path.join("data", f"all_fixpoints_{conn}_kappa{encoded_kappa}_Rj{r_j}_{tag}.pkl")
+    return os.path.join(get_data_root(), f"all_fixpoints_{conn}_kappa{encoded_kappa}_Rj{r_j}_{tag}.pkl")
 
 
 def ensure_fixpoint_bundle(

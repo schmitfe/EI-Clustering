@@ -25,7 +25,7 @@ import numpy as np  # noqa: E402
 
 from figure_cli import add_v_sweep_arguments, parse_int_values, resolve_float_values, resolve_v_sweep
 import pipelines.mean_field as ei_pipeline  # noqa: E402
-from MeanField.rate_system import ensure_output_folder  # noqa: E402
+from MeanField.rate_system import ensure_output_folder, get_data_root  # noqa: E402
 from pipelines.binary import ensure_binary_behavior_defaults, finalize_binary_config, run_binary_simulation  # noqa: E402
 from plotting import (
     BinaryStateSource,
@@ -446,7 +446,7 @@ def _compute_fixpoint_bundle_path(parameter: Dict[str, Any]) -> str:
     conn = str(parameter.get("connection_type", "bernoulli")).lower().replace(" ", "_")
     encoded_kappa = f"{kappa:.2f}".replace(".", "_")
     r_j = parameter.get("R_j", 0.0)
-    return os.path.join("data", f"all_fixpoints_{conn}_kappa{encoded_kappa}_Rj{r_j}_{tag}.pkl")
+    return os.path.join(get_data_root(), f"all_fixpoints_{conn}_kappa{encoded_kappa}_Rj{r_j}_{tag}.pkl")
 
 
 def _ensure_fixpoint_bundle(

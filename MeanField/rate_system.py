@@ -888,13 +888,23 @@ def interpolate_curve(x: Sequence[float], y: Sequence[float], *, steps: int = 20
     return x_new, y_new
 
 
+def get_data_root() -> str:
+    """Return the shared simulation cache root.
+
+    ``EI_CLUSTER_DATA_ROOT`` overrides the historical repository-relative
+    ``data`` directory.  Keeping this in one place ensures mean-field,
+    binary, and spiking pipelines resolve identical cache locations.
+    """
+    return os.path.abspath(os.path.expanduser(os.environ.get("EI_CLUSTER_DATA_ROOT", "data")))
+
+
 def ensure_output_folder(parameter: Dict, *, tag: Optional[str] = None) -> str:
     """Create and return the cache folder for a mean-field parameter set.
 
     Examples
     --------
     >>> folder = ensure_output_folder({"connection_type": "bernoulli", "R_j": 0.8, "Q": 2})
-    >>> folder.startswith("data/Bernoulli/Rj00_80/")
+    >>> folder.replace(os.sep, "/").endswith("data/Bernoulli/Rj00_80/" + folder.split(os.sep)[-1])
     True
     """
     conn_name = str(parameter.get("connection_type", "bernoulli")).strip()
@@ -904,7 +914,7 @@ def ensure_output_folder(parameter: Dict, *, tag: Optional[str] = None) -> str:
     if tag is None:
         filtered = {k: v for k, v in parameter.items() if k != "R_Eplus"}
         tag = sim_tag_from_cfg(filtered)
-    folder = os.path.join("data", conn_label, rj_label, tag)
+    folder = os.path.join(get_data_root(), conn_label, rj_label, tag)
     os.makedirs(folder, exist_ok=True)
     return folder
 
@@ -969,6 +979,7 @@ def aggregate_data(folder: str) -> str:
 __all__ = [
     "RateSystem",
     "ERFResult",
+    "get_data_root",
     "ensure_output_folder",
     "serialize_erf",
     "aggregate_data",

@@ -28,6 +28,7 @@ from .rate_system import (
     RateSystem,
     aggregate_data,
     ensure_output_folder,
+    get_data_root,
     serialize_erf,
 )
 from .ei_cluster_network import EIClusterNetwork
@@ -36,6 +37,7 @@ __all__ = [
     "RateSystem",
     "ERFResult",
     "EIClusterNetwork",
+    "get_data_root",
     "ensure_output_folder",
     "serialize_erf",
     "aggregate_data",
