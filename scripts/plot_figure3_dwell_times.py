@@ -11,7 +11,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
@@ -44,9 +43,10 @@ from Figure3 import (  # noqa: E402
     _validate_column_keys,
 )
 from analysis.io import analysis_input_from_binary_trace  # noqa: E402
-from analysis.methods import run_active_set_em  # noqa: E402
-from analysis.preprocessing import subset_analysis_input  # noqa: E402
-from analysis.utils import extract_segments  # noqa: E402
+from analysis.episode_inference import (  # noqa: E402
+    cluster_names as _cluster_names,
+    infer_active_set_episodes,
+)
 from analyze_weights import analyze_weights  # noqa: E402
 from figure_cli import parse_int_values  # noqa: E402
 from plotting import plot_spike_raster  # noqa: E402
@@ -260,325 +260,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dpi", type=int, default=300)
     return parser.parse_args()
-
-
-def _analysis_configs(args: argparse.Namespace, dt_seconds: float) -> tuple[dict[str, Any], dict[str, Any]]:
-    preprocessing = {
-        "use_counts": False,
-        "use_rates": True,
-        "smoothing_sigma_bins": 0,
-        "sqrt_transform": False,
-        "zscore": False,
-        "temporal_window_bins": 0,
-    }
-    method = {
-        "source": "rate",
-        "transform": "auto",
-        "segmentation": str(args.segmentation),
-        "fixed_width": int(args.fixed_width),
-        "pelt_penalty": float(args.pelt_penalty),
-        "changepoint_backend": str(args.changepoint_backend),
-        "changepoint_method": str(args.changepoint_method),
-        "pelt_min_size": int(args.pelt_min_size),
-        "pelt_jump": int(args.pelt_jump),
-        "pelt_refine": bool(args.pelt_refine),
-        "changepoint_bandwidth": int(args.changepoint_bandwidth),
-        "changepoint_max_interval_length": int(args.changepoint_max_interval_length),
-        "changepoint_parallel_backend": str(args.changepoint_parallel_backend),
-        "changepoint_parallel_jobs": int(args.changepoint_parallel_jobs),
-        "pelt_feature_mode": "weighted",
-        "pelt_smooth_width": int(args.pelt_smooth_width),
-        "Kmax": None if args.kmax is None else int(args.kmax),
-        "lambda_active": 0.0,
-        "lambda_comb": 0.1,
-        "min_separation": 0.05,
-        "var_floor": 0.0001,
-        "max_iter": int(args.em_max_iter),
-        "tol": 1e-6,
-        "flat_range_threshold": 1e-12,
-        "merge_after_em": bool(args.merge_after_em),
-        "beta_merge": float(args.beta_merge),
-        "min_flicker_duration": int(args.min_flicker_duration),
-        "flicker_max_hamming": int(args.flicker_max_hamming),
-        "merge_max_iter": int(args.merge_max_iter),
-        "sequence_smoothing": "none",
-    }
-    return {"dt": float(dt_seconds), **preprocessing}, method
-
-
-def _episode_rows(
-    result: Any,
-    *,
-    condition: str,
-    title: str,
-    seed: int,
-    exclude_edges: bool,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    segments = result.segments.copy()
-    if segments.empty:
-        dwell = np.zeros(0, dtype=float)
-    else:
-        segments["is_edge"] = False
-        segments.loc[segments.index[[0, -1]], "is_edge"] = True
-        dwell_source = segments.loc[~segments["is_edge"]] if exclude_edges and len(segments) > 2 else segments
-        dwell = dwell_source["duration_time"].to_numpy(dtype=float)
-    rows = []
-    for episode_index, row in segments.iterrows():
-        rows.append(
-            {
-                "condition": condition,
-                "title": title,
-                "seed": int(seed),
-                "episode": int(episode_index),
-                "state": int(row["state"]),
-                "state_key": str(row.get("state_key", row["state"])),
-                "K": int(row.get("K", -1)) if pd.notna(row.get("K", -1)) else -1,
-                "clusters": str(row.get("clusters", "")),
-                "start_time_s": float(row["start_time"]),
-                "stop_time_s": float(row["stop_time"]),
-                "dwell_time_s": float(row["duration_time"]),
-                "is_edge": bool(row.get("is_edge", False)),
-            }
-        )
-    summary = {
-        "condition": condition,
-        "title": title,
-        "seed": int(seed),
-        "n_states": int(result.n_states),
-        "n_episodes": int(len(segments)),
-        "n_state_changes": max(0, int(len(segments)) - 1),
-        "mean_dwell_time_s": float(np.mean(dwell)) if dwell.size else np.nan,
-        "std_dwell_time_s": float(np.std(dwell, ddof=1)) if dwell.size > 1 else 0.0 if dwell.size else np.nan,
-        "median_dwell_time_s": float(np.median(dwell)) if dwell.size else np.nan,
-        "n_dwells_used": int(dwell.size),
-        "status": str(result.metadata.get("status", "ok")),
-        "cp_pelt": int(result.metadata.get("CP_pelt", 0)),
-        "cp_final": int(result.metadata.get("CP_final", 0)),
-    }
-    return rows, summary
-
-
-def _cluster_names(data: Any) -> list[str]:
-    names = list(data.cluster_names or [])
-    if len(names) == data.n_clusters:
-        return [str(name) for name in names]
-    return [f"C{idx + 1}" for idx in range(int(data.n_clusters))]
-
-
-def _robust_baseline(values: np.ndarray, floor: float) -> tuple[float, float]:
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return 0.0, max(float(floor), 1e-12)
-    center = float(np.median(arr))
-    mad = float(np.median(np.abs(arr - center))) if arr.size > 1 else 0.0
-    sigma = max(1.4826 * mad, float(floor), 1e-12)
-    return center, sigma
-
-
-def _canonical_state_key(
-    mask: np.ndarray,
-    rates: np.ndarray,
-    names: list[str],
-    *,
-    kmax: int,
-    z_threshold: float,
-    similarity: float,
-    noise_floor: float,
-) -> tuple[str, tuple[int, ...], dict[str, Any]]:
-    active = np.flatnonzero(np.asarray(mask, dtype=bool))
-    diagnostics = {
-        "truncated": False,
-        "pruned": False,
-        "n_proposed": int(active.size),
-        "n_retained": 0,
-        "inactive_baseline": np.nan,
-        "inactive_sigma": np.nan,
-    }
-    rate_arr = np.asarray(rates, dtype=float)
-    inactive = np.setdiff1d(np.arange(rate_arr.size), active, assume_unique=False)
-    baseline_values = rate_arr[inactive] if inactive.size else rate_arr
-    baseline, sigma = _robust_baseline(baseline_values, floor=float(noise_floor))
-    diagnostics["inactive_baseline"] = float(baseline)
-    diagnostics["inactive_sigma"] = float(sigma)
-
-    if active.size:
-        active = active[np.argsort(rate_arr[active])[::-1]]
-        strongest_rate = float(rate_arr[active[0]])
-        threshold = float(baseline) + float(z_threshold) * float(sigma)
-        retained: list[int] = []
-        for rank, idx in enumerate(active.tolist()):
-            rate = float(rate_arr[int(idx)])
-            above_background = rate >= threshold
-            similar_to_primary = rank == 0 or rate >= float(similarity) * strongest_rate
-            if above_background and similar_to_primary:
-                retained.append(int(idx))
-        diagnostics["pruned"] = len(retained) != int(active.size)
-        active = np.asarray(retained, dtype=int)
-    if active.size > max(0, int(kmax)):
-        order = active[np.argsort(rate_arr[active])[::-1]]
-        active = np.sort(order[: max(0, int(kmax))])
-        diagnostics["truncated"] = True
-    else:
-        active = np.sort(active)
-    diagnostics["n_retained"] = int(active.size)
-    active_tuple = tuple(int(idx) for idx in active.tolist())
-    if not active_tuple:
-        return "LOW", active_tuple, diagnostics
-    return "+".join(names[idx] for idx in active_tuple), active_tuple, diagnostics
-
-
-def _make_canonical_result(
-    result: Any,
-    data: Any,
-    full_data: Any,
-    *,
-    condition: str,
-    title: str,
-    seed: int,
-    exclude_edges: bool,
-    kmax: int,
-    z_threshold: float,
-    similarity: float,
-    noise_floor: float,
-) -> tuple[Any, list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-    episodes_meta = list(result.metadata.get("episodes", []))
-    if not episodes_meta:
-        rows, summary = _episode_rows(
-            result,
-            condition=condition,
-            title=title,
-            seed=seed,
-            exclude_edges=exclude_edges,
-        )
-        return result, rows, summary, [], []
-
-    names = _cluster_names(data)
-    full_names = _cluster_names(full_data)
-    labels = np.zeros(int(data.n_timepoints), dtype=np.int64)
-    episode_keys: list[str] = []
-    episode_active: list[tuple[int, ...]] = []
-    episode_diagnostics: list[dict[str, Any]] = []
-    for episode in episodes_meta:
-        start = int(episode["start"])
-        stop = int(episode["stop"])
-        mean_rates = np.nanmean(np.asarray(data.X_rate, dtype=float)[start:stop], axis=0)
-        key, active, diagnostics = _canonical_state_key(
-            np.asarray(episode["mask"], dtype=bool),
-            mean_rates,
-            names,
-            kmax=int(kmax),
-            z_threshold=float(z_threshold),
-            similarity=float(similarity),
-            noise_floor=float(noise_floor),
-        )
-        episode_keys.append(key)
-        episode_active.append(active)
-        episode_diagnostics.append(diagnostics)
-
-    ordered_keys = sorted(set(episode_keys), key=lambda item: (0 if item == "LOW" else item.count("+") + 1, item))
-    key_to_id = {key: idx for idx, key in enumerate(ordered_keys)}
-    for episode, key in zip(episodes_meta, episode_keys):
-        labels[int(episode["start"]) : int(episode["stop"])] = int(key_to_id[key])
-
-    segments = extract_segments(labels, data.dt)
-    id_to_key = {idx: key for key, idx in key_to_id.items()}
-    key_to_active = {
-        key: episode_active[episode_keys.index(key)]
-        for key in ordered_keys
-    }
-    if not segments.empty:
-        segments["state_key"] = [id_to_key[int(state)] for state in segments["state"]]
-        segments["K"] = [len(key_to_active[str(key)]) for key in segments["state_key"]]
-        segments["clusters"] = [
-            ",".join(names[idx] for idx in key_to_active[str(key)]) for key in segments["state_key"]
-        ]
-
-    state_means = np.zeros((len(ordered_keys), data.n_clusters), dtype=float)
-    full_state_means = np.zeros((len(ordered_keys), full_data.n_clusters), dtype=float)
-    occupancy: dict[int, float] = {}
-    for state_id, key in enumerate(ordered_keys):
-        selected = labels == state_id
-        occupancy[state_id] = float(np.mean(selected)) if labels.size else 0.0
-        if np.any(selected):
-            state_means[state_id] = np.nanmean(np.asarray(data.X_rate, dtype=float)[selected], axis=0)
-            full_state_means[state_id] = np.nanmean(np.asarray(full_data.X_rate, dtype=float)[selected], axis=0)
-    canonical = SimpleNamespace(
-        method="active_set_em_canonical",
-        labels=labels,
-        segments=segments,
-        n_states=len(ordered_keys),
-        state_means=state_means,
-        state_occupancy=occupancy,
-        metadata={
-            **dict(result.metadata),
-            "status": str(result.metadata.get("status", "ok")),
-            "canonical_state_keys": ordered_keys,
-            "canonical_cluster_names": names,
-            "canonical_kmax": int(kmax),
-            "canonical_z_threshold": float(z_threshold),
-            "canonical_similarity": float(similarity),
-            "canonical_noise_floor": float(noise_floor),
-            "raw_n_states": int(result.n_states),
-            "raw_n_episodes": int(len(result.segments)),
-            "canonical_pruned_episodes": int(sum(bool(item["pruned"]) for item in episode_diagnostics)),
-            "canonical_truncated_episodes": int(sum(bool(item["truncated"]) for item in episode_diagnostics)),
-        },
-    )
-    rows, summary = _episode_rows(
-        canonical,
-        condition=condition,
-        title=title,
-        seed=seed,
-        exclude_edges=exclude_edges,
-    )
-    summary["raw_n_states"] = int(result.n_states)
-    summary["raw_n_episodes"] = int(len(result.segments))
-    summary["canonical_pruned_episodes"] = int(sum(bool(item["pruned"]) for item in episode_diagnostics))
-    summary["canonical_truncated_episodes"] = int(sum(bool(item["truncated"]) for item in episode_diagnostics))
-    summary["canonical_z_threshold"] = float(z_threshold)
-    summary["canonical_similarity"] = float(similarity)
-
-    inventory_rows: list[dict[str, Any]] = []
-    for state_id, key in enumerate(ordered_keys):
-        selected_segments = segments.loc[segments["state"] == state_id] if not segments.empty else pd.DataFrame()
-        dwell = selected_segments["duration_time"].to_numpy(dtype=float) if not selected_segments.empty else np.zeros(0)
-        active = key_to_active[key]
-        inventory_rows.append(
-            {
-                "condition": condition,
-                "title": title,
-                "seed": int(seed),
-                "state": int(state_id),
-                "state_key": key,
-                "K": int(len(active)),
-                "clusters": ",".join(names[idx] for idx in active),
-                "visits": int(dwell.size),
-                "occupancy_time_s": float(np.sum(labels == state_id) * data.dt),
-                "occupancy_fraction": float(occupancy[state_id]),
-                "mean_dwell_time_s": float(np.mean(dwell)) if dwell.size else np.nan,
-                "std_dwell_time_s": float(np.std(dwell, ddof=1)) if dwell.size > 1 else 0.0 if dwell.size else np.nan,
-                "median_dwell_time_s": float(np.median(dwell)) if dwell.size else np.nan,
-                "first_seen_s": float(selected_segments["start_time"].min()) if not selected_segments.empty else np.nan,
-            }
-        )
-
-    emission_rows: list[dict[str, Any]] = []
-    for state_id, key in enumerate(ordered_keys):
-        row = {
-            "condition": condition,
-            "title": title,
-            "seed": int(seed),
-            "state": int(state_id),
-            "state_key": key,
-            "K": int(len(key_to_active[key])),
-        }
-        for cluster_name, value in zip(full_names, full_state_means[state_id]):
-            row[f"rate_{cluster_name}"] = float(value)
-        emission_rows.append(row)
-    canonical.metadata["canonical_full_cluster_names"] = full_names
-    canonical.metadata["canonical_full_state_means"] = full_state_means
-    return canonical, rows, summary, inventory_rows, emission_rows
 
 
 def _save_canonical_artifacts(
@@ -957,53 +638,27 @@ def _analyze_context(
     analysis_start = time.perf_counter()
     context = task["context"]
     dt_seconds = float(context["binary_cfg"]["sample_interval"]) / float(context["updates_per_second"])
-    preprocessing_cfg, method_cfg = _analysis_configs(task["args"], dt_seconds)
     full_data = analysis_input_from_binary_trace(
         context["trace_path"],
         parameter=context["parameter"],
         analysis_cfg={"dt": dt_seconds},
     )
-    data = full_data
-    if str(task["args"].population_source) == "excitatory":
-        if data.cluster_cell_types is not None:
-            indices = [
-                idx
-                for idx, cell_type in enumerate(data.cluster_cell_types)
-                if str(cell_type).upper().startswith("E")
-            ]
-        else:
-            indices = [
-                idx
-                for idx, name in enumerate(data.cluster_names or [])
-                if str(name).upper().startswith("E")
-            ]
-        data = subset_analysis_input(data, indices=indices)
-    result = run_active_set_em(data, preprocessing_cfg, method_cfg)
-    if str(task["args"].state_canonicalization) == "active_set":
-        analysis_result, episodes, summary, inventory_rows, emission_rows = _make_canonical_result(
-            result,
-            data,
-            full_data,
-            condition=context["condition"],
-            title=context["title"],
-            seed=context["seed"],
-            exclude_edges=bool(task["args"].exclude_edge_dwells),
-            kmax=int(task["args"].canonical_kmax),
-            z_threshold=float(task["args"].canonical_z_threshold),
-            similarity=float(task["args"].canonical_similarity),
-            noise_floor=float(task["args"].canonical_noise_floor),
-        )
-    else:
-        analysis_result = result
-        episodes, summary = _episode_rows(
-            result,
-            condition=context["condition"],
-            title=context["title"],
-            seed=context["seed"],
-            exclude_edges=bool(task["args"].exclude_edge_dwells),
-        )
-        inventory_rows = []
-        emission_rows = []
+    inference = infer_active_set_episodes(
+        full_data,
+        task["args"],
+        condition=context["condition"],
+        title=context["title"],
+        seed=context["seed"],
+        population_source=str(task["args"].population_source),
+        canonicalize=str(task["args"].state_canonicalization) == "active_set",
+        exclude_edges=bool(task["args"].exclude_edge_dwells),
+    )
+    data = inference.analyzed_data
+    analysis_result = inference.result
+    episodes = inference.episodes
+    summary = inference.summary
+    inventory_rows = inference.inventory
+    emission_rows = inference.emissions
     if inventory_rows or emission_rows:
         _save_canonical_artifacts(
             Path(task["output_dir"]),
